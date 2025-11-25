@@ -1,0 +1,19 @@
+project_id = "lyerkyijpavilyufcrgb"
+
+[functions.track-email-open]
+verify_jwt = false
+
+[functions.track-email-click]
+verify_jwt = false
+
+[functions.monitor-campaigns]
+verify_jwt = false
+
+[functions.sync-mailbox]
+verify_jwt = false
+
+[functions.check-email-replies]
+verify_jwt = false
+
+[db]
+major_version = 15
