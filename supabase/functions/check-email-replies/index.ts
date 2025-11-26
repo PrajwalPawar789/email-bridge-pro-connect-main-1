@@ -1,7 +1,8 @@
 // @ts-nocheck
 import { serve } from "https://deno.land/std@0.190.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
-import imaps from "npm:imap-simple@5.1.0";
+import { connect } from "npm:imap-simple@5.1.0";
+import { simpleParser } from "npm:mailparser@3.9.0";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -14,6 +15,8 @@ const supabase = createClient(
   Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? ""
 );
 
+console.log("Starting check-email-replies v2 (imap-simple)...");
+
 const checkRepliesAndBouncesForConfig = async (config: any) => {
     const imapConfig = {
         imap: {
@@ -24,23 +27,21 @@ const checkRepliesAndBouncesForConfig = async (config: any) => {
             tls: true,
             tlsOptions: { rejectUnauthorized: false },
             authTimeout: 10000,
-        }
+        },
     };
 
+    let connection;
     try {
-        const connection = await imaps.connect(imapConfig);
+        connection = await connect(imapConfig);
         await connection.openBox('INBOX');
 
-        const yesterday = new Date();
-        yesterday.setDate(yesterday.getDate() - 1);
+        const searchDate = new Date();
+        searchDate.setDate(searchDate.getDate() - 3); // Look back 3 days
         
-        const searchCriteria = [
-            ['SINCE', yesterday]
-        ];
-        
+        const searchCriteria = [['SINCE', searchDate]];
         const fetchOptions = {
-            bodies: ['HEADER', 'TEXT'],
-            struct: true
+            bodies: ['HEADER', 'TEXT', ''], 
+            markSeen: false,
         };
 
         const messages = await connection.search(searchCriteria, fetchOptions);
@@ -49,102 +50,119 @@ const checkRepliesAndBouncesForConfig = async (config: any) => {
         let updatedCount = 0;
         let bouncedCount = 0;
 
-        for (const message of messages) {
-            const headerPart = message.parts.find((part: any) => part.which === 'HEADER');
-            if (!headerPart) continue;
+        // Limit to processing recent 50 messages to avoid timeouts
+        const recentMessages = messages.slice(-50);
 
-            const headers = headerPart.body;
-            const from = headers.from ? headers.from[0] : '';
-            const subject = headers.subject ? headers.subject[0] : '';
+        for (const message of recentMessages) {
+            const allPart = message.parts.find(p => p.which === '');
+            const id = message.attributes.uid;
             
-            // --- 1. CHECK FOR REPLIES ---
-            const inReplyTo = headers['in-reply-to'] ? headers['in-reply-to'][0] : null;
-            const references = headers['references'] ? headers['references'][0] : null;
-            
-            const messageIdsToCheck: string[] = [];
-            if (inReplyTo) messageIdsToCheck.push(inReplyTo);
-            if (references) {
-                const refs = references.split(/\s+/);
-                messageIdsToCheck.push(...refs);
-            }
-
-            if (messageIdsToCheck.length > 0) {
-                const { data: recipients } = await supabase
-                    .from('recipients')
-                    .select('id, email, campaign_id')
-                    .in('message_id', messageIdsToCheck)
-                    .eq('replied', false);
-
-                if (recipients && recipients.length > 0) {
-                    for (const recipient of recipients) {
-                        console.log(`Detected reply from ${recipient.email} (Campaign ${recipient.campaign_id})`);
-                        await supabase
-                            .from('recipients')
-                            .update({ replied: true, updated_at: new Date().toISOString() })
-                            .eq('id', recipient.id);
-                        updatedCount++;
-                    }
+            if (allPart) {
+                const parsed = await simpleParser(allPart.body);
+                
+                const from = parsed.from?.text || '';
+                const subject = parsed.subject || '';
+                
+                // --- 1. CHECK FOR REPLIES ---
+                const inReplyTo = parsed.inReplyTo;
+                const references = parsed.references;
+                
+                const messageIdsToCheck: string[] = [];
+                if (inReplyTo) messageIdsToCheck.push(inReplyTo.trim());
+                
+                if (references) {
+                    const refsArray = Array.isArray(references) ? references : [references];
+                    refsArray.forEach(r => {
+                        if (typeof r === 'string') {
+                             r.split(/\s+/).forEach(id => messageIdsToCheck.push(id.trim()));
+                        }
+                    });
                 }
-            }
 
-            // --- 2. CHECK FOR BOUNCES ---
-            const isBounceSender = /mailer-daemon|postmaster|bounce|delivery/i.test(from);
-            const isBounceSubject = /failure|failed|undelivered|returned|rejected/i.test(subject);
-
-            if (isBounceSender || isBounceSubject) {
-                console.log(`Potential bounce detected: ${subject} from ${from}`);
-                
-                const textPart = message.parts.find((part: any) => part.which === 'TEXT');
-                const body = textPart ? textPart.body : "";
-                
-                // Extract emails from body
-                const emailRegex = /[a-zA-Z0-9._-]+@[a-zA-Z0-9._-]+\.[a-zA-Z0-9._-]+/gi;
-                const foundEmails = body.match(emailRegex) || [];
-                const uniqueEmails = [...new Set(foundEmails.map((e: string) => e.toLowerCase()))];
-
-                if (uniqueEmails.length > 0) {
-                    // Check if any of these emails are in our recipients list for this user's campaigns
-                    // We need to find recipients who were sent an email recently and are NOT yet bounced
+                if (messageIdsToCheck.length > 0) {
                     const { data: recipients } = await supabase
                         .from('recipients')
                         .select('id, email, campaign_id')
-                        .in('email', uniqueEmails)
-                        .eq('bounced', false) // Only mark if not already bounced
-                        .order('last_email_sent_at', { ascending: false }) // Get most recent
-                        .limit(5); // Limit to avoid huge queries
+                        .in('message_id', messageIdsToCheck)
+                        .eq('replied', false);
 
                     if (recipients && recipients.length > 0) {
                         for (const recipient of recipients) {
-                            console.log(`Confirmed bounce for ${recipient.email} (Campaign ${recipient.campaign_id})`);
-                            
-                            // Mark recipient as bounced
+                            console.log(`Detected reply from ${recipient.email} (Campaign ${recipient.campaign_id})`);
                             await supabase
                                 .from('recipients')
-                                .update({ 
-                                    bounced: true, 
-                                    bounced_at: new Date().toISOString(),
-                                    status: 'bounced'
-                                })
+                                .update({ replied: true, updated_at: new Date().toISOString() })
                                 .eq('id', recipient.id);
-                            
-                            // Increment campaign bounced_count
-                            await supabase.rpc('increment_bounced_count', { campaign_id: recipient.campaign_id });
-                            
-                            bouncedCount++;
+                            updatedCount++;
                         }
                     }
                 }
-            }
-            
-            processedCount++;
-        }
 
-        connection.end();
-        return { count: messages.length, processed: processedCount, replies: updatedCount, bounces: bouncedCount };
+                // --- 2. CHECK FOR BOUNCES ---
+                const isBounceSender = /mailer-daemon|postmaster|bounce|delivery|no-reply/i.test(from);
+                const isBounceSubject = /failure|failed|undelivered|returned|rejected|delivery status notification/i.test(subject);
+
+                if (isBounceSender || isBounceSubject) {
+                    console.log(`Potential bounce detected: ${subject} from ${from}`);
+                    
+                    const body = parsed.text || parsed.html || "";
+                    const emailRegex = /[a-zA-Z0-9._-]+@[a-zA-Z0-9._-]+\.[a-zA-Z0-9._-]+/gi;
+                    const foundEmails = body.match(emailRegex) || [];
+                    
+                    const failedHeader = parsed.headers.get('x-failed-recipients');
+                    if (failedHeader) {
+                        if (typeof failedHeader === 'string') foundEmails.push(failedHeader);
+                        else if (Array.isArray(failedHeader)) foundEmails.push(...failedHeader);
+                    }
+
+                    const uniqueEmails = [...new Set(foundEmails.map((e: string) => e.toLowerCase()))];
+
+                    if (uniqueEmails.length > 0) {
+                        const { data: recipients } = await supabase
+                            .from('recipients')
+                            .select('id, email, campaign_id')
+                            .in('email', uniqueEmails)
+                            .eq('bounced', false)
+                            .order('last_email_sent_at', { ascending: false })
+                            .limit(5);
+
+                        if (recipients && recipients.length > 0) {
+                            for (const recipient of recipients) {
+                                console.log(`Confirmed bounce for ${recipient.email} (Campaign ${recipient.campaign_id})`);
+                                
+                                await supabase
+                                    .from('recipients')
+                                    .update({ 
+                                        bounced: true, 
+                                        bounced_at: new Date().toISOString(),
+                                        status: 'bounced'
+                                    })
+                                    .eq('id', recipient.id);
+                                
+                                await supabase.rpc('increment_bounced_count', { campaign_id: recipient.campaign_id });
+                                
+                                bouncedCount++;
+                            }
+                        }
+                    }
+                }
+                processedCount++;
+            }
+        }
+        
+        return { processed: processedCount, replies: updatedCount, bounces: bouncedCount };
 
     } catch (err: any) {
         console.error(`Error checking emails for ${config.smtp_username}:`, err);
         throw err;
+    } finally {
+        if (connection) {
+            try {
+                connection.end();
+            } catch (e) {
+                // ignore
+            }
+        }
     }
 };
 
@@ -161,15 +179,22 @@ serve(async (req) => {
             
         if (error) throw error;
 
+        // Process in parallel with a limit (e.g., batches of 3)
         const results = [];
-        for (const config of configs) {
-            try {
-                console.log(`Checking inbox for ${config.smtp_username}...`);
-                const result = await checkRepliesAndBouncesForConfig(config);
-                results.push({ email: config.smtp_username, result });
-            } catch (err: any) {
-                results.push({ email: config.smtp_username, error: err.message });
-            }
+        const batchSize = 3;
+        
+        for (let i = 0; i < configs.length; i += batchSize) {
+            const batch = configs.slice(i, i + batchSize);
+            const batchResults = await Promise.all(batch.map(async (config) => {
+                try {
+                    console.log(`Checking inbox for ${config.smtp_username}...`);
+                    const result = await checkRepliesAndBouncesForConfig(config);
+                    return { email: config.smtp_username, result };
+                } catch (err: any) {
+                    return { email: config.smtp_username, error: err.message };
+                }
+            }));
+            results.push(...batchResults);
         }
 
         return new Response(
