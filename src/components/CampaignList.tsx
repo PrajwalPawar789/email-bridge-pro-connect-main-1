@@ -103,7 +103,7 @@ const CampaignList = () => {
   };
 
   const getRecipientStats = (recipients: any[]) => {
-    if (!recipients) return { total: 0, sent: 0, pending: 0, failed: 0, bounced: 0, processing: 0, other: 0 };
+    if (!recipients) return { total: 0, sent: 0, pending: 0, failed: 0, bounced: 0, replied: 0, processing: 0, other: 0 };
     
     return {
       total: recipients.length,
@@ -111,6 +111,7 @@ const CampaignList = () => {
       pending: recipients.filter(r => r.status === 'pending').length,
       failed: recipients.filter(r => r.status === 'failed').length,
       bounced: recipients.filter(r => r.bounced).length,
+      replied: recipients.filter(r => r.replied).length,
       processing: recipients.filter(r => r.status === 'processing').length,
       other: recipients.filter(r => !['sent', 'pending', 'failed', 'processing'].includes(r.status)).length
     };
@@ -260,7 +261,10 @@ const CampaignList = () => {
                           DB: {trackingStats.dbOpens}/{trackingStats.dbClicks} (syncing...)
                         </p>
                       )}
-                      <p className="text-xs text-red-500">Bounces: {stats.bounced}</p>
+                      <div className="flex gap-2">
+                        <p className="text-xs text-red-500">Bounces: {stats.bounced}</p>
+                        <p className="text-xs text-indigo-500">Replies: {stats.replied}</p>
+                      </div>
                     </div>
                   </div>
 

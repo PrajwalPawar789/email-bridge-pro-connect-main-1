@@ -1,8 +1,9 @@
 // @ts-nocheck
 import { serve } from "https://deno.land/std@0.190.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
-import { connect } from "npm:imap-simple@5.1.0";
+import { ImapFlow } from "npm:imapflow@1.0.151";
 import { simpleParser } from "npm:mailparser@3.9.0";
+import { Buffer } from "node:buffer";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -16,153 +17,191 @@ const supabase = createClient(
 );
 
 const checkRepliesAndBouncesForConfig = async (config: any) => {
-    const imapConfig = {
-        imap: {
+    const client = new ImapFlow({
+        host: config.imap_host,
+        port: config.imap_port,
+        secure: true,
+        auth: {
             user: config.smtp_username,
-            password: config.smtp_password,
-            host: config.imap_host,
-            port: config.imap_port,
-            tls: true,
-            tlsOptions: { 
-                rejectUnauthorized: false,
-                servername: config.imap_host
-            },
-            authTimeout: 15000,
+            pass: config.smtp_password,
         },
-    };
+        tls: {
+            rejectUnauthorized: false,
+            servername: config.imap_host
+        },
+        logger: false,
+    });
 
-    let connection;
+    client.on('error', (err: any) => {
+        console.error(`IMAP Client Error for ${config.smtp_username}:`, err);
+    });
+
     try {
-        connection = await connect(imapConfig);
-        await connection.openBox('INBOX');
-
-        const searchDate = new Date();
-        searchDate.setDate(searchDate.getDate() - 3); // Look back 3 days
+        await client.connect();
         
-        const searchCriteria = [['SINCE', searchDate]];
-        const fetchOptions = {
-            bodies: ['HEADER', 'TEXT', ''], 
-            markSeen: false,
-        };
-
-        const messages = await connection.search(searchCriteria, fetchOptions);
-        
-        let processedCount = 0;
-        let updatedCount = 0;
-        let bouncedCount = 0;
-
-        // Limit to processing recent 50 messages to avoid timeouts
-        const recentMessages = messages.slice(-50);
-
-        for (const message of recentMessages) {
-            const allPart = message.parts.find(p => p.which === '');
-            const id = message.attributes.uid;
+        let lock = await client.getMailboxLock('INBOX');
+        try {
+            const searchDate = new Date();
+            searchDate.setDate(searchDate.getDate() - 3); // Look back 3 days
             
-            if (allPart) {
-                const parsed = await simpleParser(allPart.body);
-                
-                const from = parsed.from?.text || '';
-                const subject = parsed.subject || '';
-                
-                // --- 1. CHECK FOR REPLIES ---
-                const inReplyTo = parsed.inReplyTo;
-                const references = parsed.references;
-                
-                const messageIdsToCheck: string[] = [];
-                if (inReplyTo) messageIdsToCheck.push(inReplyTo.trim());
-                
-                if (references) {
-                    const refsArray = Array.isArray(references) ? references : [references];
-                    refsArray.forEach(r => {
-                        if (typeof r === 'string') {
-                             r.split(/\s+/).forEach(id => messageIdsToCheck.push(id.trim()));
-                        }
-                    });
-                }
+            const searchResult = await client.search({ since: searchDate });
+            
+            let processedCount = 0;
+            let updatedCount = 0;
+            let bouncedCount = 0;
 
-                if (messageIdsToCheck.length > 0) {
-                    const { data: recipients } = await supabase
-                        .from('recipients')
-                        .select('id, email, campaign_id')
-                        .in('message_id', messageIdsToCheck)
-                        .eq('replied', false);
+            if (searchResult.length > 0) {
+                // Reduced from 50 to 10 to prevent CPU timeouts and connection closures
+                const recentMessages = searchResult.slice(-10);
+                console.log(`Found ${searchResult.length} messages, checking last ${recentMessages.length}...`);
 
-                    if (recipients && recipients.length > 0) {
-                        for (const recipient of recipients) {
-                            console.log(`Detected reply from ${recipient.email} (Campaign ${recipient.campaign_id})`);
-                            await supabase
-                                .from('recipients')
-                                .update({ replied: true, updated_at: new Date().toISOString() })
-                                .eq('id', recipient.id);
-                            updatedCount++;
-                        }
-                    }
-                }
+                for await (const message of client.fetch(recentMessages, { source: true, uid: true })) {
+                    try {
+                        const source = message.source;
+                        const id = message.uid;
+                        
+                        // Ensure source is a Buffer to avoid stream issues in Deno
+                        const sourceBuffer = Buffer.isBuffer(source) ? source : Buffer.from(source);
+                        const parsed = await simpleParser(sourceBuffer);
+                        
+                        const from = parsed.from?.text || '';
+                        const subject = parsed.subject || '';
+                        
+                        // --- 1. CHECK FOR REPLIES ---
+                        const inReplyTo = parsed.inReplyTo;
+                        const references = parsed.references;
+                        
+                        const normalizeId = (id: any) => {
+                            if (typeof id !== 'string') return '';
+                            return id.replace(/[<>]/g, '').trim();
+                        };
 
-                // --- 2. CHECK FOR BOUNCES ---
-                const isBounceSender = /mailer-daemon|postmaster|bounce|delivery|no-reply/i.test(from);
-                const isBounceSubject = /failure|failed|undelivered|returned|rejected|delivery status notification/i.test(subject);
-
-                if (isBounceSender || isBounceSubject) {
-                    console.log(`Potential bounce detected: ${subject} from ${from}`);
-                    
-                    const body = parsed.text || parsed.html || "";
-                    const emailRegex = /[a-zA-Z0-9._-]+@[a-zA-Z0-9._-]+\.[a-zA-Z0-9._-]+/gi;
-                    const foundEmails = body.match(emailRegex) || [];
-                    
-                    const failedHeader = parsed.headers.get('x-failed-recipients');
-                    if (failedHeader) {
-                        if (typeof failedHeader === 'string') foundEmails.push(failedHeader);
-                        else if (Array.isArray(failedHeader)) foundEmails.push(...failedHeader);
-                    }
-
-                    const uniqueEmails = [...new Set(foundEmails.map((e: string) => e.toLowerCase()))];
-
-                    if (uniqueEmails.length > 0) {
-                        const { data: recipients } = await supabase
-                            .from('recipients')
-                            .select('id, email, campaign_id')
-                            .in('email', uniqueEmails)
-                            .eq('bounced', false)
-                            .order('last_email_sent_at', { ascending: false })
-                            .limit(5);
-
-                        if (recipients && recipients.length > 0) {
-                            for (const recipient of recipients) {
-                                console.log(`Confirmed bounce for ${recipient.email} (Campaign ${recipient.campaign_id})`);
-                                
-                                await supabase
-                                    .from('recipients')
-                                    .update({ 
-                                        bounced: true, 
-                                        bounced_at: new Date().toISOString(),
-                                        status: 'bounced'
-                                    })
-                                    .eq('id', recipient.id);
-                                
-                                await supabase.rpc('increment_bounced_count', { campaign_id: recipient.campaign_id });
-                                
-                                bouncedCount++;
+                        const rawIds: string[] = [];
+                        if (inReplyTo) {
+                            if (typeof inReplyTo === 'string') {
+                                rawIds.push(inReplyTo);
+                            } else if (Array.isArray(inReplyTo)) {
+                                inReplyTo.forEach((id: any) => {
+                                    if (typeof id === 'string') rawIds.push(id);
+                                });
                             }
                         }
+                        
+                        if (references) {
+                            const refsArray = Array.isArray(references) ? references : [references];
+                            refsArray.forEach(r => {
+                                if (typeof r === 'string') {
+                                    r.split(/\s+/).forEach(id => rawIds.push(id));
+                                }
+                            });
+                        }
+
+                        const idsToCheck = new Set();
+                        rawIds.forEach(id => {
+                            if (!id || typeof id !== 'string') return;
+                            
+                            const clean = normalizeId(id);
+                            if (clean) {
+                                idsToCheck.add(clean);
+                                idsToCheck.add(`<${clean}>`);
+                            }
+                            idsToCheck.add(id.trim());
+                        });
+
+                        const messageIdsToCheck = Array.from(idsToCheck);
+
+                        if (messageIdsToCheck.length > 0) {
+                            const { data: recipients } = await supabase
+                                .from('recipients')
+                                .select('id, email, campaign_id')
+                                .in('message_id', messageIdsToCheck)
+                                .eq('replied', false);
+
+                            if (recipients && recipients.length > 0) {
+                                for (const recipient of recipients) {
+                                    console.log(`Detected reply from ${recipient.email} (Campaign ${recipient.campaign_id})`);
+                                    await supabase
+                                        .from('recipients')
+                                        .update({ replied: true, updated_at: new Date().toISOString() })
+                                        .eq('id', recipient.id);
+                                    
+                                    await supabase.rpc('increment_replied_count', { campaign_id: recipient.campaign_id });
+                                    
+                                    updatedCount++;
+                                }
+                            }
+                        }
+
+                        // --- 2. CHECK FOR BOUNCES ---
+                        const isBounceSender = /mailer-daemon|postmaster|bounce|delivery|no-reply/i.test(from);
+                        const isBounceSubject = /failure|failed|undelivered|returned|rejected|delivery status notification/i.test(subject);
+
+                        if (isBounceSender || isBounceSubject) {
+                            console.log(`Potential bounce detected: ${subject} from ${from}`);
+                            
+                            const body = parsed.text || parsed.html || "";
+                            const emailRegex = /[a-zA-Z0-9._-]+@[a-zA-Z0-9._-]+\.[a-zA-Z0-9._-]+/gi;
+                            const foundEmails = body.match(emailRegex) || [];
+                            
+                            const failedHeader = parsed.headers.get('x-failed-recipients');
+                            if (failedHeader) {
+                                if (typeof failedHeader === 'string') foundEmails.push(failedHeader);
+                                else if (Array.isArray(failedHeader)) foundEmails.push(...failedHeader);
+                            }
+
+                            const uniqueEmails = [...new Set(foundEmails.map((e: string) => e.toLowerCase()))];
+
+                            if (uniqueEmails.length > 0) {
+                                const { data: recipients } = await supabase
+                                    .from('recipients')
+                                    .select('id, email, campaign_id')
+                                    .in('email', uniqueEmails)
+                                    .eq('bounced', false)
+                                    .order('last_email_sent_at', { ascending: false })
+                                    .limit(5);
+
+                                if (recipients && recipients.length > 0) {
+                                    for (const recipient of recipients) {
+                                        console.log(`Confirmed bounce for ${recipient.email} (Campaign ${recipient.campaign_id})`);
+                                        
+                                        await supabase
+                                            .from('recipients')
+                                            .update({ 
+                                                bounced: true, 
+                                                bounced_at: new Date().toISOString(),
+                                                status: 'bounced'
+                                            })
+                                            .eq('id', recipient.id);
+                                        
+                                        await supabase.rpc('increment_bounced_count', { campaign_id: recipient.campaign_id });
+                                        
+                                        bouncedCount++;
+                                    }
+                                }
+                            }
+                        }
+                        processedCount++;
+                    } catch (msgError) {
+                        console.error(`Error processing message ${message.uid}:`, msgError);
                     }
                 }
-                processedCount++;
+            } else {
+                console.log("No recent messages found.");
             }
-        }
-        
-        return { processed: processedCount, replies: updatedCount, bounces: bouncedCount };
+            
+            return { processed: processedCount, replies: updatedCount, bounces: bouncedCount };
 
+        } finally {
+            lock.release();
+        }
     } catch (err: any) {
         console.error(`Error checking emails for ${config.smtp_username}:`, err);
         throw err;
     } finally {
-        if (connection) {
-            try {
-                connection.end();
-            } catch (e) {
-                // ignore
-            }
+        try {
+            await client.logout();
+        } catch (e) {
+            // Ignore logout errors
         }
     }
 };

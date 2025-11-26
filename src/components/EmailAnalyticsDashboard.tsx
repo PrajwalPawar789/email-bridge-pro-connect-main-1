@@ -13,6 +13,7 @@ import {
   AlertTriangle,
   Target,
   Users,
+  MessageSquare,
   Clock,
   Brain,
   Lightbulb,
@@ -42,6 +43,7 @@ interface DashboardData {
   totalClicks: number;
   totalFailed: number;
   totalBounced: number;
+  totalReplies: number;
   avgOpenRate: number;
   avgClickRate: number;
   campaigns: any[];
@@ -55,6 +57,7 @@ const EmailAnalyticsDashboard = () => {
     totalClicks: 0,
     totalFailed: 0,
     totalBounced: 0,
+    totalReplies: 0,
     avgOpenRate: 0,
     avgClickRate: 0,
     campaigns: []
@@ -80,6 +83,7 @@ const EmailAnalyticsDashboard = () => {
       const totalClicks = campaigns?.reduce((sum, c) => sum + (c.clicked_count || 0), 0) || 0;
       const totalFailed = campaigns?.reduce((sum, c) => sum + (c.failed_count || 0), 0) || 0;
       const totalBounced = campaigns?.reduce((sum, c) => sum + (c.bounced_count || 0), 0) || 0;
+      const totalReplies = campaigns?.reduce((sum, c) => sum + (c.replied_count || 0), 0) || 0;
 
       const avgOpenRate = totalEmails > 0 ? (totalOpens / totalEmails) * 100 : 0;
       const avgClickRate = totalEmails > 0 ? (totalClicks / totalEmails) * 100 : 0;
@@ -91,6 +95,7 @@ const EmailAnalyticsDashboard = () => {
         totalClicks,
         totalFailed,
         totalBounced,
+        totalReplies,
         avgOpenRate,
         avgClickRate,
         campaigns: campaigns || []
@@ -215,6 +220,19 @@ const EmailAnalyticsDashboard = () => {
             <div className="text-2xl font-bold text-red-900">{data.totalBounced}</div>
             <p className="text-xs text-red-600 mt-1">
               {data.totalEmails > 0 ? ((data.totalBounced / data.totalEmails) * 100).toFixed(1) : 0}% bounce rate
+            </p>
+          </CardContent>
+        </Card>
+
+        <Card className="bg-gradient-to-br from-indigo-50 to-indigo-100 border-indigo-200">
+          <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+            <CardTitle className="text-sm font-medium text-indigo-800">Total Replies</CardTitle>
+            <MessageSquare className="h-4 w-4 text-indigo-600" />
+          </CardHeader>
+          <CardContent>
+            <div className="text-2xl font-bold text-indigo-900">{data.totalReplies}</div>
+            <p className="text-xs text-indigo-600 mt-1">
+              {data.totalEmails > 0 ? ((data.totalReplies / data.totalEmails) * 100).toFixed(1) : 0}% reply rate
             </p>
           </CardContent>
         </Card>
