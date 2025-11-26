@@ -15,8 +15,6 @@ const supabase = createClient(
   Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? ""
 );
 
-console.log("Starting check-email-replies v2 (imap-simple)...");
-
 const checkRepliesAndBouncesForConfig = async (config: any) => {
     const imapConfig = {
         imap: {
@@ -25,8 +23,11 @@ const checkRepliesAndBouncesForConfig = async (config: any) => {
             host: config.imap_host,
             port: config.imap_port,
             tls: true,
-            tlsOptions: { rejectUnauthorized: false },
-            authTimeout: 10000,
+            tlsOptions: { 
+                rejectUnauthorized: false,
+                servername: config.imap_host
+            },
+            authTimeout: 15000,
         },
     };
 
@@ -171,6 +172,8 @@ serve(async (req) => {
         return new Response(null, { headers: corsHeaders });
     }
 
+    console.log("Starting check-email-replies v3 (sequential)...");
+
     try {
         const { data: configs, error } = await supabase
             .from('email_configs')
@@ -179,22 +182,21 @@ serve(async (req) => {
             
         if (error) throw error;
 
-        // Process in parallel with a limit (e.g., batches of 3)
+        // Process sequentially to avoid overloading the Deno Node compat layer
         const results = [];
-        const batchSize = 3;
         
-        for (let i = 0; i < configs.length; i += batchSize) {
-            const batch = configs.slice(i, i + batchSize);
-            const batchResults = await Promise.all(batch.map(async (config) => {
-                try {
-                    console.log(`Checking inbox for ${config.smtp_username}...`);
-                    const result = await checkRepliesAndBouncesForConfig(config);
-                    return { email: config.smtp_username, result };
-                } catch (err: any) {
-                    return { email: config.smtp_username, error: err.message };
-                }
-            }));
-            results.push(...batchResults);
+        for (const config of configs) {
+            try {
+                console.log(`Checking inbox for ${config.smtp_username}...`);
+                const result = await checkRepliesAndBouncesForConfig(config);
+                results.push({ email: config.smtp_username, result });
+                
+                // Add a small delay to let the event loop settle
+                await new Promise(resolve => setTimeout(resolve, 1000));
+            } catch (err: any) {
+                console.error(`Error processing ${config.smtp_username}: ${err.message}`);
+                results.push({ email: config.smtp_username, error: err.message });
+            }
         }
 
         return new Response(
