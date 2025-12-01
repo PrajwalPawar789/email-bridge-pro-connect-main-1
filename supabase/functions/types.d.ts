@@ -2,16 +2,22 @@ import type { createClient as supabaseCreateClient } from "@supabase/supabase-js
 
 type SupabaseCreateClient = typeof supabaseCreateClient;
 
-declare const Deno: {
-  env: {
-    get: (key: string) => string | undefined;
+declare global {
+  const Deno: {
+    env: {
+      get: (key: string) => string | undefined;
+    };
   };
-};
+}
 
 declare module "https://deno.land/std@0.190.0/http/server.ts" {
   export function serve(
     handler: (request: Request) => Response | Promise<Response>
   ): void;
+}
+
+declare module "https://deno.land/x/djwt@v2.8/mod.ts" {
+  export function create(header: any, payload: any, key: any): Promise<string>;
 }
 
 declare module "https://esm.sh/@supabase/supabase-js@2" {

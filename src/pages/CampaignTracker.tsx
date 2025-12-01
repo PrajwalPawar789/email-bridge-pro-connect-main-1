@@ -12,12 +12,13 @@ import { ScrollArea } from '@/components/ui/scroll-area';
 import { 
   ArrowLeft, Search, RefreshCw, Mail, MousePointerClick, Eye, 
   MessageSquare, AlertCircle, CheckCircle2, Clock, Calendar, 
-  TrendingUp, Users, Activity, Filter, Send
+  TrendingUp, Users, Activity, Filter, Send, ChevronDown, ChevronUp,
+  Download, PieChart, BarChart2, Share2, Lightbulb
 } from 'lucide-react';
-import { format, addMinutes, addHours, addDays, formatDistanceToNow } from 'date-fns';
+import { format, addMinutes, addHours, addDays, formatDistanceToNow, startOfDay, getDay, getHours } from 'date-fns';
 import { 
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, 
-  LineChart, Line, AreaChart, Area 
+  LineChart, Line, AreaChart, Area, Pie, Cell, PieChart as RePieChart, Legend
 } from 'recharts';
 
 const CampaignTracker = () => {
@@ -31,6 +32,8 @@ const CampaignTracker = () => {
   const [statusFilter, setStatusFilter] = useState('all');
   const [recentActivity, setRecentActivity] = useState<any[]>([]);
   const [selectedRecipient, setSelectedRecipient] = useState<any>(null);
+  const [replies, setReplies] = useState<any[]>([]);
+  const [expandedReply, setExpandedReply] = useState<string | null>(null);
   
   const [stats, setStats] = useState({
     total: 0,
@@ -71,6 +74,72 @@ const CampaignTracker = () => {
       };
     }
   }, [id]);
+
+  useEffect(() => {
+    if (activeTab === 'replies' && recipients.length > 0) {
+        fetchReplies();
+    }
+  }, [activeTab, recipients]);
+
+  const fetchReplies = async () => {
+    const repliedRecipients = recipients.filter(r => r.replied);
+    if (repliedRecipients.length === 0) {
+        setReplies([]);
+        return;
+    }
+    
+    const emails = repliedRecipients.map(r => r.email);
+    
+    const { data, error } = await supabase
+      .from('email_messages')
+      .select('*')
+      .in('from_email', emails)
+      .order('date', { ascending: false });
+      
+    if (error) {
+      console.error('Error fetching replies:', error);
+    } else {
+      // Create a map for faster lookup, normalizing email to lowercase
+      const messageMap = new Map();
+      data.forEach(msg => {
+        if (msg.from_email) {
+            const normalizedEmail = msg.from_email.toLowerCase();
+            // Store the most recent message for each email
+            if (!messageMap.has(normalizedEmail)) {
+                messageMap.set(normalizedEmail, msg);
+            }
+        }
+      });
+
+      const repliesList = repliedRecipients.map(recipient => {
+        const normalizedRecipientEmail = recipient.email.toLowerCase();
+        const msg = messageMap.get(normalizedRecipientEmail);
+        
+        if (msg) {
+            return { 
+                ...msg, 
+                recipientName: recipient.name, 
+                recipientId: recipient.id,
+                hasContent: true
+            };
+        } else {
+            // Fallback for when we know they replied but don't have the message body
+            return {
+                id: `placeholder-${recipient.id}`,
+                from_email: recipient.email,
+                recipientName: recipient.name,
+                recipientId: recipient.id,
+                subject: "Reply detected (Content not synced)",
+                body: "<div class='text-gray-500 italic p-4 bg-gray-50 rounded border'>This reply was detected by the system scan, but the full message content has not been synced to the local database yet. <br/><br/>Please go to the <b>Mailbox</b> tab and click <b>Sync Mailbox</b> to download the latest messages.</div>",
+                date: recipient.updated_at || new Date().toISOString(),
+                hasContent: false
+            };
+        }
+      });
+      
+      setReplies(repliesList);
+    }
+  };
 
   const fetchCampaignData = async (showLoading = true) => {
     // Only show loading on initial fetch
@@ -208,6 +277,104 @@ const CampaignTracker = () => {
     return stats;
   }, [recipients]);
 
+  const timelineData = React.useMemo(() => {
+    const days = new Map();
+    // Initialize with last 7 days to ensure continuity
+    for (let i = 6; i >= 0; i--) {
+        const d = new Date();
+        d.setDate(d.getDate() - i);
+        const dateStr = format(d, 'MMM dd');
+        days.set(dateStr, { date: dateStr, opens: 0, clicks: 0, replies: 0 });
+    }
+
+    recipients.forEach(r => {
+      if (r.opened_at) {
+        const date = format(new Date(r.opened_at), 'MMM dd');
+        if (days.has(date)) days.get(date).opens++;
+      }
+      if (r.clicked_at) {
+        const date = format(new Date(r.clicked_at), 'MMM dd');
+        if (days.has(date)) days.get(date).clicks++;
+      }
+      if (r.replied) {
+        const date = format(new Date(r.updated_at || new Date()), 'MMM dd');
+        if (days.has(date)) days.get(date).replies++;
+      }
+    });
+    return Array.from(days.values());
+  }, [recipients]);
+
+  const handleExport = () => {
+    const headers = ['Email', 'Name', 'Status', 'Opened At', 'Clicked At', 'Replied', 'Bounced', 'Last Sent'];
+    const csvContent = [
+      headers.join(','),
+      ...recipients.map(r => [
+        r.email,
+        `"${r.name || ''}"`,
+        r.status,
+        r.opened_at ? new Date(r.opened_at).toISOString() : '',
+        r.clicked_at ? new Date(r.clicked_at).toISOString() : '',
+        r.replied ? 'Yes' : 'No',
+        r.bounced ? 'Yes' : 'No',
+        r.last_email_sent_at ? new Date(r.last_email_sent_at).toISOString() : ''
+      ].join(','))
+    ].join('\n');
+    
+    const blob = new Blob([csvContent], { type: 'text/csv' });
+    const url = window.URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `campaign-export-${campaign?.name || 'data'}.csv`;
+    a.click();
+  };
+
+  const getInsights = () => {
+    const insights = [];
+    const openRate = stats.sent > 0 ? (stats.opens / stats.sent) * 100 : 0;
+    const replyRate = stats.sent > 0 ? (stats.replies / stats.sent) * 100 : 0;
+    const bounceRate = stats.sent > 0 ? (stats.bounces / stats.sent) * 100 : 0;
+
+    if (openRate < 20 && stats.sent > 10) {
+        insights.push({
+            type: 'warning',
+            title: 'Low Open Rate',
+            message: 'Your open rate is below 20%. Consider A/B testing your subject lines to improve engagement.'
+        });
+    } else if (openRate > 50) {
+        insights.push({
+            type: 'success',
+            title: 'Excellent Open Rate',
+            message: 'Great job! Your subject lines are performing very well.'
+        });
+    }
+
+    if (bounceRate > 5) {
+        insights.push({
+            type: 'danger',
+            title: 'High Bounce Rate',
+            message: 'Your bounce rate is above 5%. Check your prospect list quality to protect your sender reputation.'
+        });
+    }
+
+    if (replyRate > 5) {
+        insights.push({
+            type: 'success',
+            title: 'High Engagement',
+            message: 'Your reply rate is exceptional. Your content is resonating well with the audience.'
+        });
+    }
+
+    if (insights.length === 0) {
+        insights.push({
+            type: 'info',
+            title: 'Gathering Data',
+            message: 'Keep sending! We need more data to generate specific insights for this campaign.'
+        });
+    }
+
+    return insights;
+  };
+
   if (loading) {
     return (
       <div className="min-h-screen flex items-center justify-center bg-gray-50">
@@ -254,6 +421,10 @@ const CampaignTracker = () => {
             </div>
           </div>
           <div className="flex gap-2">
+            <Button onClick={handleExport} variant="outline" className="bg-white">
+              <Download className="h-4 w-4 mr-2" />
+              Export Data
+            </Button>
             <Button onClick={() => fetchCampaignData(true)} variant="outline" className="bg-white">
               <RefreshCw className="h-4 w-4 mr-2" />
               Refresh
@@ -264,47 +435,234 @@ const CampaignTracker = () => {
           </div>
         </div>
 
+        {/* Stats Overview Cards - Enhanced */}
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+          <Card className="bg-white border-l-4 border-l-blue-500 shadow-sm">
+            <CardContent className="p-6">
+              <div className="flex justify-between items-start">
+                <div>
+                  <p className="text-sm font-medium text-gray-500">Total Recipients</p>
+                  <h3 className="text-2xl font-bold text-gray-900 mt-1">{stats.total}</h3>
+                  <div className="flex items-center mt-2 text-xs text-gray-500">
+                    <span className="text-blue-600 font-medium mr-1">{stats.sent}</span> sent
+                    <span className="mx-1">•</span>
+                    <span className="text-orange-500 font-medium mr-1">{stats.queued}</span> queued
+                  </div>
+                </div>
+                <div className="p-2 bg-blue-50 rounded-lg">
+                  <Users className="h-5 w-5 text-blue-600" />
+                </div>
+              </div>
+            </CardContent>
+          </Card>
+
+          <Card className="bg-white border-l-4 border-l-green-500 shadow-sm">
+            <CardContent className="p-6">
+              <div className="flex justify-between items-start">
+                <div>
+                  <p className="text-sm font-medium text-gray-500">Engagement Rate</p>
+                  <h3 className="text-2xl font-bold text-gray-900 mt-1">
+                    {stats.sent > 0 ? Math.round(((stats.opens + stats.clicks) / stats.sent) * 100) : 0}%
+                  </h3>
+                  <div className="flex items-center mt-2 text-xs text-gray-500">
+                    <span className="text-green-600 font-medium mr-1">{stats.opens}</span> opens
+                    <span className="mx-1">•</span>
+                    <span className="text-purple-600 font-medium mr-1">{stats.clicks}</span> clicks
+                  </div>
+                </div>
+                <div className="p-2 bg-green-50 rounded-lg">
+                  <MousePointerClick className="h-5 w-5 text-green-600" />
+                </div>
+              </div>
+            </CardContent>
+          </Card>
+
+          <Card className="bg-white border-l-4 border-l-yellow-500 shadow-sm">
+            <CardContent className="p-6">
+              <div className="flex justify-between items-start">
+                <div>
+                  <p className="text-sm font-medium text-gray-500">Reply Rate</p>
+                  <h3 className="text-2xl font-bold text-gray-900 mt-1">
+                    {stats.sent > 0 ? ((stats.replies / stats.sent) * 100).toFixed(1) : 0}%
+                  </h3>
+                  <div className="flex items-center mt-2 text-xs text-gray-500">
+                    <span className="text-yellow-600 font-medium mr-1">{stats.replies}</span> replies
+                  </div>
+                </div>
+                <div className="p-2 bg-yellow-50 rounded-lg">
+                  <MessageSquare className="h-5 w-5 text-yellow-600" />
+                </div>
+              </div>
+            </CardContent>
+          </Card>
+
+          <Card className="bg-white border-l-4 border-l-red-500 shadow-sm">
+            <CardContent className="p-6">
+              <div className="flex justify-between items-start">
+                <div>
+                  <p className="text-sm font-medium text-gray-500">Bounce Rate</p>
+                  <h3 className="text-2xl font-bold text-gray-900 mt-1">
+                    {stats.sent > 0 ? ((stats.bounces / stats.sent) * 100).toFixed(1) : 0}%
+                  </h3>
+                  <div className="flex items-center mt-2 text-xs text-gray-500">
+                    <span className="text-red-600 font-medium mr-1">{stats.bounces}</span> bounced
+                  </div>
+                </div>
+                <div className="p-2 bg-red-50 rounded-lg">
+                  <AlertCircle className="h-5 w-5 text-red-600" />
+                </div>
+              </div>
+            </CardContent>
+          </Card>
+        </div>
+
         <Tabs value={activeTab} onValueChange={setActiveTab} className="space-y-6">
-          <TabsList className="bg-white p-1 border rounded-lg">
-            <TabsTrigger value="overview" className="data-[state=active]:bg-blue-50 data-[state=active]:text-blue-700">Overview</TabsTrigger>
-            <TabsTrigger value="recipients" className="data-[state=active]:bg-blue-50 data-[state=active]:text-blue-700">Recipients ({recipients.length})</TabsTrigger>
-            <TabsTrigger value="sequence" className="data-[state=active]:bg-blue-50 data-[state=active]:text-blue-700">Sequence</TabsTrigger>
+          <TabsList className="bg-white p-1 border rounded-lg w-full justify-start h-auto">
+            <TabsTrigger value="overview" className="px-4 py-2 data-[state=active]:bg-blue-50 data-[state=active]:text-blue-700">Overview</TabsTrigger>
+            <TabsTrigger value="analytics" className="px-4 py-2 data-[state=active]:bg-blue-50 data-[state=active]:text-blue-700">
+                <BarChart2 className="h-4 w-4 mr-2" />
+                Analytics
+            </TabsTrigger>
+            <TabsTrigger value="recipients" className="px-4 py-2 data-[state=active]:bg-blue-50 data-[state=active]:text-blue-700">
+              Recipients <Badge variant="secondary" className="ml-2 bg-gray-100 text-gray-600">{recipients.length}</Badge>
+            </TabsTrigger>
+            <TabsTrigger value="replies" className="px-4 py-2 data-[state=active]:bg-blue-50 data-[state=active]:text-blue-700">
+              Replies <Badge variant="secondary" className="ml-2 bg-gray-100 text-gray-600">{stats.replies}</Badge>
+            </TabsTrigger>
+            <TabsTrigger value="sequence" className="px-4 py-2 data-[state=active]:bg-blue-50 data-[state=active]:text-blue-700">Sequence</TabsTrigger>
           </TabsList>
+
+          <TabsContent value="analytics" className="space-y-6">
+            <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+                {/* Engagement Timeline */}
+                <Card className="lg:col-span-2">
+                    <CardHeader>
+                        <CardTitle>Engagement Over Time</CardTitle>
+                        <CardDescription>Daily opens, clicks, and replies for the last 7 days</CardDescription>
+                    </CardHeader>
+                    <CardContent className="h-[300px]">
+                        <ResponsiveContainer width="100%" height="100%">
+                            <AreaChart data={timelineData}>
+                                <defs>
+                                    <linearGradient id="colorOpens" x1="0" y1="0" x2="0" y2="1">
+                                        <stop offset="5%" stopColor="#22c55e" stopOpacity={0.1}/>
+                                        <stop offset="95%" stopColor="#22c55e" stopOpacity={0}/>
+                                    </linearGradient>
+                                    <linearGradient id="colorClicks" x1="0" y1="0" x2="0" y2="1">
+                                        <stop offset="5%" stopColor="#8b5cf6" stopOpacity={0.1}/>
+                                        <stop offset="95%" stopColor="#8b5cf6" stopOpacity={0}/>
+                                    </linearGradient>
+                                </defs>
+                                <CartesianGrid strokeDasharray="3 3" vertical={false} />
+                                <XAxis dataKey="date" />
+                                <YAxis />
+                                <Tooltip />
+                                <Legend />
+                                <Area type="monotone" dataKey="opens" stroke="#22c55e" fillOpacity={1} fill="url(#colorOpens)" name="Opens" />
+                                <Area type="monotone" dataKey="clicks" stroke="#8b5cf6" fillOpacity={1} fill="url(#colorClicks)" name="Clicks" />
+                                <Area type="monotone" dataKey="replies" stroke="#eab308" fill="none" name="Replies" />
+                            </AreaChart>
+                        </ResponsiveContainer>
+                    </CardContent>
+                </Card>
+
+                {/* AI Insights */}
+                <Card>
+                    <CardHeader>
+                        <CardTitle className="flex items-center gap-2">
+                            <Lightbulb className="h-5 w-5 text-yellow-500" />
+                            Campaign Insights
+                        </CardTitle>
+                        <CardDescription>AI-driven recommendations</CardDescription>
+                    </CardHeader>
+                    <CardContent className="space-y-4">
+                        {getInsights().map((insight, i) => (
+                            <div key={i} className={`p-4 rounded-lg border ${
+                                insight.type === 'warning' ? 'bg-orange-50 border-orange-100' :
+                                insight.type === 'success' ? 'bg-green-50 border-green-100' :
+                                insight.type === 'danger' ? 'bg-red-50 border-red-100' :
+                                'bg-blue-50 border-blue-100'
+                            }`}>
+                                <h4 className={`font-semibold text-sm mb-1 ${
+                                    insight.type === 'warning' ? 'text-orange-800' :
+                                    insight.type === 'success' ? 'text-green-800' :
+                                    insight.type === 'danger' ? 'text-red-800' :
+                                    'text-blue-800'
+                                }`}>{insight.title}</h4>
+                                <p className="text-xs text-gray-600">{insight.message}</p>
+                            </div>
+                        ))}
+                    </CardContent>
+                </Card>
+            </div>
+
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                {/* Hourly Engagement */}
+                <Card>
+                    <CardHeader>
+                        <CardTitle>Best Time to Email</CardTitle>
+                        <CardDescription>When your recipients are most active (24h)</CardDescription>
+                    </CardHeader>
+                    <CardContent className="h-[300px]">
+                        <ResponsiveContainer width="100%" height="100%">
+                            <BarChart data={hourlyStats}>
+                                <CartesianGrid strokeDasharray="3 3" vertical={false} />
+                                <XAxis dataKey="hour" fontSize={12} interval={3} />
+                                <YAxis fontSize={12} />
+                                <Tooltip 
+                                    contentStyle={{ borderRadius: '8px', border: 'none', boxShadow: '0 4px 12px rgba(0,0,0,0.1)' }}
+                                    cursor={{ fill: '#f3f4f6' }}
+                                />
+                                <Bar dataKey="opens" fill="#22c55e" radius={[4, 4, 0, 0]} name="Opens" />
+                                <Bar dataKey="clicks" fill="#8b5cf6" radius={[4, 4, 0, 0]} name="Clicks" />
+                            </BarChart>
+                        </ResponsiveContainer>
+                    </CardContent>
+                </Card>
+
+                {/* Funnel */}
+                <Card>
+                    <CardHeader>
+                        <CardTitle>Conversion Funnel</CardTitle>
+                        <CardDescription>Drop-off rates between stages</CardDescription>
+                    </CardHeader>
+                    <CardContent className="h-[300px] flex items-center justify-center">
+                        <ResponsiveContainer width="100%" height="100%">
+                            <BarChart 
+                                layout="vertical" 
+                                data={[
+                                    { stage: 'Sent', count: stats.sent, fill: '#3b82f6' },
+                                    { stage: 'Opened', count: stats.opens, fill: '#22c55e' },
+                                    { stage: 'Clicked', count: stats.clicks, fill: '#8b5cf6' },
+                                    { stage: 'Replied', count: stats.replies, fill: '#eab308' },
+                                ]} 
+                                margin={{ left: 20 }}
+                            >
+                                <CartesianGrid strokeDasharray="3 3" horizontal={false} />
+                                <XAxis type="number" />
+                                <YAxis dataKey="stage" type="category" width={60} />
+                                <Tooltip />
+                                <Bar dataKey="count" barSize={30} radius={[0, 4, 4, 0]}>
+                                    {
+                                        [
+                                            { stage: 'Sent', count: stats.sent, fill: '#3b82f6' },
+                                            { stage: 'Opened', count: stats.opens, fill: '#22c55e' },
+                                            { stage: 'Clicked', count: stats.clicks, fill: '#8b5cf6' },
+                                            { stage: 'Replied', count: stats.replies, fill: '#eab308' },
+                                        ].map((entry, index) => (
+                                            <Cell key={`cell-${index}`} fill={entry.fill} />
+                                        ))
+                                    }
+                                </Bar>
+                            </BarChart>
+                        </ResponsiveContainer>
+                    </CardContent>
+                </Card>
+            </div>
+          </TabsContent>
 
           {/* OVERVIEW TAB */}
           <TabsContent value="overview" className="space-y-6">
-            {/* KPI Cards */}
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 xl:grid-cols-7 gap-4">
-              {[
-                { label: 'Queued', value: stats.queued, total: stats.total, icon: Clock, color: 'text-gray-600', bg: 'bg-gray-100' },
-                { label: 'Processing', value: stats.processing, total: stats.total, icon: RefreshCw, color: 'text-blue-400', bg: 'bg-blue-50' },
-                { label: 'Sent', value: stats.sent, total: stats.total, icon: Send, color: 'text-blue-600', bg: 'bg-blue-100' },
-                { label: 'Opens', value: stats.opens, rate: stats.sent ? (stats.opens/stats.sent)*100 : 0, icon: Eye, color: 'text-green-600', bg: 'bg-green-50' },
-                { label: 'Clicks', value: stats.clicks, rate: stats.sent ? (stats.clicks/stats.sent)*100 : 0, icon: MousePointerClick, color: 'text-purple-600', bg: 'bg-purple-50' },
-                { label: 'Replies', value: stats.replies, rate: stats.sent ? (stats.replies/stats.sent)*100 : 0, icon: MessageSquare, color: 'text-yellow-600', bg: 'bg-yellow-50' },
-                { label: 'Bounces', value: stats.bounces, rate: stats.sent ? (stats.bounces/stats.sent)*100 : 0, icon: AlertCircle, color: 'text-red-600', bg: 'bg-red-50' },
-              ].map((stat, i) => (
-                <Card key={i} className="border-none shadow-sm hover:shadow-md transition-shadow">
-                  <CardContent className="p-4">
-                    <div className="flex justify-between items-start mb-3">
-                      <div className={`p-2 rounded-lg ${stat.bg}`}>
-                        <stat.icon className={`h-5 w-5 ${stat.color}`} />
-                      </div>
-                      {stat.rate !== undefined && (
-                        <Badge variant="secondary" className="font-mono text-xs">
-                          {Math.round(stat.rate)}%
-                        </Badge>
-                      )}
-                    </div>
-                    <div className="space-y-1">
-                      <h3 className="text-xl font-bold text-gray-900">{stat.value}</h3>
-                      <p className="text-xs text-gray-500 font-medium uppercase tracking-wide">{stat.label}</p>
-                    </div>
-                  </CardContent>
-                </Card>
-              ))}
-            </div>
-
             <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
               {/* Funnel Chart */}
               <Card className="border-none shadow-sm">
@@ -407,6 +765,69 @@ const CampaignTracker = () => {
                   </ScrollArea>
                 </CardContent>
               </Card>
+          </TabsContent>
+
+          {/* REPLIES TAB */}
+          <TabsContent value="replies">
+            <Card className="border-none shadow-sm">
+              <CardHeader>
+                <CardTitle>Inbox Replies</CardTitle>
+                <CardDescription>Responses from your campaign recipients</CardDescription>
+              </CardHeader>
+              <CardContent>
+                {replies.length === 0 ? (
+                  <div className="text-center py-12 text-gray-500">
+                    <MessageSquare className="h-12 w-12 mx-auto text-gray-300 mb-3" />
+                    <p className="text-lg font-medium">No replies yet</p>
+                    <p className="text-sm">Replies will appear here when recipients respond to your emails.</p>
+                  </div>
+                ) : (
+                  <div className="space-y-4">
+                    {replies.map((reply) => (
+                      <Card key={reply.id} className="border shadow-sm overflow-hidden">
+                        <div 
+                          className="p-4 cursor-pointer hover:bg-gray-50 transition-colors flex items-start gap-4"
+                          onClick={() => setExpandedReply(expandedReply === reply.id ? null : reply.id)}
+                        >
+                          <div className="mt-1 bg-yellow-100 p-2 rounded-full text-yellow-600">
+                            <MessageSquare className="h-5 w-5" />
+                          </div>
+                          <div className="flex-1 min-w-0">
+                            <div className="flex justify-between items-start">
+                              <div>
+                                <h4 className="font-semibold text-gray-900">{reply.recipientName || reply.from_email}</h4>
+                                <p className="text-sm text-gray-500">{reply.from_email}</p>
+                              </div>
+                              <span className="text-xs text-gray-400 whitespace-nowrap">
+                                {formatDistanceToNow(new Date(reply.date), { addSuffix: true })}
+                              </span>
+                            </div>
+                            <p className="text-sm font-medium text-gray-800 mt-2">{reply.subject}</p>
+                            <p className="text-sm text-gray-600 mt-1 line-clamp-2">
+                              {reply.body?.replace(/<[^>]*>/g, '').substring(0, 150)}...
+                            </p>
+                          </div>
+                          <div className="text-gray-400">
+                            {expandedReply === reply.id ? <ChevronUp className="h-5 w-5" /> : <ChevronDown className="h-5 w-5" />}
+                          </div>
+                        </div>
+                        
+                        {expandedReply === reply.id && (
+                          <div className="bg-gray-50 p-6 border-t">
+                            <div className="prose prose-sm max-w-none bg-white p-4 rounded border shadow-sm" dangerouslySetInnerHTML={{ __html: reply.body || '' }} />
+                            <div className="mt-4 flex justify-end">
+                                <Button size="sm" variant="outline" onClick={() => window.open(`mailto:${reply.from_email}`)}>
+                                    Reply via Email Client
+                                </Button>
+                            </div>
+                          </div>
+                        )}
+                      </Card>
+                    ))}
+                  </div>
+                )}
+              </CardContent>
+            </Card>
           </TabsContent>
 
           {/* RECIPIENTS TAB */}
