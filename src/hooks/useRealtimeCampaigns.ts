@@ -9,6 +9,14 @@ export const useRealtimeCampaigns = () => {
   const fetchCampaigns = useCallback(async () => {
     try {
       console.log('Fetching campaigns with real-time tracking...');
+      
+      const { data: { user } } = await supabase.auth.getUser();
+      
+      if (!user) {
+        console.log('No user found, skipping fetch');
+        return;
+      }
+
       const { data, error } = await supabase
         .from('campaigns')
         .select(`
@@ -16,6 +24,7 @@ export const useRealtimeCampaigns = () => {
           recipients (id, status, opened_at, clicked_at, current_step, bounced, replied, last_email_sent_at, email, name),
           campaign_followups (id, step_number, delay_days, delay_hours)
         `)
+        .eq('user_id', user.id)
         .order('created_at', { ascending: false });
 
       if (error) {

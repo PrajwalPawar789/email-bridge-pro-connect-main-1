@@ -44,9 +44,13 @@ const Dashboard = () => {
   }, [navigate]);
 
   const fetchEmailConfigs = async () => {
+    const { data: { user } } = await supabase.auth.getUser();
+    if (!user) return;
+
     const { data, error } = await supabase
       .from('email_configs')
-      .select('*');
+      .select('*')
+      .eq('user_id', user.id);
     
     if (!error) {
       setEmailConfigs(data || []);

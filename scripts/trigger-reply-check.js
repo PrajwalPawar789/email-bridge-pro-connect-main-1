@@ -17,7 +17,7 @@ if (!supabaseUrl || !serviceRoleKey) {
 }
 
 async function triggerCheck() {
-  console.log('Triggering check-email-replies function...');
+  console.log('Triggering check-email-replies function with 30 day lookback (DB Mode)...');
   
   const functionUrl = `${supabaseUrl}/functions/v1/check-email-replies`;
   
@@ -28,7 +28,10 @@ async function triggerCheck() {
         'Authorization': `Bearer ${serviceRoleKey}`,
         'Content-Type': 'application/json'
       },
-      body: JSON.stringify({})
+      body: JSON.stringify({ 
+        lookback_days: 30,
+        use_db_scan: true 
+      })
     });
 
     if (!response.ok) {
@@ -45,4 +48,4 @@ async function triggerCheck() {
   }
 }
 
-triggerCheck();
+await triggerCheck();
