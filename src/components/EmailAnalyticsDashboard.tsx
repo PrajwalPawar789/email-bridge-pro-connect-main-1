@@ -127,7 +127,7 @@ const EmailAnalyticsDashboard = () => {
         `)
         .eq('campaigns.user_id', user.id)
         .order('updated_at', { ascending: false })
-        .limit(20);
+        .limit(100);
 
       const recentRecipients: any[] = recentRecipientsData || [];
 
@@ -321,6 +321,17 @@ const EmailAnalyticsDashboard = () => {
     }
 
     return insights;
+  };
+
+  const safeFormatDate = (dateString: any) => {
+    try {
+      if (!dateString) return 'Just now';
+      const date = new Date(dateString);
+      if (isNaN(date.getTime())) return 'Just now';
+      return formatDistanceToNow(date, { addSuffix: true });
+    } catch (e) {
+      return 'Just now';
+    }
   };
 
   if (loading) {
@@ -648,7 +659,7 @@ const EmailAnalyticsDashboard = () => {
               </CardTitle>
             </CardHeader>
             <CardContent>
-              <div className="space-y-0">
+              <div className="space-y-0 max-h-[400px] overflow-y-auto pr-2">
                 {data.recentActivity.length === 0 ? (
                   <p className="text-center text-gray-500 py-4">No recent activity</p>
                 ) : (
@@ -674,7 +685,7 @@ const EmailAnalyticsDashboard = () => {
                         </p>
                       </div>
                       <span className="text-xs text-gray-400 whitespace-nowrap">
-                        {formatDistanceToNow(new Date(item.date), { addSuffix: true })}
+                        {safeFormatDate(item.date)}
                       </span>
                     </div>
                   ))
