@@ -76,6 +76,7 @@ const CampaignBuilder: React.FC<CampaignBuilderProps> = ({ emailConfigs }) => {
   const [followups, setFollowups] = useState<FollowupStep[]>([]);
   const [listCount, setListCount] = useState(0);
   const [audienceType, setAudienceType] = useState<'list' | 'manual'>('list');
+  const [scheduledAt, setScheduledAt] = useState<string>('');
 
   useEffect(() => {
     fetchTemplates();
@@ -225,7 +226,7 @@ const CampaignBuilder: React.FC<CampaignBuilderProps> = ({ emailConfigs }) => {
   };
 
   const handleSave = async (isDraft = true) => {
-    const statusToUse = isDraft ? 'draft' : 'ready';
+    const statusToUse = scheduledAt ? 'scheduled' : (isDraft ? 'draft' : 'ready');
     setLoading(true);
 
     try {
@@ -244,6 +245,7 @@ const CampaignBuilder: React.FC<CampaignBuilderProps> = ({ emailConfigs }) => {
           send_delay_minutes: form.send_delay_minutes,
           email_config_id: selectedConfigs[0].configId,
           email_list_id: selectedListId || null,
+          scheduled_at: scheduledAt ? new Date(scheduledAt).toISOString() : null,
         })
         .select()
         .single();
@@ -807,6 +809,28 @@ const CampaignBuilder: React.FC<CampaignBuilderProps> = ({ emailConfigs }) => {
           </CardContent>
         </Card>
       </div>
+
+      <Card>
+        <CardHeader>
+          <CardTitle className="text-base">Schedule Campaign</CardTitle>
+          <CardDescription>Optionally schedule this campaign to start at a later time.</CardDescription>
+        </CardHeader>
+        <CardContent>
+          <div className="flex flex-col space-y-2">
+            <Label htmlFor="scheduledAt">Start Date & Time</Label>
+            <Input
+              id="scheduledAt"
+              type="datetime-local"
+              value={scheduledAt}
+              onChange={(e) => setScheduledAt(e.target.value)}
+              className="max-w-md"
+            />
+            <p className="text-sm text-muted-foreground">
+              Leave blank to start immediately when you click "Launch Campaign".
+            </p>
+          </div>
+        </CardContent>
+      </Card>
 
       <Card>
         <CardHeader>

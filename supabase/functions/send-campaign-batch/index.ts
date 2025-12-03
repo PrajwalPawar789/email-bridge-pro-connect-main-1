@@ -314,8 +314,8 @@ const sendEmail = async (config: EmailConfig, recipient: Recipient, campaign: Ca
 };
 
 // Process a single batch of emails (max 3 emails to stay within 150s limit)
-const processBatch = async (campaignId: string, batchSize = 3, step = 0) => {
-  console.log(`Processing batch for campaign: ${campaignId} (max ${batchSize} emails, step ${step})`);
+const processBatch = async (campaignId: string, batchSize = 3, step = 0, emailConfigId?: string) => {
+  console.log(`Processing batch for campaign: ${campaignId} (max ${batchSize} emails, step ${step}, config ${emailConfigId || 'default'})`);
   
   try {
     // Get campaign data
@@ -398,6 +398,11 @@ const processBatch = async (campaignId: string, batchSize = 3, step = 0) => {
       .order('id', { ascending: true })
       .limit(batchSize);
 
+    if (emailConfigId) {
+      // If a specific config is requested, only pick recipients assigned to it OR unassigned ones
+      recipientsQuery = recipientsQuery.or(`assigned_email_config_id.eq.${emailConfigId},assigned_email_config_id.is.null`);
+    }
+
     if (step === 0) {
       recipientsQuery = recipientsQuery.eq('status', 'pending');
     } else {
@@ -427,14 +432,23 @@ const processBatch = async (campaignId: string, batchSize = 3, step = 0) => {
       console.log('No recipients found for this step.');
       
       if (step === 0) {
-        // Mark campaign as sent only if it's the initial step and no one is left
-        await supabase
-          .from('campaigns')
-          .update({ 
-            status: 'sent',
-            updated_at: new Date().toISOString()
-          })
-          .eq('id', campaignId);
+        // Check if there are ANY pending recipients left for this campaign
+        const { count } = await supabase
+          .from('recipients')
+          .select('id', { count: 'exact', head: true })
+          .eq('campaign_id', campaignId)
+          .eq('status', 'pending');
+
+        if (count === 0) {
+          // Only mark as sent if truly no one is left pending
+          await supabase
+            .from('campaigns')
+            .update({ 
+              status: 'sent',
+              updated_at: new Date().toISOString()
+            })
+            .eq('id', campaignId);
+        }
       }
       
       return { 
@@ -447,23 +461,24 @@ const processBatch = async (campaignId: string, batchSize = 3, step = 0) => {
 
     // LOCKING: Mark these recipients as 'processing' to prevent other workers from picking them up
     const idsToProcess = recipientIds.map(r => r.id);
-    const { error: lockError } = await supabase
+    
+    // Atomic lock: Only update if status matches what we expect
+    const expectedStatus = step === 0 ? 'pending' : 'sent';
+    
+    const { data: recipients, error: lockError } = await supabase
       .from('recipients')
       .update({ status: 'processing', updated_at: new Date().toISOString() })
-      .in('id', idsToProcess);
+      .in('id', idsToProcess)
+      .eq('status', expectedStatus)
+      .select('*');
 
     if (lockError) {
       throw new Error(`Error locking recipients: ${lockError.message}`);
     }
 
-    // Fetch full details for the locked recipients
-    const { data: recipients, error: fetchError } = await supabase
-      .from('recipients')
-      .select('*')
-      .in('id', idsToProcess);
-
-    if (fetchError || !recipients) {
-      throw new Error(`Error fetching locked recipients: ${fetchError?.message}`);
+    if (!recipients || recipients.length === 0) {
+       console.log('Could not lock any recipients (race condition?). Skipping batch.');
+       return { success: true, message: 'Race condition encountered', emailsSent: 0, hasMore: true };
     }
 
     console.log(`Processing ${recipients.length} recipients in this batch`);
@@ -491,6 +506,19 @@ const processBatch = async (campaignId: string, batchSize = 3, step = 0) => {
           updated_at: new Date().toISOString()
         })
         .eq('id', campaignId);
+
+      // NEW: Update specific config timestamp if used
+      if (emailConfigId) {
+         const { error: configUpdateError } = await supabase
+          .from('campaign_email_configurations')
+          .update({ last_sent_at: new Date().toISOString() })
+          .eq('campaign_id', campaignId)
+          .eq('email_config_id', emailConfigId);
+          
+         if (configUpdateError) {
+           console.warn('Failed to update last_sent_at for config (column might be missing):', configUpdateError.message);
+         }
+      }
     }
 
     let emailsSent = 0;
@@ -501,7 +529,7 @@ const processBatch = async (campaignId: string, batchSize = 3, step = 0) => {
       
       try {
         // Determine which email config to use
-        let configIdToUse = recipient.assigned_email_config_id || campaign.email_config_id;
+        let configIdToUse = emailConfigId || recipient.assigned_email_config_id || campaign.email_config_id;
         
         if (!configIdToUse) {
            throw new Error("No email configuration assigned to recipient or campaign.");
@@ -607,7 +635,7 @@ serve(async (req: Request) => {
   }
 
   try {
-    const { campaignId, batchSize, step } = await req.json();
+    const { campaignId, batchSize, step, emailConfigId } = await req.json();
     
     if (!campaignId) {
       return new Response(
@@ -619,7 +647,7 @@ serve(async (req: Request) => {
       );
     }
 
-    const result = await processBatch(campaignId, batchSize, step || 0);
+    const result = await processBatch(campaignId, batchSize, step || 0, emailConfigId);
     
     return new Response(
       JSON.stringify(result),

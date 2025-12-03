@@ -1,7 +1,7 @@
 // @ts-nocheck
 import { serve } from "https://deno.land/std@0.190.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
-import { ImapFlow } from "npm:imapflow@1.0.151";
+import { ImapFlow } from "npm:imapflow@1.0.164";
 import { simpleParser } from "npm:mailparser@3.9.0";
 import { Buffer } from "node:buffer";
 
@@ -228,11 +228,19 @@ const checkRepliesAndBouncesForConfig = async (config: any, lookbackDays: number
         let port = config.imap_port;
         let secure = config.imap_port === 993;
         
-        // Force STARTTLS for Hostinger to see if it bypasses the TLS handshake issue
-        if (config.imap_host.includes('hostinger')) {
-            console.log(`[Override] Switching to Port 143 (STARTTLS) for Hostinger...`);
-            port = 143;
-            secure = false;
+        // Dynamic TLS options based on attempt to handle finicky servers
+        const tlsOptions: any = {
+            rejectUnauthorized: false,
+        };
+        
+        if (attempt === 1) {
+            tlsOptions.servername = config.imap_host;
+            tlsOptions.minVersion = 'TLSv1.2';
+        } else if (attempt === 2) {
+            tlsOptions.servername = config.imap_host;
+            // Remove minVersion
+        } else {
+            // Remove servername to let default behavior take over
         }
 
         const client = new ImapFlow({
@@ -243,12 +251,13 @@ const checkRepliesAndBouncesForConfig = async (config: any, lookbackDays: number
                 user: config.smtp_username,
                 pass: config.smtp_password,
             },
-            tls: {
-                rejectUnauthorized: false,
-                servername: config.imap_host,
-                minVersion: 'TLSv1.2'
+            tls: tlsOptions,
+            logger: {
+                debug: (obj: any) => console.log(`[IMAP DEBUG] ${obj?.msg || JSON.stringify(obj)}`),
+                info: (obj: any) => console.log(`[IMAP INFO] ${obj?.msg || JSON.stringify(obj)}`),
+                warn: (obj: any) => console.warn(`[IMAP WARN] ${obj?.msg || JSON.stringify(obj)}`),
+                error: (obj: any) => console.error(`[IMAP ERROR] ${obj?.msg || JSON.stringify(obj)}`),
             },
-            logger: false, // Keep false to avoid spamming logs unless necessary, we have the raw check now
             clientInfo: {
                 name: 'EmailBridge',
                 version: '1.0.0'
@@ -285,6 +294,8 @@ const checkRepliesAndBouncesForConfig = async (config: any, lookbackDays: number
                     const interestingSequenceNumbers: number[] = [];
 
                     // 1. Scan Headers (Envelopes)
+                    const bounceSequenceNumbers: number[] = [];
+                    
                     for await (const message of client.fetch(messagesToCheck, { envelope: true })) {
                         const { envelope, seq } = message;
                         if (!envelope) continue;
@@ -296,63 +307,28 @@ const checkRepliesAndBouncesForConfig = async (config: any, lookbackDays: number
                         // Check for bounces
                         const isBounceSender = /mailer-daemon|postmaster|bounce|delivery|no-reply/i.test(from);
                         const isBounceSubject = /failure|failed|undelivered|undeliverable|returned|rejected|delivery status notification/i.test(subject);
+                        const isBounce = isBounceSender || isBounceSubject;
                         
-                        // Check for replies
-                        const isReply = !!inReplyTo;
-
-                        if (isBounceSender || isBounceSubject || isReply) {
-                            interestingSequenceNumbers.push(seq);
-                        }
-                    }
-
-                    console.log(`Found ${interestingSequenceNumbers.length} potential bounces/replies. Fetching full content...`);
-
-                    if (interestingSequenceNumbers.length > 0) {
-                        for await (const message of client.fetch(interestingSequenceNumbers, { source: true, uid: true })) {
-                        try {
-                            const source = message.source;
-                            const id = message.uid;
-                            
-                            // Ensure source is a Buffer to avoid stream issues in Deno
-                            const sourceBuffer = Buffer.isBuffer(source) ? source : Buffer.from(source);
-                            const parsed = await simpleParser(sourceBuffer);
-                            
-                            const from = parsed.from?.text || '';
-                            const subject = parsed.subject || '';
-                            
-                            // --- 1. CHECK FOR REPLIES ---
-                            const inReplyTo = parsed.inReplyTo;
-                            const references = parsed.references;
-                            
+                        // --- 1. PROCESS REPLIES IMMEDIATELY (No Body Fetch) ---
+                        // CRITICAL: Do NOT process as reply if it is a bounce!
+                        if (inReplyTo && !isBounce) {
                             const normalizeId = (id: any) => {
                                 if (typeof id !== 'string') return '';
                                 return id.replace(/[<>]/g, '').trim();
                             };
 
                             const rawIds: string[] = [];
-                            if (inReplyTo) {
-                                if (typeof inReplyTo === 'string') {
-                                    rawIds.push(inReplyTo);
-                                } else if (Array.isArray(inReplyTo)) {
-                                    inReplyTo.forEach((id: any) => {
-                                        if (typeof id === 'string') rawIds.push(id);
-                                    });
-                                }
-                            }
-                            
-                            if (references) {
-                                const refsArray = Array.isArray(references) ? references : [references];
-                                refsArray.forEach(r => {
-                                    if (typeof r === 'string') {
-                                        r.split(/\s+/).forEach(id => rawIds.push(id));
-                                    }
+                            if (typeof inReplyTo === 'string') {
+                                rawIds.push(inReplyTo);
+                            } else if (Array.isArray(inReplyTo)) {
+                                inReplyTo.forEach((id: any) => {
+                                    if (typeof id === 'string') rawIds.push(id);
                                 });
                             }
 
                             const idsToCheck = new Set();
                             rawIds.forEach(id => {
-                                if (!id || typeof id !== 'string') return;
-                                
+                                if (!id) return;
                                 const clean = normalizeId(id);
                                 if (clean) {
                                     idsToCheck.add(clean);
@@ -384,52 +360,74 @@ const checkRepliesAndBouncesForConfig = async (config: any, lookbackDays: number
                                     }
                                 }
                             }
+                        }
 
-                            // --- 2. CHECK FOR BOUNCES ---
-                            const isBounceSender = /mailer-daemon|postmaster|bounce|delivery|no-reply/i.test(from);
-                            const isBounceSubject = /failure|failed|undelivered|undeliverable|returned|rejected|delivery status notification/i.test(subject);
+                        // --- 2. QUEUE BOUNCES FOR BODY FETCH ---
+                        if (isBounce) {
+                            bounceSequenceNumbers.push(seq);
+                        }
+                    }
 
-                            if (isBounceSender || isBounceSubject) {
-                                console.log(`Potential bounce detected: ${subject} from ${from}`);
-                                
-                                const body = parsed.text || parsed.html || "";
-                                const emailRegex = /[a-zA-Z0-9._-]+@[a-zA-Z0-9._-]+\.[a-zA-Z0-9._-]+/gi;
-                                const foundEmails = body.match(emailRegex) || [];
-                                
-                                const failedHeader = parsed.headers.get('x-failed-recipients');
-                                if (failedHeader) {
-                                    if (typeof failedHeader === 'string') foundEmails.push(failedHeader);
-                                    else if (Array.isArray(failedHeader)) foundEmails.push(...failedHeader);
-                                }
+                    console.log(`Found ${bounceSequenceNumbers.length} potential bounces. Fetching full content for max 20...`);
 
-                                const uniqueEmails = [...new Set(foundEmails.map((e: string) => e.toLowerCase()))];
+                    // Limit to 20 bounces to avoid timeout
+                    const bouncesToProcess = bounceSequenceNumbers.slice(0, 20);
 
-                                if (uniqueEmails.length > 0) {
-                                    const { data: recipients } = await supabase
-                                        .from('recipients')
-                                        .select('id, email, campaign_id')
-                                        .in('email', uniqueEmails)
-                                        .eq('bounced', false)
-                                        .order('last_email_sent_at', { ascending: false })
-                                        .limit(5);
+                    if (bouncesToProcess.length > 0) {
+                        for await (const message of client.fetch(bouncesToProcess, { source: true, uid: true })) {
+                        try {
+                            const source = message.source;
+                            const id = message.uid;
+                            
+                            // Ensure source is a Buffer to avoid stream issues in Deno
+                            const sourceBuffer = Buffer.isBuffer(source) ? source : Buffer.from(source);
+                            const parsed = await simpleParser(sourceBuffer);
+                            
+                            const from = parsed.from?.text || '';
+                            const subject = parsed.subject || '';
+                            
+                            // --- CHECK FOR BOUNCES ---
+                            console.log(`Processing bounce: ${subject} from ${from}`);
+                            
+                            const body = parsed.text || parsed.html || "";
+                            const emailRegex = /[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/gi;
+                            const foundEmails = body.match(emailRegex) || [];
+                            
+                            console.log(`Extracted ${foundEmails.length} emails from bounce body: ${foundEmails.slice(0, 5).join(', ')}${foundEmails.length > 5 ? '...' : ''}`);
+                            
+                            const failedHeader = parsed.headers.get('x-failed-recipients');
+                            if (failedHeader) {
+                                if (typeof failedHeader === 'string') foundEmails.push(failedHeader);
+                                else if (Array.isArray(failedHeader)) foundEmails.push(...failedHeader);
+                            }
 
-                                    if (recipients && recipients.length > 0) {
-                                        for (const recipient of recipients) {
-                                            console.log(`Confirmed bounce for ${recipient.email} (Campaign ${recipient.campaign_id})`);
-                                            
-                                            await supabase
-                                                .from('recipients')
-                                                .update({ 
-                                                    bounced: true, 
-                                                    bounced_at: new Date().toISOString(),
-                                                    status: 'bounced'
-                                                })
-                                                .eq('id', recipient.id);
-                                            
-                                            await supabase.rpc('increment_bounced_count', { campaign_id: recipient.campaign_id });
-                                            
-                                            bouncedCount++;
-                                        }
+                            const uniqueEmails = [...new Set(foundEmails.map((e: string) => e.toLowerCase()))];
+
+                            if (uniqueEmails.length > 0) {
+                                const { data: recipients } = await supabase
+                                    .from('recipients')
+                                    .select('id, email, campaign_id')
+                                    .in('email', uniqueEmails)
+                                    .eq('bounced', false)
+                                    .order('last_email_sent_at', { ascending: false })
+                                    .limit(5);
+
+                                if (recipients && recipients.length > 0) {
+                                    for (const recipient of recipients) {
+                                        console.log(`Confirmed bounce for ${recipient.email} (Campaign ${recipient.campaign_id})`);
+                                        
+                                        await supabase
+                                            .from('recipients')
+                                            .update({ 
+                                                bounced: true, 
+                                                bounced_at: new Date().toISOString(),
+                                                status: 'bounced'
+                                            })
+                                            .eq('id', recipient.id);
+                                        
+                                        await supabase.rpc('increment_bounced_count', { campaign_id: recipient.campaign_id });
+                                        
+                                        bouncedCount++;
                                     }
                                 }
                             }
@@ -468,7 +466,7 @@ serve(async (req) => {
         return new Response(null, { headers: corsHeaders });
     }
 
-    console.log("Starting check-email-replies v3 (sequential)...");
+    console.log("Starting check-email-replies v3.1 (No Hostinger Override)...");
 
     try {
         let configId = null;

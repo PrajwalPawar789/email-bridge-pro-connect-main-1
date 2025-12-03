@@ -81,6 +81,7 @@ const CampaignList = () => {
     switch (status) {
       case 'draft': return 'bg-gray-500';
       case 'ready': return 'bg-blue-500';
+      case 'scheduled': return 'bg-indigo-500';
       case 'sending': return 'bg-orange-500';
       case 'paused': return 'bg-yellow-500';
       case 'sent': return 'bg-green-500';
@@ -177,11 +178,16 @@ const CampaignList = () => {
             // Count recipients that are still eligible for follow-ups:
             // - Not replied
             // - Not bounced
+            // - Not failed (failed emails stop the sequence)
             // - Have not completed all steps (current_step < totalSteps - 1)
             // Note: current_step is 0-indexed. If totalSteps is 2 (0 and 1), and current_step is 1, they are done.
             const recipientsEligibleForFollowups = recipients.filter((r: any) => {
               const currentStep = typeof r.current_step === 'number' ? r.current_step : 0;
-              return !r.replied && !r.bounced && currentStep < totalSteps - 1;
+              return !r.replied && 
+                     !r.bounced && 
+                     r.status !== 'failed' && 
+                     r.status !== 'completed' &&
+                     currentStep < totalSteps - 1;
             }).length;
 
             // Follow-up mode should only be shown when there are configured follow-ups,
@@ -242,9 +248,13 @@ const CampaignList = () => {
                     <div className="space-y-1">
                       <p className="text-sm text-gray-600 flex items-center gap-1">
                         <Clock className="h-3 w-3" />
-                        Delay
+                        {campaign.status === 'scheduled' ? 'Scheduled For' : 'Delay'}
                       </p>
-                      <p className="text-sm font-medium">{delayMinutes} min</p>
+                      <p className="text-sm font-medium">
+                        {campaign.status === 'scheduled' && campaign.scheduled_at
+                          ? new Date(campaign.scheduled_at).toLocaleString()
+                          : `${delayMinutes} min`}
+                      </p>
                       {hasFollowups && (
                         <p className="text-xs text-purple-600">
                           {campaign.campaign_followups.length} follow-up(s)

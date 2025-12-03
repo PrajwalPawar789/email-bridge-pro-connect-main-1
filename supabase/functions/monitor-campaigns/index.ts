@@ -22,8 +22,8 @@ const monitorCampaigns = async () => {
     // We include 'sent' because they might have pending follow-ups
     const { data: activeCampaigns, error: fetchError } = await supabase
       .from('campaigns')
-      .select('id, name, status, last_batch_sent_at, send_delay_minutes')
-      .in('status', ['sending', 'sent']);
+      .select('id, name, status, last_batch_sent_at, send_delay_minutes, scheduled_at')
+      .in('status', ['sending', 'sent', 'scheduled']);
     
     if (fetchError) {
       console.error('Error fetching campaigns:', fetchError);
@@ -46,6 +46,16 @@ const monitorCampaigns = async () => {
       console.error('Error fetching followups:', followupError);
     }
 
+    // 2.5 Get email configurations for these campaigns (for multi-sender support)
+    const { data: emailConfigs, error: configError } = await supabase
+      .from('campaign_email_configurations')
+      .select('campaign_id, email_config_id, last_sent_at')
+      .in('campaign_id', campaignIds);
+
+    if (configError) {
+      console.error('Error fetching email configs:', configError);
+    }
+
     console.log(`Found ${activeCampaigns.length} active campaigns. Checking eligibility...`);
     
     const results = [];
@@ -54,64 +64,156 @@ const monitorCampaigns = async () => {
     // 3. Check which campaigns are ready for the next batch
     for (const campaign of activeCampaigns) {
       
+      // Handle scheduled campaigns
+      if (campaign.status === 'scheduled') {
+        if (campaign.scheduled_at && new Date(campaign.scheduled_at).getTime() <= now) {
+           console.log(`Starting scheduled campaign: ${campaign.name}`);
+           const { error: updateError } = await supabase
+             .from('campaigns')
+             .update({ status: 'sending' })
+             .eq('id', campaign.id);
+           
+           if (updateError) {
+             console.error(`Failed to start scheduled campaign ${campaign.name}:`, updateError);
+             continue;
+           } else {
+             // Update local status to process it immediately in this run
+             campaign.status = 'sending';
+           }
+        } else {
+           console.log(`Campaign ${campaign.name} is scheduled for ${campaign.scheduled_at}. Waiting...`);
+           continue;
+        }
+      }
+
       // --- STEP 0: Initial Emails ---
       if (campaign.status === 'sending') {
         // Default delay to 1 minute if not set
         const delayMinutes = campaign.send_delay_minutes || 1;
         const delayMs = delayMinutes * 60 * 1000;
         
-        // If never sent, or if enough time has passed since last batch
-        const lastSent = campaign.last_batch_sent_at ? new Date(campaign.last_batch_sent_at).getTime() : 0;
-        const timeSinceLastBatch = now - lastSent;
-        
-        if (lastSent === 0 || timeSinceLastBatch >= delayMs) {
-          console.log(`Triggering Step 0 batch for: ${campaign.name}`);
+        // Check for multi-sender configs
+        const campaignConfigs = emailConfigs?.filter(c => c.campaign_id === campaign.id) || [];
+
+        if (campaignConfigs.length > 0) {
+          // Multi-sender mode: Check each config independently
+          console.log(`Campaign ${campaign.name} has ${campaignConfigs.length} senders configured. Checking each...`);
           
-          // Use batchSize = 1 to strictly respect the "Delay Between Emails" setting.
-          // This ensures we send 1 email, then wait for the configured delay.
-          try {
-            const { data, error } = await supabase.functions.invoke('send-campaign-batch', {
-              body: { campaignId: campaign.id, batchSize: 1, step: 0 }
-            });
-            
-            if (error) {
-              console.error(`Failed to trigger Step 0 for ${campaign.name}:`, error);
-              results.push({ id: campaign.id, name: campaign.name, step: 0, status: 'error', error });
-            } else {
-              results.push({ id: campaign.id, name: campaign.name, step: 0, status: 'triggered', data });
+          const promises = campaignConfigs.map(async (config) => {
+            const lastSent = config.last_sent_at ? new Date(config.last_sent_at).getTime() : 0;
+            const timeSinceLastBatch = now - lastSent;
+
+            if (lastSent === 0 || timeSinceLastBatch >= delayMs) {
+              console.log(`Triggering Step 0 batch for: ${campaign.name} (Sender: ${config.email_config_id})`);
+              
+              try {
+                const { data, error } = await supabase.functions.invoke('send-campaign-batch', {
+                  body: { 
+                    campaignId: campaign.id, 
+                    batchSize: 1, 
+                    step: 0,
+                    emailConfigId: config.email_config_id 
+                  }
+                });
+                
+                if (error) {
+                  console.error(`Failed to trigger Step 0 for ${campaign.name} (Sender: ${config.email_config_id}):`, error);
+                  results.push({ id: campaign.id, name: campaign.name, step: 0, sender: config.email_config_id, status: 'error', error });
+                } else {
+                  results.push({ id: campaign.id, name: campaign.name, step: 0, sender: config.email_config_id, status: 'triggered', data });
+                }
+              } catch (err) {
+                console.error(`Exception triggering Step 0 for ${campaign.name}:`, err);
+              }
             }
-          } catch (err) {
-            console.error(`Exception triggering Step 0 for ${campaign.name}:`, err);
-          }
+          });
+          
+          await Promise.all(promises);
         } else {
-          // console.log(`Skipping Step 0 for ${campaign.name}: Waiting for delay`);
+          // Single sender mode (Legacy)
+          // If never sent, or if enough time has passed since last batch
+          const lastSent = campaign.last_batch_sent_at ? new Date(campaign.last_batch_sent_at).getTime() : 0;
+          const timeSinceLastBatch = now - lastSent;
+          
+          if (lastSent === 0 || timeSinceLastBatch >= delayMs) {
+            console.log(`Triggering Step 0 batch for: ${campaign.name} (Single Sender)`);
+            
+            // Use batchSize = 1 to strictly respect the "Delay Between Emails" setting.
+            // This ensures we send 1 email, then wait for the configured delay.
+            try {
+              const { data, error } = await supabase.functions.invoke('send-campaign-batch', {
+                body: { campaignId: campaign.id, batchSize: 1, step: 0 }
+              });
+              
+              if (error) {
+                console.error(`Failed to trigger Step 0 for ${campaign.name}:`, error);
+                results.push({ id: campaign.id, name: campaign.name, step: 0, status: 'error', error });
+              } else {
+                results.push({ id: campaign.id, name: campaign.name, step: 0, status: 'triggered', data });
+              }
+            } catch (err) {
+              console.error(`Exception triggering Step 0 for ${campaign.name}:`, err);
+            }
+          } else {
+            // console.log(`Skipping Step 0 for ${campaign.name}: Waiting for delay`);
+          }
         }
       }
 
       // --- FOLLOW-UP STEPS ---
       const campaignFollowups = followups?.filter(f => f.campaign_id === campaign.id) || [];
-      
-      for (const fp of campaignFollowups) {
-        // For follow-ups, we just trigger the worker. It handles the "is eligible?" logic per recipient.
-        // We don't want to spam it too hard, but since we don't track "last_followup_batch_at",
-        // we rely on the worker being efficient.
-        
-        // console.log(`Triggering follow-up check for ${campaign.name} (Step ${fp.step_number})`);
-        
-        try {
-          const { data, error } = await supabase.functions.invoke('send-campaign-batch', {
-            body: { campaignId: campaign.id, batchSize: 10, step: fp.step_number }
-          });
-          
-          if (error) {
-            console.error(`Failed to trigger Step ${fp.step_number} for ${campaign.name}:`, error);
-            results.push({ id: campaign.id, name: campaign.name, step: fp.step_number, status: 'error', error });
-          } else {
-            // Only log if it actually did something (optional, but hard to know from here without parsing data)
-            results.push({ id: campaign.id, name: campaign.name, step: fp.step_number, status: 'triggered', data });
+      const campaignConfigsForFollowup = emailConfigs?.filter(c => c.campaign_id === campaign.id) || [];
+
+      if (campaignConfigsForFollowup.length > 0) {
+        // Parallel follow-ups per sender
+        const promises = campaignConfigsForFollowup.map(async (config) => {
+          for (const fp of campaignFollowups) {
+            try {
+              const { data, error } = await supabase.functions.invoke('send-campaign-batch', {
+                body: { 
+                  campaignId: campaign.id, 
+                  batchSize: 10, 
+                  step: fp.step_number,
+                  emailConfigId: config.email_config_id
+                }
+              });
+              
+              if (error) {
+                console.error(`Failed to trigger Step ${fp.step_number} for ${campaign.name} (Sender: ${config.email_config_id}):`, error);
+                results.push({ id: campaign.id, name: campaign.name, step: fp.step_number, sender: config.email_config_id, status: 'error', error });
+              } else {
+                results.push({ id: campaign.id, name: campaign.name, step: fp.step_number, sender: config.email_config_id, status: 'triggered', data });
+              }
+            } catch (err) {
+              console.error(`Exception triggering Step ${fp.step_number} for ${campaign.name}:`, err);
+            }
           }
-        } catch (err) {
-          console.error(`Exception triggering Step ${fp.step_number} for ${campaign.name}:`, err);
+        });
+        await Promise.all(promises);
+      } else {
+        // Legacy single sender follow-ups
+        for (const fp of campaignFollowups) {
+          // For follow-ups, we just trigger the worker. It handles the "is eligible?" logic per recipient.
+          // We don't want to spam it too hard, but since we don't track "last_followup_batch_at",
+          // we rely on the worker being efficient.
+          
+          // console.log(`Triggering follow-up check for ${campaign.name} (Step ${fp.step_number})`);
+          
+          try {
+            const { data, error } = await supabase.functions.invoke('send-campaign-batch', {
+              body: { campaignId: campaign.id, batchSize: 10, step: fp.step_number }
+            });
+            
+            if (error) {
+              console.error(`Failed to trigger Step ${fp.step_number} for ${campaign.name}:`, error);
+              results.push({ id: campaign.id, name: campaign.name, step: fp.step_number, status: 'error', error });
+            } else {
+              // Only log if it actually did something (optional, but hard to know from here without parsing data)
+              results.push({ id: campaign.id, name: campaign.name, step: fp.step_number, status: 'triggered', data });
+            }
+          } catch (err) {
+            console.error(`Exception triggering Step ${fp.step_number} for ${campaign.name}:`, err);
+          }
         }
       }
     }
