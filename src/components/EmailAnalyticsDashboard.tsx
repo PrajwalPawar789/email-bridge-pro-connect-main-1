@@ -83,6 +83,8 @@ interface DashboardData {
   };
   todaySentCount: number;
   dailyLimit: number;
+  totalBotOpens: number;
+  totalBotClicks: number;
 }
 
 const EmailAnalyticsDashboard = () => {
@@ -96,6 +98,8 @@ const EmailAnalyticsDashboard = () => {
     totalFailed: 0,
     totalBounced: 0,
     totalReplies: 0,
+    totalBotOpens: 0,
+    totalBotClicks: 0,
     avgOpenRate: 0,
     avgClickRate: 0,
     avgReplyRate: 0,
@@ -176,6 +180,8 @@ const EmailAnalyticsDashboard = () => {
       const totalFailed = campaigns.reduce((sum, c) => sum + (c.failed_count || 0), 0);
       const totalBounced = campaigns.reduce((sum, c) => sum + (c.bounced_count || 0), 0);
       const totalReplies = campaigns.reduce((sum, c) => sum + (c.replied_count || 0), 0);
+      const totalBotOpens = campaigns.reduce((sum, c) => sum + (c.bot_open_count || 0), 0);
+      const totalBotClicks = campaigns.reduce((sum, c) => sum + (c.bot_click_count || 0), 0);
 
       const avgOpenRate = totalEmails > 0 ? (totalOpens / totalEmails) * 100 : 0;
       const avgClickRate = totalEmails > 0 ? (totalClicks / totalEmails) * 100 : 0;
@@ -363,6 +369,8 @@ const EmailAnalyticsDashboard = () => {
         totalFailed,
         totalBounced,
         totalReplies,
+        totalBotOpens,
+        totalBotClicks,
         avgOpenRate,
         avgClickRate,
         avgReplyRate,
@@ -628,6 +636,60 @@ const EmailAnalyticsDashboard = () => {
             </Card>
           );
         })}
+      </div>
+
+      {/* Volume Metrics */}
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-4">
+        <Card className="border-none shadow-sm">
+          <CardContent className="p-6">
+            <div className="flex items-center justify-between mb-2">
+              <p className="text-sm font-medium text-gray-500">Total Sent</p>
+              <Mail className="h-4 w-4 text-blue-500" />
+            </div>
+            <p className="text-2xl font-bold">{data.totalEmails.toLocaleString()}</p>
+          </CardContent>
+        </Card>
+        <Card className="border-none shadow-sm">
+          <CardContent className="p-6">
+            <div className="flex items-center justify-between mb-2">
+              <p className="text-sm font-medium text-gray-500">Total Opens</p>
+              <Eye className="h-4 w-4 text-green-500" />
+            </div>
+            <p className="text-2xl font-bold">{data.totalOpens.toLocaleString()}</p>
+          </CardContent>
+        </Card>
+        <Card className="border-none shadow-sm">
+          <CardContent className="p-6">
+            <div className="flex items-center justify-between mb-2">
+              <p className="text-sm font-medium text-gray-500">Total Clicks</p>
+              <MousePointer className="h-4 w-4 text-purple-500" />
+            </div>
+            <p className="text-2xl font-bold">{data.totalClicks.toLocaleString()}</p>
+          </CardContent>
+        </Card>
+        <Card className="border-none shadow-sm">
+          <CardContent className="p-6">
+            <div className="flex items-center justify-between mb-2">
+              <p className="text-sm font-medium text-gray-500">Bot Activity</p>
+              <ShieldAlert className="h-4 w-4 text-orange-500" />
+            </div>
+            <div className="flex flex-col">
+                <p className="text-2xl font-bold">{(data.totalBotOpens + data.totalBotClicks).toLocaleString()}</p>
+                <p className="text-xs text-gray-500 mt-1">
+                    {data.totalBotOpens} opens, {data.totalBotClicks} clicks
+                </p>
+            </div>
+          </CardContent>
+        </Card>
+        <Card className="border-none shadow-sm">
+          <CardContent className="p-6">
+            <div className="flex items-center justify-between mb-2">
+              <p className="text-sm font-medium text-gray-500">Replies</p>
+              <MessageSquare className="h-4 w-4 text-indigo-500" />
+            </div>
+            <p className="text-2xl font-bold">{data.totalReplies.toLocaleString()}</p>
+          </CardContent>
+        </Card>
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">

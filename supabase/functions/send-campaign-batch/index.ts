@@ -269,7 +269,12 @@ const sendEmail = async (config: EmailConfig, recipient: Recipient, campaign: Ca
   const trackingPixel = generateTrackingPixel(campaign.id, recipient.id);
   console.log(`Generated tracking pixel URL: ${Deno.env.get("SUPABASE_URL")}/functions/v1/track-email-open?campaign_id=${campaign.id}&recipient_id=${recipient.id}`);
 
-  const finalContent = contentWithClickTracking + trackingPixel;
+  // Generate Ghost Link (Honeypot) for Bot Detection
+  // This link is invisible to humans but bots will likely follow it
+  const ghostLinkUrl = `${Deno.env.get("SUPABASE_URL")}/functions/v1/track-email-click?campaign_id=${campaign.id}&recipient_id=${recipient.id}&url=${encodeURIComponent('http://example.com/unsubscribe')}&type=ghost`;
+  const ghostLink = `<a href="${ghostLinkUrl}" style="display:none; visibility:hidden; opacity:0; position:absolute; left:-9999px;">Unsubscribe</a>`;
+
+  const finalContent = contentWithClickTracking + trackingPixel + ghostLink;
   console.log(`Final email content length: ${finalContent.length} characters`);
 
   const messageId = generateUniqueId();

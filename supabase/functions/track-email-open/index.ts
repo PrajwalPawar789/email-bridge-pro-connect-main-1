@@ -38,6 +38,7 @@ serve(async (req) => {
 
     if (campaignId && recipientId) {
       const userAgent = req.headers.get('user-agent') || '';
+      const ip = req.headers.get('x-forwarded-for') || req.headers.get('cf-connecting-ip') || '';
       console.log(`User-Agent: ${userAgent}`);
 
       // Check if already opened (prevent duplicate tracking)
@@ -48,17 +49,54 @@ serve(async (req) => {
         .single();
 
       if (recipient) {
-        // 1. Check for immediate bot opens (within 15 seconds of sending)
-        // Only if last_email_sent_at is present
+        let botScore = 0;
+        const botReasons: string[] = [];
+        let isBot = false;
+
+        // 1. Speed Trap (Temporal Analysis)
         if (recipient.last_email_sent_at) {
             const sentTime = new Date(recipient.last_email_sent_at).getTime();
             const now = new Date().getTime();
             const timeDiff = now - sentTime;
 
-            if (timeDiff < 15000) { // 15 seconds buffer
-                console.log(`Ignoring open detected too quickly (${timeDiff}ms) after sending. Likely a bot/scanner.`);
-                return response;
+            if (timeDiff < 2000) { // < 2 seconds
+                botScore += 90;
+                botReasons.push('speed_trap_critical');
+            } else if (timeDiff < 5000) { // < 5 seconds
+                botScore += 50;
+                botReasons.push('speed_trap_suspicious');
             }
+        }
+
+        // 2. User Agent Analysis
+        const ua = userAgent.toLowerCase();
+        if (!ua) {
+            botScore += 100;
+            botReasons.push('empty_user_agent');
+        } else if (ua.includes('bot') || ua.includes('spider') || ua.includes('crawler') || ua.includes('barracuda') || ua.includes('mimecast')) {
+            botScore += 100;
+            botReasons.push('known_bot_ua');
+        }
+
+        isBot = botScore >= 50;
+
+        // Log detailed tracking event
+        await supabase.from('tracking_events').insert({
+            campaign_id: campaignId,
+            recipient_id: recipientId,
+            event_type: 'open',
+            user_agent: userAgent,
+            ip_address: ip,
+            is_bot: isBot,
+            bot_score: botScore,
+            bot_reasons: botReasons
+        });
+
+        if (isBot) {
+            console.log(`Bot open detected! Score: ${botScore}, Reasons: ${botReasons.join(', ')}`);
+            await supabase.rpc('increment_bot_open_count', { campaign_id: campaignId });
+            // Do not mark recipient as opened if it's a bot
+            return response;
         }
 
         if (!recipient.opened_at) {

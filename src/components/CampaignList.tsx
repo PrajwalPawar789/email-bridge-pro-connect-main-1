@@ -305,9 +305,16 @@ const CampaignList = ({ onCreateCampaign }: CampaignListProps) => {
                           DB: {trackingStats.dbOpens}/{trackingStats.dbClicks} (syncing...)
                         </p>
                       )}
-                      <div className="flex gap-2">
-                        <p className="text-xs text-red-500">Bounces: {stats.bounced}</p>
-                        <p className="text-xs text-indigo-500">Replies: {stats.replied}</p>
+                      <div className="flex flex-col gap-1 mt-1">
+                        <div className="flex gap-2">
+                          <p className="text-xs text-red-500">Bounces: {stats.bounced}</p>
+                          <p className="text-xs text-indigo-500">Replies: {stats.replied}</p>
+                        </div>
+                        {(campaign.bot_open_count > 0 || campaign.bot_click_count > 0) && (
+                          <p className="text-xs text-gray-500" title="Detected bot activity filtered from main stats">
+                            🤖 Bots: {campaign.bot_open_count || 0} opens, {campaign.bot_click_count || 0} clicks
+                          </p>
+                        )}
                       </div>
                     </div>
                   </div>
