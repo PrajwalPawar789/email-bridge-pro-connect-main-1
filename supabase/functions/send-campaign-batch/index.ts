@@ -54,6 +54,8 @@ interface Recipient {
   track_click_link: string | null;
   track_open_link: string | null;
   assigned_email_config_id: string | null;
+  message_id?: string;
+  thread_id?: string;
 }
 
 type PersonalizationData = {
@@ -215,9 +217,9 @@ const fetchEmailConfigForCampaign = async (campaign: Campaign): Promise<EmailCon
   return normalizeEmailConfig(emailConfigRow);
 };
 
-const sendEmail = async (config: EmailConfig, recipient: Recipient, campaign: Campaign, extraData: PersonalizationData = {}, previousMessageId?: string) => {
+const sendEmail = async (config: EmailConfig, recipient: Recipient, campaign: Campaign, extraData: PersonalizationData = {}, previousMessageId?: string, threadId?: string) => {
   console.log(`Attempting to send email to: ${recipient.email}`);
-  
+
   const transporter = createTransport({
     host: config.host,
     port: config.port,
@@ -302,8 +304,23 @@ const sendEmail = async (config: EmailConfig, recipient: Recipient, campaign: Ca
   // Add threading headers if this is a follow-up
   if (previousMessageId) {
     mailOptions.headers['In-Reply-To'] = previousMessageId;
-    mailOptions.headers['References'] = previousMessageId;
-    console.log(`Added threading headers pointing to: ${previousMessageId}`);
+    
+    // Improved threading: Include original thread ID in References
+    const references = [];
+    if (threadId) {
+      references.push(threadId);
+    }
+    // Always include the immediate parent if it's different from threadId
+    if (previousMessageId && previousMessageId !== threadId) {
+      references.push(previousMessageId);
+    }
+    
+    // If no threadId was found (legacy), just use previousMessageId
+    if (references.length === 0) {
+      references.push(previousMessageId);
+    }
+    mailOptions.headers['References'] = references.join(' ');
+    console.log(`Added threading headers - In-Reply-To: ${previousMessageId}, References: ${mailOptions.headers['References']}`);
   }
 
   const info = await transporter.sendMail(mailOptions);
@@ -576,23 +593,27 @@ const processBatch = async (campaignId: string, batchSize = 3, step = 0, emailCo
         }
 
         const prospectData = prospectMap.get(recipient.email) || {};
-        
+
         // Send email
-        const info = await sendEmail(emailConfig, recipient, campaign, prospectData, recipient.message_id);
-        
+        const info = await sendEmail(emailConfig, recipient, campaign, prospectData, recipient.message_id, recipient.thread_id);
+
         // Update recipient status
-        const { error: updateError } = await supabase
-          .from('recipients')
-          .update({ 
+        const updateData: any = { 
             status: 'sent',
             current_step: step,
             last_email_sent_at: new Date().toISOString(),
             message_id: info.messageId,
             assigned_email_config_id: configIdToUse
-          })
-          .eq('id', recipient.id);
+        };
+        // If this is the first email (step 0), set the thread_id
+        if (step === 0) {
+            updateData.thread_id = info.messageId;
+        }
 
-        if (updateError) {
+        const { error: updateError } = await supabase
+          .from('recipients')
+          .update(updateData)
+          .eq('id', recipient.id);        if (updateError) {
           console.error(`Error updating recipient ${recipient.id}:`, updateError);
         }
 

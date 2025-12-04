@@ -20,6 +20,7 @@ import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, 
   LineChart, Line, AreaChart, Area, Pie, Cell, PieChart as RePieChart, Legend
 } from 'recharts';
+import DashboardLayout from '@/components/Layout/DashboardLayout';
 
 const CampaignTracker = () => {
   const { id } = useParams();
@@ -34,6 +35,20 @@ const CampaignTracker = () => {
   const [selectedRecipient, setSelectedRecipient] = useState<any>(null);
   const [replies, setReplies] = useState<any[]>([]);
   const [expandedReply, setExpandedReply] = useState<string | null>(null);
+  const [user, setUser] = useState<any>(null);
+
+  useEffect(() => {
+    supabase.auth.getSession().then(({ data: { session } }) => {
+      if (session) {
+        setUser(session.user);
+      }
+    });
+  }, []);
+
+  const handleLogout = async () => {
+    await supabase.auth.signOut();
+    navigate('/auth');
+  };
   
   const [stats, setStats] = useState({
     total: 0,
@@ -377,26 +392,45 @@ const CampaignTracker = () => {
 
   if (loading) {
     return (
-      <div className="min-h-screen flex items-center justify-center bg-gray-50">
-        <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600"></div>
-      </div>
+      <DashboardLayout 
+        activeTab="campaigns" 
+        onTabChange={() => navigate('/dashboard')} 
+        user={user} 
+        onLogout={handleLogout}
+      >
+        <div className="flex items-center justify-center h-[calc(100vh-200px)]">
+          <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600"></div>
+        </div>
+      </DashboardLayout>
     );
   }
 
   if (!campaign) {
     return (
-      <div className="min-h-screen flex flex-col items-center justify-center bg-gray-50">
-        <h2 className="text-2xl font-bold text-gray-900">Campaign not found</h2>
-        <Button onClick={() => navigate('/dashboard')} className="mt-4">
-          Go Back
-        </Button>
-      </div>
+      <DashboardLayout 
+        activeTab="campaigns" 
+        onTabChange={() => navigate('/dashboard')} 
+        user={user} 
+        onLogout={handleLogout}
+      >
+        <div className="flex flex-col items-center justify-center h-[calc(100vh-200px)]">
+          <h2 className="text-2xl font-bold text-gray-900">Campaign not found</h2>
+          <Button onClick={() => navigate('/dashboard')} className="mt-4">
+            Go Back
+          </Button>
+        </div>
+      </DashboardLayout>
     );
   }
 
   return (
-    <div className="min-h-screen bg-gray-50/50 p-8">
-      <div className="max-w-7xl mx-auto space-y-8">
+    <DashboardLayout 
+      activeTab="campaigns" 
+      onTabChange={() => navigate('/dashboard')} 
+      user={user} 
+      onLogout={handleLogout}
+    >
+      <div className="space-y-8">
         {/* Header */}
         <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
           <div className="flex items-center space-x-4">
@@ -1111,7 +1145,7 @@ const CampaignTracker = () => {
           )}
         </DialogContent>
       </Dialog>
-    </div>
+    </DashboardLayout>
   );
 };
 

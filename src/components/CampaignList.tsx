@@ -4,7 +4,7 @@ import { supabase } from '@/integrations/supabase/client';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
-import { Send, Eye, Edit, Trash2, Clock, Play, Pause, RotateCcw, BarChart2 } from 'lucide-react';
+import { Send, Eye, Edit, Trash2, Clock, Play, Pause, RotateCcw, BarChart2, Plus, Users } from 'lucide-react';
 import { toast } from '@/hooks/use-toast';
 import { useCampaignSender } from '@/hooks/useCampaignSender';
 import { useRealtimeCampaigns } from '@/hooks/useRealtimeCampaigns';
@@ -13,7 +13,11 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/u
 import CampaignStatusBar from './CampaignStatusBar';
 import FollowUpStatusDialog from './FollowUpStatusDialog';
 
-const CampaignList = () => {
+interface CampaignListProps {
+  onCreateCampaign?: () => void;
+}
+
+const CampaignList = ({ onCreateCampaign }: CampaignListProps) => {
   const navigate = useNavigate();
   const { campaigns, loading, refetch, resumeStuckCampaigns } = useRealtimeCampaigns();
   const { startSending, isSending } = useCampaignSender();
@@ -129,29 +133,59 @@ const CampaignList = () => {
   return (
     <div className="space-y-6">
       <div className="flex justify-between items-center">
-        <h2 className="text-2xl font-bold">Your Campaigns</h2>
+        <h2 className="text-2xl font-bold text-gray-900">Campaigns</h2>
         <div className="flex gap-2">
-          <Button variant="outline" onClick={resumeStuckCampaigns}>
-            <RotateCcw className="h-4 w-4 mr-1" />
-            Resume Stuck
-          </Button>
-          <Button onClick={refetch}>
-            Refresh Stats
+          {campaigns.length > 0 && (
+            <>
+              <Button variant="outline" onClick={resumeStuckCampaigns}>
+                <RotateCcw className="h-4 w-4 mr-1" />
+                Resume Stuck
+              </Button>
+              <Button variant="outline" onClick={refetch}>
+                Refresh Stats
+              </Button>
+            </>
+          )}
+          <Button 
+            onClick={onCreateCampaign} 
+            className="bg-purple-600 hover:bg-purple-700 text-white"
+          >
+            <Plus className="h-4 w-4 mr-2" />
+            Create campaign
           </Button>
         </div>
       </div>
 
       {/* Real-time campaign status bar */}
-      <CampaignStatusBar campaigns={campaigns} onResumeStuck={resumeStuckCampaigns} />
+      {campaigns.length > 0 && (
+        <CampaignStatusBar campaigns={campaigns} onResumeStuck={resumeStuckCampaigns} />
+      )}
 
       {campaigns.length === 0 ? (
-        <Card>
-          <CardContent className="p-8 text-center">
-            <Send className="h-12 w-12 text-gray-400 mx-auto mb-4" />
-            <h3 className="text-lg font-medium text-gray-900 mb-2">No campaigns yet</h3>
-            <p className="text-gray-600">Create your first email campaign to get started.</p>
-          </CardContent>
-        </Card>
+        <div className="bg-white rounded-xl border border-gray-200 p-12 flex flex-col items-center justify-center text-center min-h-[400px]">
+          <div className="w-24 h-24 bg-gradient-to-br from-purple-500 to-blue-500 rounded-3xl flex items-center justify-center mb-6 shadow-lg relative">
+            <Send className="h-10 w-10 text-white relative z-10" />
+            <div className="absolute -bottom-2 -right-2 bg-white rounded-full p-1 shadow-sm">
+              <Users className="h-4 w-4 text-gray-400" />
+            </div>
+          </div>
+          
+          <h3 className="text-xl font-semibold text-gray-900 mb-2">
+            Send your first email campaign
+          </h3>
+          <p className="text-gray-500 max-w-md mb-8">
+            Send beautiful emails to the right audience. Get opens, clicks, and sales.
+          </p>
+          
+          <Button 
+            variant="outline" 
+            onClick={onCreateCampaign}
+            className="font-medium"
+          >
+            <Plus className="h-4 w-4 mr-2" />
+            Create campaign
+          </Button>
+        </div>
       ) : (
         <div className="grid gap-4">
           {campaigns.map((campaign: any) => {

@@ -10,7 +10,8 @@ import { Switch } from '@/components/ui/switch';
 import { toast } from '@/hooks/use-toast';
 import { 
   Plus, Clock, Info, Trash2, ArrowRight, ArrowLeft, CheckCircle2, 
-  Users, Mail, Send, FileText, Settings, LayoutTemplate, Calendar
+  Users, Mail, Send, FileText, Settings, LayoutTemplate, Calendar,
+  ChevronRight, UserPlus, AlertCircle, Eye, Zap
 } from 'lucide-react';
 import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from '@/components/ui/accordion';
 import { Checkbox } from '@/components/ui/checkbox';
@@ -18,6 +19,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Badge } from "@/components/ui/badge";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Separator } from "@/components/ui/separator";
+import { cn } from '@/lib/utils';
 
 interface CampaignBuilderProps {
   emailConfigs: any[];
@@ -391,24 +393,27 @@ const CampaignBuilder: React.FC<CampaignBuilderProps> = ({ emailConfigs }) => {
 
   const renderStepIndicator = () => (
     <div className="mb-8">
-      <div className="flex items-center justify-between relative">
-        <div className="absolute left-0 top-1/2 transform -translate-y-1/2 w-full h-1 bg-gray-200 -z-10" />
+      <div className="flex items-center justify-between relative max-w-3xl mx-auto">
+        <div className="absolute left-0 top-1/2 transform -translate-y-1/2 w-full h-0.5 bg-gray-100 -z-10" />
         {STEPS.map((step) => {
           const isActive = step.id === currentStep;
           const isCompleted = step.id < currentStep;
           
           return (
-            <div key={step.id} className="flex flex-col items-center bg-white px-2">
+            <div key={step.id} className="flex flex-col items-center bg-white px-4">
               <div 
-                className={`
-                  w-10 h-10 rounded-full flex items-center justify-center border-2 transition-all duration-200
-                  ${isActive ? 'border-blue-600 bg-blue-50 text-blue-600' : 
-                    isCompleted ? 'border-green-500 bg-green-50 text-green-500' : 'border-gray-300 text-gray-400'}
-                `}
+                className={cn(
+                  "w-10 h-10 rounded-full flex items-center justify-center border-2 transition-all duration-300 shadow-sm",
+                  isActive ? "border-blue-600 bg-blue-600 text-white scale-110" : 
+                  isCompleted ? "border-green-500 bg-green-500 text-white" : "border-gray-200 text-gray-400 bg-white"
+                )}
               >
-                {isCompleted ? <CheckCircle2 className="h-6 w-6" /> : <step.icon className="h-5 w-5" />}
+                {isCompleted ? <CheckCircle2 className="h-5 w-5" /> : <step.icon className="h-5 w-5" />}
               </div>
-              <span className={`text-xs font-medium mt-2 ${isActive ? 'text-blue-600' : 'text-gray-500'}`}>
+              <span className={cn(
+                "text-xs font-medium mt-2 transition-colors duration-300",
+                isActive ? "text-blue-600" : isCompleted ? "text-green-600" : "text-gray-400"
+              )}>
                 {step.title}
               </span>
             </div>
@@ -420,102 +425,152 @@ const CampaignBuilder: React.FC<CampaignBuilderProps> = ({ emailConfigs }) => {
 
   const renderSetupStep = () => (
     <div className="space-y-6 animate-in fade-in slide-in-from-right-4 duration-300">
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-        <div className="space-y-4">
-          <div className="space-y-2">
-            <Label htmlFor="name" className="text-base">Campaign Name</Label>
-            <Input
-              id="name"
-              placeholder="e.g., Q4 Outreach - Tech Startups"
-              value={form.name}
-              onChange={(e) => setForm({ ...form, name: e.target.value })}
-              className="h-11"
-            />
-            <p className="text-xs text-gray-500">Give your campaign a descriptive name to track it easily.</p>
-          </div>
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+        <div className="lg:col-span-2 space-y-6">
+          <Card>
+            <CardHeader>
+              <CardTitle className="flex items-center gap-2">
+                <Settings className="h-5 w-5 text-blue-500" />
+                Campaign Details
+              </CardTitle>
+              <CardDescription>Basic information about your outreach campaign.</CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              <div className="space-y-2">
+                <Label htmlFor="name">Campaign Name</Label>
+                <Input
+                  id="name"
+                  placeholder="e.g., Q4 Outreach - Tech Startups"
+                  value={form.name}
+                  onChange={(e) => setForm({ ...form, name: e.target.value })}
+                  className="h-11"
+                />
+              </div>
 
-          <div className="space-y-2">
-            <Label className="text-base flex items-center gap-2">
-              <Clock className="h-4 w-4" />
-              Sending Speed (Delay)
-            </Label>
-            <Select 
-              value={form.send_delay_minutes.toString()} 
-              onValueChange={(value) => setForm({ ...form, send_delay_minutes: parseInt(value) })}
-            >
-              <SelectTrigger className="h-11">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="1">Fast (1 min gap)</SelectItem>
-                <SelectItem value="3">Recommended (3 min gap)</SelectItem>
-                <SelectItem value="5">Safe (5 min gap)</SelectItem>
-                <SelectItem value="10">Very Safe (10 min gap)</SelectItem>
-                <SelectItem value="30">Slow (30 min gap)</SelectItem>
-                <SelectItem value="60">Very Slow (1 hour gap)</SelectItem>
-              </SelectContent>
-            </Select>
-            <p className="text-xs text-gray-500">Longer delays improve deliverability and reduce spam risk.</p>
-          </div>
-        </div>
+              <div className="space-y-2">
+                <Label className="flex items-center gap-2">
+                  <Clock className="h-4 w-4" />
+                  Sending Speed (Delay)
+                </Label>
+                <Select 
+                  value={form.send_delay_minutes.toString()} 
+                  onValueChange={(value) => setForm({ ...form, send_delay_minutes: parseInt(value) })}
+                >
+                  <SelectTrigger className="h-11">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="1">Fast (1 min gap)</SelectItem>
+                    <SelectItem value="3">Recommended (3 min gap)</SelectItem>
+                    <SelectItem value="5">Safe (5 min gap)</SelectItem>
+                    <SelectItem value="10">Very Safe (10 min gap)</SelectItem>
+                    <SelectItem value="30">Slow (30 min gap)</SelectItem>
+                    <SelectItem value="60">Very Slow (1 hour gap)</SelectItem>
+                  </SelectContent>
+                </Select>
+                <p className="text-xs text-gray-500">Longer delays improve deliverability and reduce spam risk.</p>
+              </div>
+            </CardContent>
+          </Card>
 
-        <div className="space-y-2">
-          <Label className="text-base">Sender Accounts</Label>
-          <Card className="h-[300px] flex flex-col">
-            <ScrollArea className="flex-1 p-4">
-              <div className="space-y-4">
-                {emailConfigs.map((config) => {
-                  const isSelected = selectedConfigs.some(c => c.configId === config.id);
-                  const selectedConfig = selectedConfigs.find(c => c.configId === config.id);
-                  
-                  return (
-                    <div key={config.id} className={`flex items-center justify-between p-3 rounded-lg border transition-colors ${isSelected ? 'bg-blue-50 border-blue-200' : 'hover:bg-gray-50'}`}>
-                      <div className="flex items-center space-x-3">
-                        <Checkbox 
-                          id={`config-${config.id}`}
-                          checked={isSelected}
-                          onCheckedChange={(checked) => {
-                            if (checked) {
-                              setSelectedConfigs([...selectedConfigs, { configId: config.id, dailyLimit: 100 }]);
-                            } else {
-                              setSelectedConfigs(selectedConfigs.filter(c => c.configId !== config.id));
-                            }
-                          }}
-                        />
-                        <div className="flex flex-col">
-                          <Label htmlFor={`config-${config.id}`} className="font-medium cursor-pointer">
-                            {config.smtp_username}
-                          </Label>
-                          <span className="text-xs text-gray-500">{config.smtp_host}</span>
-                        </div>
-                      </div>
-                      {isSelected && (
-                        <div className="flex items-center gap-2">
-                          <Label className="text-xs whitespace-nowrap text-gray-500">Limit:</Label>
-                          <Input 
-                            type="number" 
-                            className="w-16 h-8 text-center" 
-                            value={selectedConfig?.dailyLimit || 100}
-                            onChange={(e) => {
-                              const limit = parseInt(e.target.value) || 0;
-                              setSelectedConfigs(selectedConfigs.map(c => 
-                                c.configId === config.id ? { ...c, dailyLimit: limit } : c
-                              ));
+          <Card>
+            <CardHeader>
+              <CardTitle className="flex items-center gap-2">
+                <Mail className="h-5 w-5 text-blue-500" />
+                Sender Accounts
+              </CardTitle>
+              <CardDescription>Select which email accounts to send from.</CardDescription>
+            </CardHeader>
+            <CardContent>
+              <ScrollArea className="h-[250px] pr-4">
+                <div className="space-y-3">
+                  {emailConfigs.map((config) => {
+                    const isSelected = selectedConfigs.some(c => c.configId === config.id);
+                    const selectedConfig = selectedConfigs.find(c => c.configId === config.id);
+                    
+                    return (
+                      <div 
+                        key={config.id} 
+                        className={cn(
+                          "flex items-center justify-between p-3 rounded-lg border transition-all",
+                          isSelected ? "bg-blue-50 border-blue-200 shadow-sm" : "hover:bg-gray-50 border-gray-200"
+                        )}
+                      >
+                        <div className="flex items-center space-x-3">
+                          <Checkbox 
+                            id={`config-${config.id}`}
+                            checked={isSelected}
+                            onCheckedChange={(checked) => {
+                              if (checked) {
+                                setSelectedConfigs([...selectedConfigs, { configId: config.id, dailyLimit: 100 }]);
+                              } else {
+                                setSelectedConfigs(selectedConfigs.filter(c => c.configId !== config.id));
+                              }
                             }}
                           />
+                          <div className="flex flex-col">
+                            <Label htmlFor={`config-${config.id}`} className="font-medium cursor-pointer">
+                              {config.smtp_username}
+                            </Label>
+                            <span className="text-xs text-gray-500">{config.smtp_host}</span>
+                          </div>
                         </div>
-                      )}
-                    </div>
-                  );
-                })}
-              </div>
-            </ScrollArea>
-            <div className="p-4 border-t bg-gray-50 rounded-b-lg">
-              <div className="flex justify-between items-center text-sm">
+                        {isSelected && (
+                          <div className="flex items-center gap-2 bg-white px-2 py-1 rounded border">
+                            <Label className="text-xs whitespace-nowrap text-gray-500">Limit:</Label>
+                            <Input 
+                              type="number" 
+                              className="w-16 h-7 text-center border-none p-0 focus-visible:ring-0" 
+                              value={selectedConfig?.dailyLimit || 100}
+                              onChange={(e) => {
+                                const limit = parseInt(e.target.value) || 0;
+                                setSelectedConfigs(selectedConfigs.map(c => 
+                                  c.configId === config.id ? { ...c, dailyLimit: limit } : c
+                                ));
+                              }}
+                            />
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+              </ScrollArea>
+            </CardContent>
+            <CardFooter className="bg-gray-50 border-t p-4">
+              <div className="flex justify-between items-center w-full text-sm">
                 <span className="text-gray-600">Total Daily Capacity:</span>
                 <span className="font-bold text-blue-600">{selectedConfigs.reduce((acc, curr) => acc + curr.dailyLimit, 0)} emails/day</span>
               </div>
-            </div>
+            </CardFooter>
+          </Card>
+        </div>
+
+        <div className="space-y-6">
+          <Card className="bg-gradient-to-br from-blue-50 to-indigo-50 border-blue-100">
+            <CardHeader>
+              <CardTitle className="text-blue-900 text-sm uppercase tracking-wider font-semibold">Quick Tips</CardTitle>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              <div className="flex gap-3">
+                <div className="bg-white p-2 rounded-full shadow-sm h-fit">
+                  <Zap className="h-4 w-4 text-yellow-500" />
+                </div>
+                <div>
+                  <p className="font-medium text-sm text-blue-900">Warm up your accounts</p>
+                  <p className="text-xs text-blue-700 mt-1">Start with lower daily limits (20-50) for new accounts to build reputation.</p>
+                </div>
+              </div>
+              <div className="flex gap-3">
+                <div className="bg-white p-2 rounded-full shadow-sm h-fit">
+                  <Clock className="h-4 w-4 text-blue-500" />
+                </div>
+                <div>
+                  <p className="font-medium text-sm text-blue-900">Spacing matters</p>
+                  <p className="text-xs text-blue-700 mt-1">A 3-5 minute delay between emails mimics human behavior.</p>
+                </div>
+              </div>
+            </CardContent>
           </Card>
         </div>
       </div>
@@ -524,157 +579,184 @@ const CampaignBuilder: React.FC<CampaignBuilderProps> = ({ emailConfigs }) => {
 
   const renderAudienceStep = () => (
     <div className="space-y-6 animate-in fade-in slide-in-from-right-4 duration-300">
-      <Tabs value={audienceType} onValueChange={(v: any) => setAudienceType(v)} className="w-full">
-        <TabsList className="grid w-full grid-cols-2 mb-6">
-          <TabsTrigger value="list">Select Existing List</TabsTrigger>
-          <TabsTrigger value="manual">Manual Entry</TabsTrigger>
-        </TabsList>
-        
-        <TabsContent value="list" className="space-y-4">
-          <div className="space-y-2">
-            <Label>Choose a Prospect List</Label>
-            <Select value={selectedListId} onValueChange={setSelectedListId}>
-              <SelectTrigger className="h-12">
-                <SelectValue placeholder="Select a list..." />
-              </SelectTrigger>
-              <SelectContent>
-                {allLists.map(list => (
-                  <SelectItem key={list.id} value={list.id}>{list.name}</SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          </div>
-          
-          {selectedListId && (
-            <Card className="bg-blue-50 border-blue-200">
-              <CardContent className="p-4 flex items-center gap-4">
-                <div className="bg-blue-100 p-3 rounded-full">
-                  <Users className="h-6 w-6 text-blue-600" />
-                </div>
-                <div>
-                  <p className="font-medium text-blue-900">List Summary</p>
-                  <p className="text-sm text-blue-700">{listCount} prospects found in this list.</p>
-                </div>
-              </CardContent>
-            </Card>
-          )}
-        </TabsContent>
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+        <div className="lg:col-span-2">
+          <Card>
+            <CardHeader>
+              <CardTitle className="flex items-center gap-2">
+                <Users className="h-5 w-5 text-blue-500" />
+                Select Audience
+              </CardTitle>
+              <CardDescription>Who should receive this campaign?</CardDescription>
+            </CardHeader>
+            <CardContent>
+              <Tabs value={audienceType} onValueChange={(v: any) => setAudienceType(v)} className="w-full">
+                <TabsList className="grid w-full grid-cols-2 mb-6">
+                  <TabsTrigger value="list">Select Existing List</TabsTrigger>
+                  <TabsTrigger value="manual">Manual Entry</TabsTrigger>
+                </TabsList>
+                
+                <TabsContent value="list" className="space-y-4">
+                  <div className="space-y-2">
+                    <Label>Choose a Prospect List</Label>
+                    <Select value={selectedListId} onValueChange={setSelectedListId}>
+                      <SelectTrigger className="h-12">
+                        <SelectValue placeholder="Select a list..." />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {allLists.map(list => (
+                          <SelectItem key={list.id} value={list.id}>{list.name}</SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                </TabsContent>
 
-        <TabsContent value="manual" className="space-y-4">
-          <div className="space-y-2">
-            <Label>Enter Recipients</Label>
-            <Textarea
-              placeholder="email@example.com, Name&#10;another@example.com, John Doe"
-              className="min-h-[200px] font-mono text-sm"
-              value={recipients}
-              onChange={(e) => setRecipients(e.target.value)}
-            />
-            <p className="text-xs text-gray-500">Format: email, name (one per line)</p>
-          </div>
-        </TabsContent>
-      </Tabs>
-
-      {/* Estimation Logic */}
-      {((audienceType === 'list' && selectedListId) || (audienceType === 'manual' && recipients)) && selectedConfigs.length > 0 && (
-        <div className="flex items-center gap-2 text-sm text-gray-600 bg-gray-100 p-3 rounded-md">
-          <Info className="h-4 w-4" />
-          {(() => {
-            const totalRecipients = audienceType === 'list' ? listCount : recipients.split('\n').filter(r => r.trim()).length;
-            const totalDailyLimit = selectedConfigs.reduce((acc, curr) => acc + curr.dailyLimit, 0);
-            const estimatedDays = totalDailyLimit > 0 ? Math.ceil(totalRecipients / totalDailyLimit) : 0;
-            return (
-              <span>
-                Estimated campaign duration: <strong>{estimatedDays} day{estimatedDays !== 1 ? 's' : ''}</strong> to reach {totalRecipients} recipients.
-              </span>
-            );
-          })()}
+                <TabsContent value="manual" className="space-y-4">
+                  <div className="space-y-2">
+                    <Label>Enter Recipients</Label>
+                    <Textarea
+                      placeholder="email@example.com, Name&#10;another@example.com, John Doe"
+                      className="min-h-[200px] font-mono text-sm"
+                      value={recipients}
+                      onChange={(e) => setRecipients(e.target.value)}
+                    />
+                    <p className="text-xs text-gray-500">Format: email, name (one per line)</p>
+                  </div>
+                </TabsContent>
+              </Tabs>
+            </CardContent>
+          </Card>
         </div>
-      )}
+
+        <div>
+          <Card className="h-full">
+            <CardHeader>
+              <CardTitle className="text-sm uppercase tracking-wider text-gray-500">Audience Summary</CardTitle>
+            </CardHeader>
+            <CardContent className="space-y-6">
+              <div className="text-center p-6 bg-gray-50 rounded-lg border border-dashed">
+                <p className="text-4xl font-bold text-gray-900">
+                  {audienceType === 'list' ? listCount : recipients.split('\n').filter(r => r.trim()).length}
+                </p>
+                <p className="text-sm text-gray-500 mt-1">Total Recipients</p>
+              </div>
+
+              {selectedConfigs.length > 0 && (
+                <div className="space-y-4">
+                  <div className="flex justify-between text-sm">
+                    <span className="text-gray-500">Daily Capacity</span>
+                    <span className="font-medium">{selectedConfigs.reduce((acc, curr) => acc + curr.dailyLimit, 0)} / day</span>
+                  </div>
+                  <Separator />
+                  <div className="flex items-start gap-2 text-sm text-blue-600 bg-blue-50 p-3 rounded-md">
+                    <Info className="h-4 w-4 mt-0.5 shrink-0" />
+                    {(() => {
+                      const totalRecipients = audienceType === 'list' ? listCount : recipients.split('\n').filter(r => r.trim()).length;
+                      const totalDailyLimit = selectedConfigs.reduce((acc, curr) => acc + curr.dailyLimit, 0);
+                      const estimatedDays = totalDailyLimit > 0 ? Math.ceil(totalRecipients / totalDailyLimit) : 0;
+                      return (
+                        <span>
+                          Estimated campaign duration: <strong>{estimatedDays} day{estimatedDays !== 1 ? 's' : ''}</strong> to reach all recipients.
+                        </span>
+                      );
+                    })()}
+                  </div>
+                </div>
+              )}
+            </CardContent>
+          </Card>
+        </div>
+      </div>
     </div>
   );
 
   const renderContentStep = () => (
     <div className="space-y-6 animate-in fade-in slide-in-from-right-4 duration-300">
-      <div className="flex gap-6">
-        <div className="flex-1 space-y-6">
-          {templates.length > 0 && (
-            <div className="space-y-2">
-              <Label>Load Template (Optional)</Label>
-              <Select value={selectedTemplate} onValueChange={handleTemplateSelect}>
-                <SelectTrigger>
-                  <SelectValue placeholder="Select a template..." />
-                </SelectTrigger>
-                <SelectContent>
-                  {templates.map((template) => (
-                    <SelectItem key={template.id} value={template.id}>
-                      {template.name}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
-          )}
-
-          <div className="space-y-2">
-            <Label htmlFor="subject">Subject Line</Label>
-            <Input
-              id="subject"
-              placeholder="Quick question for {company}..."
-              value={form.subject}
-              onChange={(e) => setForm({ ...form, subject: e.target.value })}
-              className="h-11 font-medium"
-            />
-          </div>
-
-          <div className="space-y-2">
-            <div className="flex justify-between items-center">
-              <Label htmlFor="content">Email Body</Label>
-              <div className="flex items-center space-x-2">
-                <Switch
-                  id="html-toggle"
-                  checked={form.is_html}
-                  onCheckedChange={(checked) => setForm({ ...form, is_html: checked })}
-                />
-                <Label htmlFor="html-toggle" className="text-xs font-normal text-gray-500">
-                  {form.is_html ? 'HTML Mode' : 'Plain Text'}
-                </Label>
-              </div>
-            </div>
-            <Textarea
-              id="content"
-              placeholder={form.is_html ? "HTML content here..." : "Hi {first_name},\n\nI noticed that..."}
-              className="min-h-[300px] font-mono text-sm leading-relaxed"
-              value={form.content}
-              onChange={(e) => setForm({ ...form, content: e.target.value })}
-            />
-          </div>
-        </div>
-
-        {/* Variables Sidebar */}
-        <div className="w-64 hidden md:block space-y-4">
-          <Card className="bg-gray-50">
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 h-[600px]">
+        {/* Editor Column */}
+        <div className="flex flex-col h-full space-y-4">
+          <Card className="flex-1 flex flex-col">
             <CardHeader className="pb-3">
-              <CardTitle className="text-sm font-medium flex items-center gap-2">
-                <LayoutTemplate className="h-4 w-4" />
-                Variables
+              <CardTitle className="flex items-center justify-between">
+                <span className="flex items-center gap-2"><FileText className="h-5 w-5 text-blue-500" /> Editor</span>
+                {templates.length > 0 && (
+                  <Select value={selectedTemplate} onValueChange={handleTemplateSelect}>
+                    <SelectTrigger className="w-[180px] h-8 text-xs">
+                      <SelectValue placeholder="Load Template" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {templates.map((template) => (
+                        <SelectItem key={template.id} value={template.id}>
+                          {template.name}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                )}
               </CardTitle>
             </CardHeader>
-            <CardContent className="space-y-2 text-xs">
-              <div className="p-2 bg-white rounded border cursor-pointer hover:border-blue-400 transition-colors" onClick={() => setForm(f => ({...f, content: f.content + '{first_name}'}))}>
-                <span className="font-mono font-bold">{'{first_name}'}</span>
-                <p className="text-gray-500">First Name</p>
+            <CardContent className="flex-1 flex flex-col space-y-4">
+              <div className="space-y-2">
+                <Input
+                  id="subject"
+                  placeholder="Subject Line"
+                  value={form.subject}
+                  onChange={(e) => setForm({ ...form, subject: e.target.value })}
+                  className="h-11 font-medium text-lg border-0 border-b rounded-none px-0 focus-visible:ring-0"
+                />
               </div>
-              <div className="p-2 bg-white rounded border cursor-pointer hover:border-blue-400 transition-colors" onClick={() => setForm(f => ({...f, content: f.content + '{company}'}))}>
-                <span className="font-mono font-bold">{'{company}'}</span>
-                <p className="text-gray-500">Company Name</p>
+
+              <div className="flex-1 relative">
+                <Textarea
+                  id="content"
+                  placeholder="Write your email content here..."
+                  className="h-full resize-none border-0 p-0 focus-visible:ring-0 font-mono text-sm leading-relaxed"
+                  value={form.content}
+                  onChange={(e) => setForm({ ...form, content: e.target.value })}
+                />
               </div>
-              <div className="p-2 bg-white rounded border cursor-pointer hover:border-blue-400 transition-colors" onClick={() => setForm(f => ({...f, content: f.content + '{email}'}))}>
-                <span className="font-mono font-bold">{'{email}'}</span>
-                <p className="text-gray-500">Email Address</p>
+
+              <div className="flex items-center gap-2 pt-2 border-t">
+                <span className="text-xs text-gray-400 mr-2">Insert Variable:</span>
+                {['{first_name}', '{company}', '{email}'].map(variable => (
+                  <Badge 
+                    key={variable}
+                    variant="secondary" 
+                    className="cursor-pointer hover:bg-blue-100 hover:text-blue-700 transition-colors"
+                    onClick={() => setForm(f => ({...f, content: f.content + variable}))}
+                  >
+                    {variable}
+                  </Badge>
+                ))}
               </div>
-              <div className="p-2 bg-white rounded border cursor-pointer hover:border-blue-400 transition-colors" onClick={() => setForm(f => ({...f, content: f.content + '{domain}'}))}>
-                <span className="font-mono font-bold">{'{domain}'}</span>
-                <p className="text-gray-500">Website Domain</p>
+            </CardContent>
+          </Card>
+        </div>
+
+        {/* Preview Column */}
+        <div className="flex flex-col h-full">
+          <Card className="flex-1 bg-gray-50/50 border-dashed flex flex-col">
+            <CardHeader className="pb-3">
+              <CardTitle className="flex items-center gap-2 text-gray-500">
+                <Eye className="h-5 w-5" /> Live Preview
+              </CardTitle>
+            </CardHeader>
+            <CardContent className="flex-1">
+              <div className="bg-white rounded-lg shadow-sm border p-6 h-full overflow-y-auto">
+                <div className="border-b pb-4 mb-4 space-y-2">
+                  <div className="flex gap-2 text-sm">
+                    <span className="text-gray-500 w-16">To:</span>
+                    <span className="text-gray-900">John Doe &lt;john@example.com&gt;</span>
+                  </div>
+                  <div className="flex gap-2 text-sm">
+                    <span className="text-gray-500 w-16">Subject:</span>
+                    <span className="font-medium text-gray-900">{form.subject || '(No Subject)'}</span>
+                  </div>
+                </div>
+                <div className="prose prose-sm max-w-none text-gray-800 whitespace-pre-wrap">
+                  {form.content || <span className="text-gray-400 italic">Start typing to see preview...</span>}
+                </div>
               </div>
             </CardContent>
           </Card>
@@ -685,172 +767,233 @@ const CampaignBuilder: React.FC<CampaignBuilderProps> = ({ emailConfigs }) => {
 
   const renderFollowupsStep = () => (
     <div className="space-y-6 animate-in fade-in slide-in-from-right-4 duration-300">
-      <div className="flex justify-between items-center">
+      <div className="flex justify-between items-center mb-6">
         <div>
           <h3 className="text-lg font-medium">Follow-up Sequence</h3>
           <p className="text-sm text-gray-500">Automate replies if recipients don't respond.</p>
         </div>
-        <Button onClick={addFollowupStep} variant="outline" className="border-dashed">
-          <Plus className="h-4 w-4 mr-2" />
-          Add Step
-        </Button>
       </div>
 
-      {followups.length === 0 ? (
-        <div className="text-center py-12 border-2 border-dashed rounded-lg bg-gray-50">
-          <Mail className="h-12 w-12 mx-auto text-gray-300 mb-3" />
-          <p className="text-gray-500 font-medium">No follow-ups configured</p>
-          <p className="text-sm text-gray-400 mb-4">Add a follow-up to increase response rates.</p>
-          <Button onClick={addFollowupStep} variant="secondary">Add First Follow-up</Button>
+      <div className="relative pl-8 space-y-8">
+        {/* Vertical Line */}
+        <div className="absolute left-3.5 top-0 bottom-0 w-0.5 bg-gray-200" />
+
+        {/* Initial Email Node */}
+        <div className="relative">
+          <div className="absolute -left-[29px] top-0 w-8 h-8 rounded-full bg-blue-100 border-2 border-blue-500 flex items-center justify-center z-10">
+            <Mail className="h-4 w-4 text-blue-600" />
+          </div>
+          <Card className="ml-4 border-l-4 border-l-blue-500">
+            <CardHeader className="py-3">
+              <CardTitle className="text-sm font-medium text-gray-500">Initial Email</CardTitle>
+              <p className="text-sm font-medium truncate">{form.subject || '(No Subject)'}</p>
+            </CardHeader>
+          </Card>
         </div>
-      ) : (
-        <div className="space-y-4">
-          {followups.map((step, index) => (
-            <Card key={index} className="relative overflow-hidden">
-              <div className="absolute left-0 top-0 bottom-0 w-1 bg-blue-500" />
-              <CardHeader className="pb-2 pt-4">
-                <div className="flex justify-between items-center">
-                  <CardTitle className="text-base flex items-center gap-2">
-                    <Badge variant="secondary">Step {step.step_number}</Badge>
-                    <span className="text-sm font-normal text-gray-500">
-                      Wait {step.delay_days} days, {step.delay_hours} hours
-                    </span>
-                  </CardTitle>
-                  <Button variant="ghost" size="icon" onClick={() => removeFollowupStep(index)} className="text-gray-400 hover:text-red-500">
-                    <Trash2 className="h-4 w-4" />
-                  </Button>
-                </div>
-              </CardHeader>
-              <CardContent className="space-y-4">
-                <div className="grid grid-cols-2 gap-4">
-                  <div className="space-y-2">
-                    <Label className="text-xs">Wait Days</Label>
-                    <Input 
-                      type="number" min="0"
-                      value={step.delay_days}
-                      onChange={(e) => updateFollowupStep(index, 'delay_days', parseInt(e.target.value) || 0)}
-                    />
+
+        {/* Follow-up Nodes */}
+        {followups.map((step, index) => (
+          <div key={index} className="relative">
+            <div className="absolute -left-[29px] top-6 w-8 h-8 rounded-full bg-white border-2 border-gray-300 flex items-center justify-center z-10">
+              <span className="text-xs font-bold text-gray-500">{index + 1}</span>
+            </div>
+            
+            <div className="ml-4">
+              <div className="flex items-center gap-2 mb-2">
+                <Badge variant="outline" className="bg-white">
+                  Wait {step.delay_days} days, {step.delay_hours} hours
+                </Badge>
+                <span className="text-xs text-gray-400">if no reply</span>
+              </div>
+              
+              <Card className="relative group">
+                <CardHeader className="pb-2 pt-4">
+                  <div className="flex justify-between items-start">
+                    <div className="space-y-1">
+                      <CardTitle className="text-base">Follow-up #{step.step_number}</CardTitle>
+                    </div>
+                    <Button variant="ghost" size="icon" onClick={() => removeFollowupStep(index)} className="text-gray-400 hover:text-red-500 opacity-0 group-hover:opacity-100 transition-opacity">
+                      <Trash2 className="h-4 w-4" />
+                    </Button>
+                  </div>
+                </CardHeader>
+                <CardContent className="space-y-4">
+                  <div className="grid grid-cols-2 gap-4">
+                    <div className="space-y-2">
+                      <Label className="text-xs">Wait Days</Label>
+                      <Input 
+                        type="number" min="0"
+                        value={step.delay_days}
+                        onChange={(e) => updateFollowupStep(index, 'delay_days', parseInt(e.target.value) || 0)}
+                      />
+                    </div>
+                    <div className="space-y-2">
+                      <Label className="text-xs">Wait Hours</Label>
+                      <Input 
+                        type="number" min="0" max="23"
+                        value={step.delay_hours}
+                        onChange={(e) => updateFollowupStep(index, 'delay_hours', parseInt(e.target.value) || 0)}
+                      />
+                    </div>
                   </div>
                   <div className="space-y-2">
-                    <Label className="text-xs">Wait Hours</Label>
-                    <Input 
-                      type="number" min="0" max="23"
-                      value={step.delay_hours}
-                      onChange={(e) => updateFollowupStep(index, 'delay_hours', parseInt(e.target.value) || 0)}
+                    <Label className="text-xs">Message Body</Label>
+                    <Textarea 
+                      placeholder="Just bumping this to the top of your inbox..."
+                      className="min-h-[100px]"
+                      value={step.body}
+                      onChange={(e) => updateFollowupStep(index, 'body', e.target.value)}
                     />
                   </div>
-                </div>
-                <div className="space-y-2">
-                  <Label className="text-xs">Message Body</Label>
-                  <Textarea 
-                    placeholder="Just bumping this to the top of your inbox..."
-                    className="min-h-[100px]"
-                    value={step.body}
-                    onChange={(e) => updateFollowupStep(index, 'body', e.target.value)}
-                  />
-                </div>
-              </CardContent>
-            </Card>
-          ))}
+                </CardContent>
+              </Card>
+            </div>
+          </div>
+        ))}
+
+        {/* Add Step Button */}
+        <div className="relative pt-4">
+          <div className="absolute -left-[29px] top-4 w-8 h-8 rounded-full bg-gray-100 border-2 border-dashed border-gray-300 flex items-center justify-center z-10">
+            <Plus className="h-4 w-4 text-gray-400" />
+          </div>
+          <Button onClick={addFollowupStep} variant="outline" className="ml-4 border-dashed w-full justify-start text-gray-500 hover:text-blue-600 hover:border-blue-300 hover:bg-blue-50">
+            <Plus className="h-4 w-4 mr-2" />
+            Add Follow-up Step
+          </Button>
         </div>
-      )}
+      </div>
     </div>
   );
 
   const renderReviewStep = () => (
     <div className="space-y-6 animate-in fade-in slide-in-from-right-4 duration-300">
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-        <Card>
-          <CardHeader>
-            <CardTitle className="text-base">Campaign Overview</CardTitle>
-          </CardHeader>
-          <CardContent className="space-y-4 text-sm">
-            <div className="flex justify-between py-2 border-b">
-              <span className="text-gray-500">Name</span>
-              <span className="font-medium">{form.name}</span>
-            </div>
-            <div className="flex justify-between py-2 border-b">
-              <span className="text-gray-500">Senders</span>
-              <span className="font-medium">{selectedConfigs.length} accounts</span>
-            </div>
-            <div className="flex justify-between py-2 border-b">
-              <span className="text-gray-500">Daily Limit</span>
-              <span className="font-medium">{selectedConfigs.reduce((acc, curr) => acc + curr.dailyLimit, 0)} emails/day</span>
-            </div>
-            <div className="flex justify-between py-2 border-b">
-              <span className="text-gray-500">Delay</span>
-              <span className="font-medium">{form.send_delay_minutes} minutes</span>
-            </div>
-            <div className="flex justify-between py-2 border-b">
-              <span className="text-gray-500">Follow-ups</span>
-              <span className="font-medium">{followups.length} steps</span>
-            </div>
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+        <Card className="bg-blue-50 border-blue-100">
+          <CardContent className="p-6">
+            <p className="text-sm font-medium text-blue-600 mb-1">Total Recipients</p>
+            <p className="text-2xl font-bold text-blue-900">
+              {audienceType === 'list' ? listCount : recipients.split('\n').filter(r => r.trim()).length}
+            </p>
           </CardContent>
         </Card>
-
-        <Card>
-          <CardHeader>
-            <CardTitle className="text-base">Audience Summary</CardTitle>
-          </CardHeader>
-          <CardContent className="space-y-4 text-sm">
-            <div className="flex justify-between py-2 border-b">
-              <span className="text-gray-500">Source</span>
-              <span className="font-medium capitalize">{audienceType}</span>
-            </div>
-            <div className="flex justify-between py-2 border-b">
-              <span className="text-gray-500">Total Recipients</span>
-              <span className="font-medium">
-                {audienceType === 'list' ? listCount : recipients.split('\n').filter(r => r.trim()).length}
-              </span>
-            </div>
-            <div className="mt-4 p-3 bg-yellow-50 text-yellow-800 rounded-md text-xs">
-              <p><strong>Note:</strong> Emails will be queued immediately upon launch. Ensure your sender accounts are warmed up.</p>
-            </div>
+        <Card className="bg-green-50 border-green-100">
+          <CardContent className="p-6">
+            <p className="text-sm font-medium text-green-600 mb-1">Daily Volume</p>
+            <p className="text-2xl font-bold text-green-900">
+              {selectedConfigs.reduce((acc, curr) => acc + curr.dailyLimit, 0)}
+              <span className="text-sm font-normal text-green-700 ml-1">/ day</span>
+            </p>
+          </CardContent>
+        </Card>
+        <Card className="bg-purple-50 border-purple-100">
+          <CardContent className="p-6">
+            <p className="text-sm font-medium text-purple-600 mb-1">Follow-up Steps</p>
+            <p className="text-2xl font-bold text-purple-900">{followups.length}</p>
+          </CardContent>
+        </Card>
+        <Card className="bg-orange-50 border-orange-100">
+          <CardContent className="p-6">
+            <p className="text-sm font-medium text-orange-600 mb-1">Send Delay</p>
+            <p className="text-2xl font-bold text-orange-900">
+              {form.send_delay_minutes}
+              <span className="text-sm font-normal text-orange-700 ml-1">min</span>
+            </p>
           </CardContent>
         </Card>
       </div>
 
-      <Card>
-        <CardHeader>
-          <CardTitle className="text-base">Schedule Campaign</CardTitle>
-          <CardDescription>Optionally schedule this campaign to start at a later time.</CardDescription>
-        </CardHeader>
-        <CardContent>
-          <div className="flex flex-col space-y-2">
-            <Label htmlFor="scheduledAt">Start Date & Time</Label>
-            <Input
-              id="scheduledAt"
-              type="datetime-local"
-              value={scheduledAt}
-              onChange={(e) => setScheduledAt(e.target.value)}
-              className="max-w-md"
-            />
-            <p className="text-sm text-muted-foreground">
-              Leave blank to start immediately when you click "Launch Campaign".
-            </p>
-          </div>
-        </CardContent>
-      </Card>
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+        <div className="lg:col-span-2 space-y-6">
+          <Card>
+            <CardHeader>
+              <CardTitle className="text-base">Campaign Configuration</CardTitle>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              <div className="grid grid-cols-2 gap-4 text-sm">
+                <div>
+                  <span className="text-gray-500 block mb-1">Campaign Name</span>
+                  <span className="font-medium">{form.name}</span>
+                </div>
+                <div>
+                  <span className="text-gray-500 block mb-1">Subject Line</span>
+                  <span className="font-medium">{form.subject}</span>
+                </div>
+                <div>
+                  <span className="text-gray-500 block mb-1">Sender Accounts</span>
+                  <span className="font-medium">{selectedConfigs.length} accounts selected</span>
+                </div>
+                <div>
+                  <span className="text-gray-500 block mb-1">Audience Source</span>
+                  <span className="font-medium capitalize">{audienceType}</span>
+                </div>
+              </div>
+            </CardContent>
+          </Card>
 
-      <Card>
-        <CardHeader>
-          <CardTitle className="text-base">Content Preview</CardTitle>
-          <CardDescription>Subject: {form.subject}</CardDescription>
-        </CardHeader>
-        <CardContent>
-          <div className="bg-gray-50 p-4 rounded-md border min-h-[150px] whitespace-pre-wrap text-sm">
-            {form.content || <span className="text-gray-400 italic">No content...</span>}
-          </div>
-        </CardContent>
-      </Card>
+          <Card>
+            <CardHeader>
+              <CardTitle className="text-base">Schedule</CardTitle>
+              <CardDescription>When should this campaign start?</CardDescription>
+            </CardHeader>
+            <CardContent>
+              <div className="flex flex-col space-y-2">
+                <Label htmlFor="scheduledAt">Start Date & Time</Label>
+                <Input
+                  id="scheduledAt"
+                  type="datetime-local"
+                  value={scheduledAt}
+                  onChange={(e) => setScheduledAt(e.target.value)}
+                  className="max-w-md"
+                />
+                <p className="text-sm text-muted-foreground">
+                  {scheduledAt 
+                    ? `Campaign will start on ${new Date(scheduledAt).toLocaleString()}`
+                    : 'Campaign will start immediately upon launch.'}
+                </p>
+              </div>
+            </CardContent>
+          </Card>
+        </div>
+
+        <div>
+          <Card className="h-full bg-gray-50">
+            <CardHeader>
+              <CardTitle className="text-base">Pre-flight Checklist</CardTitle>
+            </CardHeader>
+            <CardContent className="space-y-3">
+              <div className="flex items-center gap-2 text-sm text-green-700">
+                <CheckCircle2 className="h-4 w-4" />
+                <span>Subject line set</span>
+              </div>
+              <div className="flex items-center gap-2 text-sm text-green-700">
+                <CheckCircle2 className="h-4 w-4" />
+                <span>Content added</span>
+              </div>
+              <div className="flex items-center gap-2 text-sm text-green-700">
+                <CheckCircle2 className="h-4 w-4" />
+                <span>Recipients selected</span>
+              </div>
+              <div className="flex items-center gap-2 text-sm text-green-700">
+                <CheckCircle2 className="h-4 w-4" />
+                <span>Senders configured</span>
+              </div>
+              <Separator className="my-2" />
+              <div className="p-3 bg-yellow-50 text-yellow-800 rounded-md text-xs border border-yellow-100">
+                <p className="font-medium mb-1 flex items-center gap-1"><AlertCircle className="h-3 w-3" /> Important</p>
+                <p>Emails will be queued immediately. Ensure your sender accounts are warmed up and ready.</p>
+              </div>
+            </CardContent>
+          </Card>
+        </div>
+      </div>
     </div>
   );
 
   return (
-    <div className="max-w-5xl mx-auto py-8 px-4">
+    <div className="max-w-6xl mx-auto py-8 px-4">
       {renderStepIndicator()}
 
-      <div className="mb-8">
+      <div className="mb-8 min-h-[400px]">
         {currentStep === 1 && renderSetupStep()}
         {currentStep === 2 && renderAudienceStep()}
         {currentStep === 3 && renderContentStep()}
@@ -858,7 +1001,7 @@ const CampaignBuilder: React.FC<CampaignBuilderProps> = ({ emailConfigs }) => {
         {currentStep === 5 && renderReviewStep()}
       </div>
 
-      <div className="flex justify-between items-center pt-6 border-t">
+      <div className="flex justify-between items-center pt-6 border-t bg-white sticky bottom-0 py-4 z-10">
         <Button
           variant="outline"
           onClick={handleBack}
@@ -881,7 +1024,7 @@ const CampaignBuilder: React.FC<CampaignBuilderProps> = ({ emailConfigs }) => {
           )}
           
           {currentStep < 5 ? (
-            <Button onClick={handleNext} className="w-32">
+            <Button onClick={handleNext} className="w-32 bg-blue-600 hover:bg-blue-700">
               Next
               <ArrowRight className="h-4 w-4 ml-2" />
             </Button>

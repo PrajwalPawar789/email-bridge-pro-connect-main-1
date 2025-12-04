@@ -340,11 +340,22 @@ const checkRepliesAndBouncesForConfig = async (config: any, lookbackDays: number
                             const messageIdsToCheck = Array.from(idsToCheck);
 
                             if (messageIdsToCheck.length > 0) {
-                                const { data: recipients } = await supabase
+                                // Check both message_id (latest) and thread_id (original)
+                                const { data: recipientsByMessageId } = await supabase
                                     .from('recipients')
                                     .select('id, email, campaign_id')
                                     .in('message_id', messageIdsToCheck)
                                     .eq('replied', false);
+
+                                const { data: recipientsByThreadId } = await supabase
+                                    .from('recipients')
+                                    .select('id, email, campaign_id')
+                                    .in('thread_id', messageIdsToCheck)
+                                    .eq('replied', false);
+                                
+                                const allRecipients = [...(recipientsByMessageId || []), ...(recipientsByThreadId || [])];
+                                // Deduplicate by ID
+                                const recipients = Array.from(new Map(allRecipients.map(r => [r.id, r])).values());
 
                                 if (recipients && recipients.length > 0) {
                                     for (const recipient of recipients) {

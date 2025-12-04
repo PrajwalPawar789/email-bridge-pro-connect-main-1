@@ -104,22 +104,44 @@ const ProspectListManager: React.FC = () => {
 
   const fetchProspects = async (listId: string) => {
     setLoading(true);
-    const { data, error } = await supabase
-      .from("email_list_prospects")
-      .select("id, prospect_id, prospects (id, name, email, company, phone, sender_name, sender_email)")
-      .eq("list_id", listId);
+    let allProspects: any[] = [];
+    let from = 0;
+    const pageSize = 1000;
+    let fetchMore = true;
 
-    if (error) {
-      toast({ title: "Error", description: error.message, variant: "destructive" });
-      setProspects([]);
-    } else {
+    try {
+      while (fetchMore) {
+        const { data, error } = await supabase
+          .from("email_list_prospects")
+          .select("id, prospect_id, prospects (id, name, email, company, phone, sender_name, sender_email)")
+          .eq("list_id", listId)
+          .range(from, from + pageSize - 1);
+
+        if (error) throw error;
+
+        if (data && data.length > 0) {
+          allProspects = [...allProspects, ...data];
+          if (data.length < pageSize) {
+            fetchMore = false;
+          } else {
+            from += pageSize;
+          }
+        } else {
+          fetchMore = false;
+        }
+      }
+
       setProspects(
-        (data || [])
+        allProspects
           .map((row: any) => row.prospects)
           .filter((p: any) => !!p)
       );
+    } catch (error: any) {
+      toast({ title: "Error", description: error.message, variant: "destructive" });
+      setProspects([]);
+    } finally {
+      setLoading(false);
     }
-    setLoading(false);
   };
 
   const handleCreateList = async () => {
