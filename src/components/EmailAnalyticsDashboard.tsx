@@ -303,7 +303,10 @@ const EmailAnalyticsDashboard = () => {
         });
 
       // Process Recent Activity Feed
-      const activity = recipients.slice(0, 50).map(r => {
+      const activity = recipients
+        .filter(r => r.opened_at || r.clicked_at || r.replied || r.bounced) // Only show actual engagement
+        .slice(0, 50)
+        .map(r => {
         let type = 'sent';
         let date = r.created_at;
         
@@ -638,59 +641,7 @@ const EmailAnalyticsDashboard = () => {
         })}
       </div>
 
-      {/* Volume Metrics */}
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-4">
-        <Card className="border-none shadow-sm">
-          <CardContent className="p-6">
-            <div className="flex items-center justify-between mb-2">
-              <p className="text-sm font-medium text-gray-500">Total Sent</p>
-              <Mail className="h-4 w-4 text-blue-500" />
-            </div>
-            <p className="text-2xl font-bold">{data.totalEmails.toLocaleString()}</p>
-          </CardContent>
-        </Card>
-        <Card className="border-none shadow-sm">
-          <CardContent className="p-6">
-            <div className="flex items-center justify-between mb-2">
-              <p className="text-sm font-medium text-gray-500">Total Opens</p>
-              <Eye className="h-4 w-4 text-green-500" />
-            </div>
-            <p className="text-2xl font-bold">{data.totalOpens.toLocaleString()}</p>
-          </CardContent>
-        </Card>
-        <Card className="border-none shadow-sm">
-          <CardContent className="p-6">
-            <div className="flex items-center justify-between mb-2">
-              <p className="text-sm font-medium text-gray-500">Total Clicks</p>
-              <MousePointer className="h-4 w-4 text-purple-500" />
-            </div>
-            <p className="text-2xl font-bold">{data.totalClicks.toLocaleString()}</p>
-          </CardContent>
-        </Card>
-        <Card className="border-none shadow-sm">
-          <CardContent className="p-6">
-            <div className="flex items-center justify-between mb-2">
-              <p className="text-sm font-medium text-gray-500">Bot Activity</p>
-              <ShieldAlert className="h-4 w-4 text-orange-500" />
-            </div>
-            <div className="flex flex-col">
-                <p className="text-2xl font-bold">{(data.totalBotOpens + data.totalBotClicks).toLocaleString()}</p>
-                <p className="text-xs text-gray-500 mt-1">
-                    {data.totalBotOpens} opens, {data.totalBotClicks} clicks
-                </p>
-            </div>
-          </CardContent>
-        </Card>
-        <Card className="border-none shadow-sm">
-          <CardContent className="p-6">
-            <div className="flex items-center justify-between mb-2">
-              <p className="text-sm font-medium text-gray-500">Replies</p>
-              <MessageSquare className="h-4 w-4 text-indigo-500" />
-            </div>
-            <p className="text-2xl font-bold">{data.totalReplies.toLocaleString()}</p>
-          </CardContent>
-        </Card>
-      </div>
+
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
         {/* Main Chart Section */}

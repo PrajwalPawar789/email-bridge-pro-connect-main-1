@@ -58,7 +58,9 @@ const CampaignTracker = () => {
     replies: 0,
     bounces: 0,
     processing: 0,
-    queued: 0
+    queued: 0,
+    botOpens: 0,
+    botClicks: 0
   });
 
   useEffect(() => {
@@ -190,12 +192,14 @@ const CampaignTracker = () => {
         replies: recipientsData?.filter(r => r.replied).length || 0,
         bounces: recipientsData?.filter(r => r.bounced).length || 0,
         processing: recipientsData?.filter(r => r.status === 'processing').length || 0,
-        queued: recipientsData?.filter(r => r.status === 'pending').length || 0
+        queued: recipientsData?.filter(r => r.status === 'pending').length || 0,
+        botOpens: (campaignData as any).bot_open_count || 0,
+        botClicks: (campaignData as any).bot_click_count || 0
       };
       setStats(currentStats);
 
       // Generate Recent Activity Feed
-      const activity = [];
+      const activity: any[] = [];
       recipientsData?.forEach(r => {
         if (r.opened_at) activity.push({ type: 'open', date: new Date(r.opened_at), email: r.email, name: r.name });
         if (r.clicked_at) activity.push({ type: 'click', date: new Date(r.clicked_at), email: r.email, name: r.name });
@@ -379,6 +383,14 @@ const CampaignTracker = () => {
         });
     }
 
+    if (stats.botOpens > 0 || stats.botClicks > 0) {
+        insights.push({
+            type: 'info',
+            title: 'Bot Activity Detected',
+            message: `We filtered out ${stats.botOpens} bot opens and ${stats.botClicks} bot clicks to keep your metrics accurate.`
+        });
+    }
+
     if (insights.length === 0) {
         insights.push({
             type: 'info',
@@ -503,6 +515,11 @@ const CampaignTracker = () => {
                     <span className="mx-1">•</span>
                     <span className="text-purple-600 font-medium mr-1">{stats.clicks}</span> clicks
                   </div>
+                  {(stats.botOpens > 0 || stats.botClicks > 0) && (
+                    <div className="mt-1 text-xs text-gray-400 flex items-center" title="Filtered bot activity">
+                        <span className="mr-1">🤖</span> {stats.botOpens} bot opens, {stats.botClicks} bot clicks
+                    </div>
+                  )}
                 </div>
                 <div className="p-2 bg-green-50 rounded-lg">
                   <MousePointerClick className="h-5 w-5 text-green-600" />
