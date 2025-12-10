@@ -11,7 +11,7 @@ import { toast } from '@/hooks/use-toast';
 import { 
   Plus, Clock, Info, Trash2, ArrowRight, ArrowLeft, CheckCircle2, 
   Users, Mail, Send, FileText, Settings, LayoutTemplate, Calendar,
-  ChevronRight, UserPlus, AlertCircle, Eye, Zap
+  ChevronRight, UserPlus, AlertCircle, Eye, Zap, Check, X, Loader2
 } from 'lucide-react';
 import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from '@/components/ui/accordion';
 import { Checkbox } from '@/components/ui/checkbox';
@@ -19,6 +19,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Badge } from "@/components/ui/badge";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Separator } from "@/components/ui/separator";
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from '@/components/ui/dialog';
 import { cn } from '@/lib/utils';
 
 interface CampaignBuilderProps {
@@ -35,11 +36,11 @@ interface FollowupStep {
 }
 
 const STEPS = [
-  { id: 1, title: 'Setup', icon: Settings, description: 'Name & Configuration' },
-  { id: 2, title: 'Audience', icon: Users, description: 'Select Recipients' },
-  { id: 3, title: 'Content', icon: Mail, description: 'Email Message' },
-  { id: 4, title: 'Follow-ups', icon: Calendar, description: 'Sequence Steps' },
-  { id: 5, title: 'Review', icon: CheckCircle2, description: 'Final Check' },
+  { id: 1, title: 'Setup', description: 'Campaign Details' },
+  { id: 2, title: 'Audience', description: 'Select Recipients' },
+  { id: 3, title: 'Content', description: 'Email Message' },
+  { id: 4, title: 'Follow-ups', description: 'Sequence Steps' },
+  { id: 5, title: 'Review', description: 'Final Check' },
 ];
 
 const SUPABASE_PROJECT_URL = "https://lyerkyijpavilyufcrgb.supabase.co";
@@ -164,20 +165,6 @@ const CampaignBuilder: React.FC<CampaignBuilderProps> = ({ emailConfigs }) => {
     const newFollowups = [...followups];
     newFollowups[index] = { ...newFollowups[index], [field]: value };
     setFollowups(newFollowups);
-  };
-
-  const handleFollowupTemplateSelect = (index: number, templateId: string) => {
-    const template = templates.find(t => t.id === templateId);
-    if (template) {
-      const newFollowups = [...followups];
-      newFollowups[index] = {
-        ...newFollowups[index],
-        subject: template.subject,
-        body: template.content,
-        template_id: templateId
-      };
-      setFollowups(newFollowups);
-    }
   };
 
   const validateStep = (step: number) => {
@@ -391,99 +378,83 @@ const CampaignBuilder: React.FC<CampaignBuilderProps> = ({ emailConfigs }) => {
     }
   };
 
-  const renderStepIndicator = () => (
-    <div className="mb-8">
-      <div className="flex items-center justify-between relative max-w-3xl mx-auto">
-        <div className="absolute left-0 top-1/2 transform -translate-y-1/2 w-full h-0.5 bg-gray-100 -z-10" />
-        {STEPS.map((step) => {
-          const isActive = step.id === currentStep;
-          const isCompleted = step.id < currentStep;
-          
-          return (
-            <div key={step.id} className="flex flex-col items-center bg-white px-4">
-              <div 
-                className={cn(
-                  "w-10 h-10 rounded-full flex items-center justify-center border-2 transition-all duration-300 shadow-sm",
-                  isActive ? "border-blue-600 bg-blue-600 text-white scale-110" : 
-                  isCompleted ? "border-green-500 bg-green-500 text-white" : "border-gray-200 text-gray-400 bg-white"
-                )}
-              >
-                {isCompleted ? <CheckCircle2 className="h-5 w-5" /> : <step.icon className="h-5 w-5" />}
+  const renderStepIndicator = () => {
+    const progress = ((currentStep - 1) / (STEPS.length - 1)) * 100;
+
+    return (
+      <div className="mb-6 relative max-w-3xl mx-auto px-4">
+        <div className="absolute top-1/2 left-0 w-full h-1 bg-gray-100 -translate-y-1/2 rounded-full z-0" />
+        <div 
+          className="absolute top-1/2 left-0 h-1 bg-blue-600 -translate-y-1/2 rounded-full z-0 transition-all duration-500 ease-in-out"
+          style={{ width: `${progress}%` }}
+        />
+
+        <div className="relative z-10 flex justify-between w-full">
+          {STEPS.map((step) => {
+            const isActive = step.id === currentStep;
+            const isCompleted = step.id < currentStep;
+            
+            return (
+              <div key={step.id} className="flex flex-col items-center group cursor-pointer" onClick={() => isCompleted && setCurrentStep(step.id)}>
+                <div 
+                  className={cn(
+                    "w-3 h-3 rounded-full border-[2px] transition-all duration-300 bg-white box-content ring-2 ring-white",
+                    isActive ? "border-blue-600 scale-125" : 
+                    isCompleted ? "border-blue-600 bg-blue-600" : "border-gray-300"
+                  )}
+                />
+                <span className={cn(
+                  "absolute top-6 text-[10px] font-semibold tracking-wide uppercase transition-colors duration-300 w-32 text-center",
+                  isActive ? "text-blue-600" : isCompleted ? "text-gray-900" : "text-gray-400"
+                )}>
+                  {step.title}
+                </span>
               </div>
-              <span className={cn(
-                "text-xs font-medium mt-2 transition-colors duration-300",
-                isActive ? "text-blue-600" : isCompleted ? "text-green-600" : "text-gray-400"
-              )}>
-                {step.title}
-              </span>
-            </div>
-          );
-        })}
+            );
+          })}
+        </div>
       </div>
-    </div>
-  );
+    );
+  };
 
   const renderSetupStep = () => (
-    <div className="space-y-6 animate-in fade-in slide-in-from-right-4 duration-300">
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+    <div className="space-y-8 animate-in fade-in slide-in-from-right-4 duration-500">
+      {emailConfigs.length === 0 && (
+        <div className="bg-purple-50 border border-purple-100 rounded-xl p-4 flex items-center justify-between">
+          <div className="flex items-center gap-3">
+            <div className="bg-purple-100 p-2 rounded-full">
+              <Info className="h-5 w-5 text-purple-600" />
+            </div>
+            <div>
+              <h4 className="font-semibold text-purple-900">Connect a sender account</h4>
+              <p className="text-sm text-purple-700">You need at least one email account to send campaigns.</p>
+            </div>
+          </div>
+          <Button variant="secondary" className="bg-white text-purple-700 hover:bg-purple-100 border-purple-200">Connect</Button>
+        </div>
+      )}
+
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
         <div className="lg:col-span-2 space-y-6">
-          <Card>
-            <CardHeader>
-              <CardTitle className="flex items-center gap-2">
-                <Settings className="h-5 w-5 text-blue-500" />
-                Campaign Details
-              </CardTitle>
-              <CardDescription>Basic information about your outreach campaign.</CardDescription>
-            </CardHeader>
-            <CardContent className="space-y-4">
-              <div className="space-y-2">
-                <Label htmlFor="name">Campaign Name</Label>
-                <Input
-                  id="name"
-                  placeholder="e.g., Q4 Outreach - Tech Startups"
-                  value={form.name}
-                  onChange={(e) => setForm({ ...form, name: e.target.value })}
-                  className="h-11"
-                />
-              </div>
+          <div className="space-y-4">
+            <div className="flex items-center justify-between">
+                <Label htmlFor="name" className="text-base font-semibold text-gray-900">Campaign Name</Label>
+                <span className="text-xs text-gray-500">Internal use only</span>
+            </div>
+            <Input
+              id="name"
+              placeholder="e.g., Q4 Outreach - Tech Startups"
+              value={form.name}
+              onChange={(e) => setForm({ ...form, name: e.target.value })}
+              className="h-12 text-lg bg-gray-50 border-gray-200 focus:bg-white transition-all"
+            />
+          </div>
 
-              <div className="space-y-2">
-                <Label className="flex items-center gap-2">
-                  <Clock className="h-4 w-4" />
-                  Sending Speed (Delay)
-                </Label>
-                <Select 
-                  value={form.send_delay_minutes.toString()} 
-                  onValueChange={(value) => setForm({ ...form, send_delay_minutes: parseInt(value) })}
-                >
-                  <SelectTrigger className="h-11">
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="1">Fast (1 min gap)</SelectItem>
-                    <SelectItem value="3">Recommended (3 min gap)</SelectItem>
-                    <SelectItem value="5">Safe (5 min gap)</SelectItem>
-                    <SelectItem value="10">Very Safe (10 min gap)</SelectItem>
-                    <SelectItem value="30">Slow (30 min gap)</SelectItem>
-                    <SelectItem value="60">Very Slow (1 hour gap)</SelectItem>
-                  </SelectContent>
-                </Select>
-                <p className="text-xs text-gray-500">Longer delays improve deliverability and reduce spam risk.</p>
-              </div>
-            </CardContent>
-          </Card>
-
-          <Card>
-            <CardHeader>
-              <CardTitle className="flex items-center gap-2">
-                <Mail className="h-5 w-5 text-blue-500" />
-                Sender Accounts
-              </CardTitle>
-              <CardDescription>Select which email accounts to send from.</CardDescription>
-            </CardHeader>
-            <CardContent>
-              <ScrollArea className="h-[250px] pr-4">
-                <div className="space-y-3">
+          <div className="space-y-4">
+            <Label className="text-base font-semibold text-gray-900">Sender Accounts</Label>
+            <div className="border border-gray-200 rounded-xl overflow-hidden bg-gray-50/50">
+              <ScrollArea className="h-[240px]">
+                <div className="p-2 space-y-2">
                   {emailConfigs.map((config) => {
                     const isSelected = selectedConfigs.some(c => c.configId === config.id);
                     const selectedConfig = selectedConfigs.find(c => c.configId === config.id);
@@ -492,35 +463,35 @@ const CampaignBuilder: React.FC<CampaignBuilderProps> = ({ emailConfigs }) => {
                       <div 
                         key={config.id} 
                         className={cn(
-                          "flex items-center justify-between p-3 rounded-lg border transition-all",
-                          isSelected ? "bg-blue-50 border-blue-200 shadow-sm" : "hover:bg-gray-50 border-gray-200"
+                          "flex items-center justify-between p-3 rounded-lg border transition-all cursor-pointer",
+                          isSelected ? "bg-white border-blue-200 shadow-sm ring-1 ring-blue-100" : "hover:bg-white border-transparent hover:border-gray-200"
                         )}
+                        onClick={() => {
+                            if (isSelected) {
+                                setSelectedConfigs(selectedConfigs.filter(c => c.configId !== config.id));
+                            } else {
+                                setSelectedConfigs([...selectedConfigs, { configId: config.id, dailyLimit: 100 }]);
+                            }
+                        }}
                       >
                         <div className="flex items-center space-x-3">
-                          <Checkbox 
-                            id={`config-${config.id}`}
-                            checked={isSelected}
-                            onCheckedChange={(checked) => {
-                              if (checked) {
-                                setSelectedConfigs([...selectedConfigs, { configId: config.id, dailyLimit: 100 }]);
-                              } else {
-                                setSelectedConfigs(selectedConfigs.filter(c => c.configId !== config.id));
-                              }
-                            }}
-                          />
+                          <div className={cn(
+                              "w-5 h-5 rounded border flex items-center justify-center transition-colors",
+                              isSelected ? "bg-blue-600 border-blue-600" : "border-gray-300 bg-white"
+                          )}>
+                              {isSelected && <Check className="h-3 w-3 text-white" />}
+                          </div>
                           <div className="flex flex-col">
-                            <Label htmlFor={`config-${config.id}`} className="font-medium cursor-pointer">
-                              {config.smtp_username}
-                            </Label>
+                            <span className="font-medium text-gray-900">{config.smtp_username}</span>
                             <span className="text-xs text-gray-500">{config.smtp_host}</span>
                           </div>
                         </div>
                         {isSelected && (
-                          <div className="flex items-center gap-2 bg-white px-2 py-1 rounded border">
-                            <Label className="text-xs whitespace-nowrap text-gray-500">Limit:</Label>
+                          <div className="flex items-center gap-2 bg-gray-50 px-2 py-1 rounded border" onClick={(e) => e.stopPropagation()}>
+                            <span className="text-xs text-gray-500">Limit:</span>
                             <Input 
                               type="number" 
-                              className="w-16 h-7 text-center border-none p-0 focus-visible:ring-0" 
+                              className="w-16 h-7 text-center border-none p-0 focus-visible:ring-0 bg-transparent" 
                               value={selectedConfig?.dailyLimit || 100}
                               onChange={(e) => {
                                 const limit = parseInt(e.target.value) || 0;
@@ -536,259 +507,248 @@ const CampaignBuilder: React.FC<CampaignBuilderProps> = ({ emailConfigs }) => {
                   })}
                 </div>
               </ScrollArea>
-            </CardContent>
-            <CardFooter className="bg-gray-50 border-t p-4">
-              <div className="flex justify-between items-center w-full text-sm">
-                <span className="text-gray-600">Total Daily Capacity:</span>
+            </div>
+            <div className="flex justify-between items-center text-sm px-2">
+                <span className="text-gray-500">Total Daily Capacity</span>
                 <span className="font-bold text-blue-600">{selectedConfigs.reduce((acc, curr) => acc + curr.dailyLimit, 0)} emails/day</span>
-              </div>
-            </CardFooter>
-          </Card>
+            </div>
+          </div>
         </div>
 
         <div className="space-y-6">
-          <Card className="bg-gradient-to-br from-blue-50 to-indigo-50 border-blue-100">
-            <CardHeader>
-              <CardTitle className="text-blue-900 text-sm uppercase tracking-wider font-semibold">Quick Tips</CardTitle>
-            </CardHeader>
-            <CardContent className="space-y-4">
-              <div className="flex gap-3">
-                <div className="bg-white p-2 rounded-full shadow-sm h-fit">
-                  <Zap className="h-4 w-4 text-yellow-500" />
+            <div className="bg-blue-50/50 rounded-xl p-6 border border-blue-100 space-y-4">
+                <h4 className="font-semibold text-blue-900 flex items-center gap-2">
+                    <Zap className="h-4 w-4 text-blue-600" />
+                    Pro Tips
+                </h4>
+                <div className="space-y-3">
+                    <div className="flex gap-3 items-start">
+                        <div className="bg-white p-1.5 rounded-md shadow-sm mt-0.5">
+                            <Clock className="h-3 w-3 text-blue-500" />
+                        </div>
+                        <div>
+                            <p className="text-sm font-medium text-blue-900">Sending Delay</p>
+                            <Select 
+                                value={form.send_delay_minutes.toString()} 
+                                onValueChange={(value) => setForm({ ...form, send_delay_minutes: parseInt(value) })}
+                            >
+                                <SelectTrigger className="h-8 text-xs mt-1 bg-white border-blue-200">
+                                    <SelectValue />
+                                </SelectTrigger>
+                                <SelectContent>
+                                    <SelectItem value="1">Fast (1 min)</SelectItem>
+                                    <SelectItem value="3">Recommended (3 min)</SelectItem>
+                                    <SelectItem value="5">Safe (5 min)</SelectItem>
+                                </SelectContent>
+                            </Select>
+                        </div>
+                    </div>
+                    <div className="flex gap-3 items-start">
+                        <div className="bg-white p-1.5 rounded-md shadow-sm mt-0.5">
+                            <Info className="h-3 w-3 text-blue-500" />
+                        </div>
+                        <p className="text-xs text-blue-800 leading-relaxed">
+                            We recommend a 3-5 minute delay between emails to maintain high deliverability rates.
+                        </p>
+                    </div>
                 </div>
-                <div>
-                  <p className="font-medium text-sm text-blue-900">Warm up your accounts</p>
-                  <p className="text-xs text-blue-700 mt-1">Start with lower daily limits (20-50) for new accounts to build reputation.</p>
-                </div>
-              </div>
-              <div className="flex gap-3">
-                <div className="bg-white p-2 rounded-full shadow-sm h-fit">
-                  <Clock className="h-4 w-4 text-blue-500" />
-                </div>
-                <div>
-                  <p className="font-medium text-sm text-blue-900">Spacing matters</p>
-                  <p className="text-xs text-blue-700 mt-1">A 3-5 minute delay between emails mimics human behavior.</p>
-                </div>
-              </div>
-            </CardContent>
-          </Card>
+            </div>
         </div>
       </div>
     </div>
   );
 
   const renderAudienceStep = () => (
-    <div className="space-y-6 animate-in fade-in slide-in-from-right-4 duration-300">
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+    <div className="space-y-8 animate-in fade-in slide-in-from-right-4 duration-500">
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
         <div className="lg:col-span-2">
-          <Card>
-            <CardHeader>
-              <CardTitle className="flex items-center gap-2">
-                <Users className="h-5 w-5 text-blue-500" />
-                Select Audience
-              </CardTitle>
-              <CardDescription>Who should receive this campaign?</CardDescription>
-            </CardHeader>
-            <CardContent>
-              <Tabs value={audienceType} onValueChange={(v: any) => setAudienceType(v)} className="w-full">
-                <TabsList className="grid w-full grid-cols-2 mb-6">
-                  <TabsTrigger value="list">Select Existing List</TabsTrigger>
-                  <TabsTrigger value="manual">Manual Entry</TabsTrigger>
-                </TabsList>
-                
-                <TabsContent value="list" className="space-y-4">
-                  <div className="space-y-2">
-                    <Label>Choose a Prospect List</Label>
-                    <Select value={selectedListId} onValueChange={setSelectedListId}>
-                      <SelectTrigger className="h-12">
-                        <SelectValue placeholder="Select a list..." />
-                      </SelectTrigger>
-                      <SelectContent>
-                        {allLists.map(list => (
-                          <SelectItem key={list.id} value={list.id}>{list.name}</SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
-                  </div>
-                </TabsContent>
+          <Tabs value={audienceType} onValueChange={(v: any) => setAudienceType(v)} className="w-full">
+            <TabsList className="grid w-full grid-cols-2 mb-6 p-1 bg-gray-100 rounded-xl">
+              <TabsTrigger value="list" className="rounded-lg data-[state=active]:bg-white data-[state=active]:shadow-sm">Existing List</TabsTrigger>
+              <TabsTrigger value="manual" className="rounded-lg data-[state=active]:bg-white data-[state=active]:shadow-sm">Manual Entry</TabsTrigger>
+            </TabsList>
+            
+            <TabsContent value="list" className="space-y-4 mt-0">
+              <div className="bg-gray-50 border border-gray-200 rounded-xl p-6 space-y-4">
+                <Label className="text-base font-semibold">Select a Prospect List</Label>
+                <Select value={selectedListId} onValueChange={setSelectedListId}>
+                  <SelectTrigger className="h-12 bg-white border-gray-200">
+                    <SelectValue placeholder="Choose a list..." />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {allLists.map(list => (
+                      <SelectItem key={list.id} value={list.id}>{list.name}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+                {selectedListId && (
+                    <div className="flex items-center gap-2 text-sm text-green-600 bg-green-50 p-3 rounded-lg border border-green-100">
+                        <CheckCircle2 className="h-4 w-4" />
+                        <span>List loaded successfully with {listCount} prospects.</span>
+                    </div>
+                )}
+              </div>
+            </TabsContent>
 
-                <TabsContent value="manual" className="space-y-4">
-                  <div className="space-y-2">
-                    <Label>Enter Recipients</Label>
-                    <Textarea
-                      placeholder="email@example.com, Name&#10;another@example.com, John Doe"
-                      className="min-h-[200px] font-mono text-sm"
-                      value={recipients}
-                      onChange={(e) => setRecipients(e.target.value)}
-                    />
-                    <p className="text-xs text-gray-500">Format: email, name (one per line)</p>
-                  </div>
-                </TabsContent>
-              </Tabs>
-            </CardContent>
-          </Card>
+            <TabsContent value="manual" className="space-y-4 mt-0">
+              <div className="bg-gray-50 border border-gray-200 rounded-xl p-6 space-y-4">
+                <div className="flex justify-between items-center">
+                    <Label className="text-base font-semibold">Paste Recipients</Label>
+                    <span className="text-xs text-gray-500">Format: email, name</span>
+                </div>
+                <Textarea
+                  placeholder="email@example.com, Name&#10;another@example.com, John Doe"
+                  className="min-h-[200px] font-mono text-sm bg-white border-gray-200 focus:ring-0"
+                  value={recipients}
+                  onChange={(e) => setRecipients(e.target.value)}
+                />
+              </div>
+            </TabsContent>
+          </Tabs>
         </div>
 
         <div>
-          <Card className="h-full">
-            <CardHeader>
-              <CardTitle className="text-sm uppercase tracking-wider text-gray-500">Audience Summary</CardTitle>
-            </CardHeader>
-            <CardContent className="space-y-6">
-              <div className="text-center p-6 bg-gray-50 rounded-lg border border-dashed">
-                <p className="text-4xl font-bold text-gray-900">
-                  {audienceType === 'list' ? listCount : recipients.split('\n').filter(r => r.trim()).length}
-                </p>
-                <p className="text-sm text-gray-500 mt-1">Total Recipients</p>
-              </div>
-
-              {selectedConfigs.length > 0 && (
-                <div className="space-y-4">
-                  <div className="flex justify-between text-sm">
-                    <span className="text-gray-500">Daily Capacity</span>
-                    <span className="font-medium">{selectedConfigs.reduce((acc, curr) => acc + curr.dailyLimit, 0)} / day</span>
-                  </div>
-                  <Separator />
-                  <div className="flex items-start gap-2 text-sm text-blue-600 bg-blue-50 p-3 rounded-md">
-                    <Info className="h-4 w-4 mt-0.5 shrink-0" />
-                    {(() => {
-                      const totalRecipients = audienceType === 'list' ? listCount : recipients.split('\n').filter(r => r.trim()).length;
-                      const totalDailyLimit = selectedConfigs.reduce((acc, curr) => acc + curr.dailyLimit, 0);
-                      const estimatedDays = totalDailyLimit > 0 ? Math.ceil(totalRecipients / totalDailyLimit) : 0;
-                      return (
-                        <span>
-                          Estimated campaign duration: <strong>{estimatedDays} day{estimatedDays !== 1 ? 's' : ''}</strong> to reach all recipients.
-                        </span>
-                      );
-                    })()}
-                  </div>
+          <div className="bg-white border border-gray-200 rounded-xl p-6 shadow-sm h-full flex flex-col">
+            <h4 className="text-sm font-semibold text-gray-500 uppercase tracking-wider mb-6">Summary</h4>
+            
+            <div className="flex-1 flex flex-col items-center justify-center text-center space-y-2 mb-8">
+                <div className="w-16 h-16 bg-blue-50 rounded-full flex items-center justify-center mb-2">
+                    <Users className="h-8 w-8 text-blue-600" />
                 </div>
-              )}
-            </CardContent>
-          </Card>
+                <span className="text-4xl font-bold text-gray-900">
+                  {audienceType === 'list' ? listCount : recipients.split('\n').filter(r => r.trim()).length}
+                </span>
+                <span className="text-sm text-gray-500">Total Recipients</span>
+            </div>
+
+            <Separator className="my-4" />
+
+            <div className="space-y-4">
+                <div className="flex justify-between text-sm">
+                    <span className="text-gray-500">Daily Limit</span>
+                    <span className="font-medium text-gray-900">{selectedConfigs.reduce((acc, curr) => acc + curr.dailyLimit, 0)} / day</span>
+                </div>
+                <div className="bg-gray-50 rounded-lg p-3 text-xs text-gray-600 leading-relaxed">
+                    Based on your daily limit, this campaign will take approximately 
+                    <strong className="text-gray-900 mx-1">
+                        {(() => {
+                            const total = audienceType === 'list' ? listCount : recipients.split('\n').filter(r => r.trim()).length;
+                            const limit = selectedConfigs.reduce((acc, curr) => acc + curr.dailyLimit, 0);
+                            return limit > 0 ? Math.ceil(total / limit) : 0;
+                        })()}
+                    </strong> 
+                    days to complete.
+                </div>
+            </div>
+          </div>
         </div>
       </div>
     </div>
   );
 
   const renderContentStep = () => (
-    <div className="space-y-6 animate-in fade-in slide-in-from-right-4 duration-300">
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 h-[600px]">
-        {/* Editor Column */}
-        <div className="flex flex-col h-full space-y-4">
-          <Card className="flex-1 flex flex-col">
-            <CardHeader className="pb-3">
-              <CardTitle className="flex items-center justify-between">
-                <span className="flex items-center gap-2"><FileText className="h-5 w-5 text-blue-500" /> Editor</span>
-                {templates.length > 0 && (
-                  <Select value={selectedTemplate} onValueChange={handleTemplateSelect}>
-                    <SelectTrigger className="w-[180px] h-8 text-xs">
-                      <SelectValue placeholder="Load Template" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {templates.map((template) => (
-                        <SelectItem key={template.id} value={template.id}>
-                          {template.name}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                )}
-              </CardTitle>
-            </CardHeader>
-            <CardContent className="flex-1 flex flex-col space-y-4">
-              <div className="space-y-2">
+    <div className="space-y-4 animate-in fade-in slide-in-from-right-4 duration-500 h-full flex flex-col">
+      <div className="flex justify-between items-center mb-2 shrink-0">
+        <div className="flex items-center gap-2">
+            <Select value={selectedTemplate} onValueChange={handleTemplateSelect}>
+                <SelectTrigger className="w-[200px] h-9 text-xs bg-white">
+                    <SelectValue placeholder="Load Template..." />
+                </SelectTrigger>
+                <SelectContent>
+                    {templates.map((template) => (
+                    <SelectItem key={template.id} value={template.id}>
+                        {template.name}
+                    </SelectItem>
+                    ))}
+                </SelectContent>
+            </Select>
+        </div>
+        <div className="flex items-center gap-2">
+            <span className="text-xs text-gray-500 mr-2">Insert Variable:</span>
+            {['{first_name}', '{company}', '{email}'].map(variable => (
+                <Badge 
+                key={variable}
+                variant="outline" 
+                className="cursor-pointer hover:bg-blue-50 hover:text-blue-600 hover:border-blue-200 transition-all bg-white"
+                onClick={() => setForm(f => ({...f, content: f.content + variable}))}
+                >
+                {variable}
+                </Badge>
+            ))}
+            
+            <Dialog>
+              <DialogTrigger asChild>
+                <Button variant="outline" size="sm" className="ml-2 gap-2 h-7 text-xs">
+                  <Eye className="h-3 w-3" /> Preview
+                </Button>
+              </DialogTrigger>
+              <DialogContent className="max-w-3xl h-[80vh] flex flex-col">
+                <DialogHeader>
+                  <DialogTitle>Email Preview</DialogTitle>
+                </DialogHeader>
+                <div className="flex-1 overflow-y-auto bg-gray-50 p-4 rounded-md border">
+                    <div className="bg-white rounded shadow-sm p-8 max-w-2xl mx-auto min-h-[400px]">
+                        <div className="border-b pb-4 mb-6 space-y-1">
+                            <p className="text-lg font-semibold text-gray-900">{form.subject || <span className="text-gray-300">Subject</span>}</p>
+                            <div className="flex items-center gap-2 text-xs text-gray-500">
+                                <div className="w-6 h-6 rounded-full bg-gray-200" />
+                                <span>Me</span>
+                                <span className="text-gray-300">to</span>
+                                <span>John Doe</span>
+                            </div>
+                        </div>
+                        <div className="prose prose-sm max-w-none text-gray-800 whitespace-pre-wrap font-sans">
+                            {form.content || <span className="text-gray-300 italic">Start typing to see how your email will look...</span>}
+                        </div>
+                    </div>
+                </div>
+              </DialogContent>
+            </Dialog>
+        </div>
+      </div>
+
+      <div className="flex-1 min-h-0">
+        {/* Editor */}
+        <div className="flex flex-col h-full border border-gray-200 rounded-xl overflow-hidden bg-white shadow-sm">
+            <div className="p-3 border-b border-gray-100 bg-gray-50/50 shrink-0">
                 <Input
-                  id="subject"
                   placeholder="Subject Line"
                   value={form.subject}
                   onChange={(e) => setForm({ ...form, subject: e.target.value })}
-                  className="h-11 font-medium text-lg border-0 border-b rounded-none px-0 focus-visible:ring-0"
+                  className="border-0 bg-transparent text-lg font-medium px-0 focus-visible:ring-0 placeholder:text-gray-400 h-auto py-1"
                 />
-              </div>
-
-              <div className="flex-1 relative">
+            </div>
+            <div className="flex-1 relative min-h-0">
                 <Textarea
-                  id="content"
-                  placeholder="Write your email content here..."
-                  className="h-full resize-none border-0 p-0 focus-visible:ring-0 font-mono text-sm leading-relaxed"
+                  placeholder="Hi {first_name},&#10;&#10;I'm writing to you because..."
+                  className="h-full w-full resize-none border-0 p-4 focus-visible:ring-0 font-mono text-sm leading-relaxed"
                   value={form.content}
                   onChange={(e) => setForm({ ...form, content: e.target.value })}
                 />
-              </div>
-
-              <div className="flex items-center gap-2 pt-2 border-t">
-                <span className="text-xs text-gray-400 mr-2">Insert Variable:</span>
-                {['{first_name}', '{company}', '{email}'].map(variable => (
-                  <Badge 
-                    key={variable}
-                    variant="secondary" 
-                    className="cursor-pointer hover:bg-blue-100 hover:text-blue-700 transition-colors"
-                    onClick={() => setForm(f => ({...f, content: f.content + variable}))}
-                  >
-                    {variable}
-                  </Badge>
-                ))}
-              </div>
-            </CardContent>
-          </Card>
-        </div>
-
-        {/* Preview Column */}
-        <div className="flex flex-col h-full">
-          <Card className="flex-1 bg-gray-50/50 border-dashed flex flex-col">
-            <CardHeader className="pb-3">
-              <CardTitle className="flex items-center gap-2 text-gray-500">
-                <Eye className="h-5 w-5" /> Live Preview
-              </CardTitle>
-            </CardHeader>
-            <CardContent className="flex-1">
-              <div className="bg-white rounded-lg shadow-sm border p-6 h-full overflow-y-auto">
-                <div className="border-b pb-4 mb-4 space-y-2">
-                  <div className="flex gap-2 text-sm">
-                    <span className="text-gray-500 w-16">To:</span>
-                    <span className="text-gray-900">John Doe &lt;john@example.com&gt;</span>
-                  </div>
-                  <div className="flex gap-2 text-sm">
-                    <span className="text-gray-500 w-16">Subject:</span>
-                    <span className="font-medium text-gray-900">{form.subject || '(No Subject)'}</span>
-                  </div>
-                </div>
-                <div className="prose prose-sm max-w-none text-gray-800 whitespace-pre-wrap">
-                  {form.content || <span className="text-gray-400 italic">Start typing to see preview...</span>}
-                </div>
-              </div>
-            </CardContent>
-          </Card>
+            </div>
         </div>
       </div>
     </div>
   );
 
   const renderFollowupsStep = () => (
-    <div className="space-y-6 animate-in fade-in slide-in-from-right-4 duration-300">
-      <div className="flex justify-between items-center mb-6">
-        <div>
-          <h3 className="text-lg font-medium">Follow-up Sequence</h3>
-          <p className="text-sm text-gray-500">Automate replies if recipients don't respond.</p>
-        </div>
-      </div>
-
-      <div className="relative pl-8 space-y-8">
+    <div className="space-y-8 animate-in fade-in slide-in-from-right-4 duration-500 max-w-4xl mx-auto">
+      <div className="relative pl-8 space-y-12">
         {/* Vertical Line */}
-        <div className="absolute left-3.5 top-0 bottom-0 w-0.5 bg-gray-200" />
+        <div className="absolute left-[15px] top-4 bottom-0 w-0.5 bg-gray-200" />
 
         {/* Initial Email Node */}
         <div className="relative">
-          <div className="absolute -left-[29px] top-0 w-8 h-8 rounded-full bg-blue-100 border-2 border-blue-500 flex items-center justify-center z-10">
-            <Mail className="h-4 w-4 text-blue-600" />
+          <div className="absolute -left-[29px] top-0 w-8 h-8 rounded-full bg-blue-600 border-4 border-white shadow-sm flex items-center justify-center z-10">
+            <Mail className="h-4 w-4 text-white" />
           </div>
-          <Card className="ml-4 border-l-4 border-l-blue-500">
-            <CardHeader className="py-3">
-              <CardTitle className="text-sm font-medium text-gray-500">Initial Email</CardTitle>
-              <p className="text-sm font-medium truncate">{form.subject || '(No Subject)'}</p>
-            </CardHeader>
-          </Card>
+          <div className="ml-6 bg-white border border-gray-200 rounded-xl p-6 shadow-sm">
+            <div className="flex justify-between items-start mb-2">
+                <h4 className="font-semibold text-gray-900">Initial Email</h4>
+                <Badge variant="secondary">Step 1</Badge>
+            </div>
+            <p className="text-sm text-gray-500 truncate">{form.subject || '(No Subject)'}</p>
+          </div>
         </div>
 
         {/* Follow-up Nodes */}
@@ -798,65 +758,64 @@ const CampaignBuilder: React.FC<CampaignBuilderProps> = ({ emailConfigs }) => {
               <span className="text-xs font-bold text-gray-500">{index + 1}</span>
             </div>
             
-            <div className="ml-4">
-              <div className="flex items-center gap-2 mb-2">
-                <Badge variant="outline" className="bg-white">
+            <div className="ml-6">
+              <div className="flex items-center gap-2 mb-4">
+                <div className="bg-gray-100 text-gray-600 text-xs font-medium px-3 py-1 rounded-full border border-gray-200">
                   Wait {step.delay_days} days, {step.delay_hours} hours
-                </Badge>
+                </div>
                 <span className="text-xs text-gray-400">if no reply</span>
               </div>
               
-              <Card className="relative group">
-                <CardHeader className="pb-2 pt-4">
-                  <div className="flex justify-between items-start">
-                    <div className="space-y-1">
-                      <CardTitle className="text-base">Follow-up #{step.step_number}</CardTitle>
-                    </div>
-                    <Button variant="ghost" size="icon" onClick={() => removeFollowupStep(index)} className="text-gray-400 hover:text-red-500 opacity-0 group-hover:opacity-100 transition-opacity">
+              <div className="bg-white border border-gray-200 rounded-xl p-6 shadow-sm group hover:border-blue-300 transition-colors">
+                <div className="flex justify-between items-start mb-4">
+                    <h4 className="font-semibold text-gray-900">Follow-up #{step.step_number}</h4>
+                    <Button variant="ghost" size="icon" onClick={() => removeFollowupStep(index)} className="text-gray-400 hover:text-red-500 hover:bg-red-50">
                       <Trash2 className="h-4 w-4" />
                     </Button>
-                  </div>
-                </CardHeader>
-                <CardContent className="space-y-4">
+                </div>
+                
+                <div className="space-y-4">
                   <div className="grid grid-cols-2 gap-4">
                     <div className="space-y-2">
-                      <Label className="text-xs">Wait Days</Label>
+                      <Label className="text-xs text-gray-500">Wait Days</Label>
                       <Input 
                         type="number" min="0"
                         value={step.delay_days}
                         onChange={(e) => updateFollowupStep(index, 'delay_days', parseInt(e.target.value) || 0)}
+                        className="h-9"
                       />
                     </div>
                     <div className="space-y-2">
-                      <Label className="text-xs">Wait Hours</Label>
+                      <Label className="text-xs text-gray-500">Wait Hours</Label>
                       <Input 
                         type="number" min="0" max="23"
                         value={step.delay_hours}
                         onChange={(e) => updateFollowupStep(index, 'delay_hours', parseInt(e.target.value) || 0)}
+                        className="h-9"
                       />
                     </div>
                   </div>
                   <div className="space-y-2">
-                    <Label className="text-xs">Message Body</Label>
+                    <Label className="text-xs text-gray-500">Message Body</Label>
                     <Textarea 
                       placeholder="Just bumping this to the top of your inbox..."
-                      className="min-h-[100px]"
+                      className="min-h-[100px] resize-none"
                       value={step.body}
                       onChange={(e) => updateFollowupStep(index, 'body', e.target.value)}
                     />
                   </div>
-                </CardContent>
-              </Card>
+                </div>
+              </div>
             </div>
           </div>
         ))}
 
         {/* Add Step Button */}
-        <div className="relative pt-4">
-          <div className="absolute -left-[29px] top-4 w-8 h-8 rounded-full bg-gray-100 border-2 border-dashed border-gray-300 flex items-center justify-center z-10">
+        <div className="relative pt-4 pb-8">
+          <div className="absolute -left-[29px] top-4 w-8 h-8 rounded-full bg-gray-50 border-2 border-dashed border-gray-300 flex items-center justify-center z-10">
             <Plus className="h-4 w-4 text-gray-400" />
           </div>
-          <Button onClick={addFollowupStep} variant="outline" className="ml-4 border-dashed w-full justify-start text-gray-500 hover:text-blue-600 hover:border-blue-300 hover:bg-blue-50">
+          <Button onClick={addFollowupStep} variant="outline" className="ml-6 border-dashed w-full justify-start text-gray-500 hover:text-blue-600 hover:border-blue-300 hover:bg-blue-50 h-12">
             <Plus className="h-4 w-4 mr-2" />
             Add Follow-up Step
           </Button>
@@ -866,174 +825,179 @@ const CampaignBuilder: React.FC<CampaignBuilderProps> = ({ emailConfigs }) => {
   );
 
   const renderReviewStep = () => (
-    <div className="space-y-6 animate-in fade-in slide-in-from-right-4 duration-300">
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
-        <Card className="bg-blue-50 border-blue-100">
-          <CardContent className="p-6">
-            <p className="text-sm font-medium text-blue-600 mb-1">Total Recipients</p>
-            <p className="text-2xl font-bold text-blue-900">
+    <div className="space-y-8 animate-in fade-in slide-in-from-right-4 duration-500">
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+        <div className="bg-blue-50 border border-blue-100 rounded-xl p-6 text-center">
+            <p className="text-sm font-medium text-blue-600 mb-1">Recipients</p>
+            <p className="text-3xl font-bold text-blue-900">
               {audienceType === 'list' ? listCount : recipients.split('\n').filter(r => r.trim()).length}
             </p>
-          </CardContent>
-        </Card>
-        <Card className="bg-green-50 border-green-100">
-          <CardContent className="p-6">
+        </div>
+        <div className="bg-green-50 border border-green-100 rounded-xl p-6 text-center">
             <p className="text-sm font-medium text-green-600 mb-1">Daily Volume</p>
-            <p className="text-2xl font-bold text-green-900">
+            <p className="text-3xl font-bold text-green-900">
               {selectedConfigs.reduce((acc, curr) => acc + curr.dailyLimit, 0)}
-              <span className="text-sm font-normal text-green-700 ml-1">/ day</span>
             </p>
-          </CardContent>
-        </Card>
-        <Card className="bg-purple-50 border-purple-100">
-          <CardContent className="p-6">
-            <p className="text-sm font-medium text-purple-600 mb-1">Follow-up Steps</p>
-            <p className="text-2xl font-bold text-purple-900">{followups.length}</p>
-          </CardContent>
-        </Card>
-        <Card className="bg-orange-50 border-orange-100">
-          <CardContent className="p-6">
-            <p className="text-sm font-medium text-orange-600 mb-1">Send Delay</p>
-            <p className="text-2xl font-bold text-orange-900">
-              {form.send_delay_minutes}
-              <span className="text-sm font-normal text-orange-700 ml-1">min</span>
+        </div>
+        <div className="bg-purple-50 border border-purple-100 rounded-xl p-6 text-center">
+            <p className="text-sm font-medium text-purple-600 mb-1">Follow-ups</p>
+            <p className="text-3xl font-bold text-purple-900">{followups.length}</p>
+        </div>
+        <div className="bg-orange-50 border border-orange-100 rounded-xl p-6 text-center">
+            <p className="text-sm font-medium text-orange-600 mb-1">Delay</p>
+            <p className="text-3xl font-bold text-orange-900">
+              {form.send_delay_minutes}<span className="text-sm font-normal ml-1">m</span>
             </p>
-          </CardContent>
-        </Card>
+        </div>
       </div>
 
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
         <div className="lg:col-span-2 space-y-6">
-          <Card>
-            <CardHeader>
-              <CardTitle className="text-base">Campaign Configuration</CardTitle>
-            </CardHeader>
-            <CardContent className="space-y-4">
-              <div className="grid grid-cols-2 gap-4 text-sm">
+          <div className="bg-white border border-gray-200 rounded-xl p-6 space-y-6">
+            <h4 className="font-semibold text-gray-900 border-b pb-4">Campaign Configuration</h4>
+            <div className="grid grid-cols-2 gap-6 text-sm">
                 <div>
                   <span className="text-gray-500 block mb-1">Campaign Name</span>
-                  <span className="font-medium">{form.name}</span>
+                  <span className="font-medium text-gray-900">{form.name}</span>
                 </div>
                 <div>
                   <span className="text-gray-500 block mb-1">Subject Line</span>
-                  <span className="font-medium">{form.subject}</span>
+                  <span className="font-medium text-gray-900">{form.subject}</span>
                 </div>
                 <div>
                   <span className="text-gray-500 block mb-1">Sender Accounts</span>
-                  <span className="font-medium">{selectedConfigs.length} accounts selected</span>
+                  <span className="font-medium text-gray-900">{selectedConfigs.length} accounts selected</span>
                 </div>
                 <div>
                   <span className="text-gray-500 block mb-1">Audience Source</span>
-                  <span className="font-medium capitalize">{audienceType}</span>
+                  <span className="font-medium text-gray-900 capitalize">{audienceType}</span>
                 </div>
-              </div>
-            </CardContent>
-          </Card>
+            </div>
+          </div>
 
-          <Card>
-            <CardHeader>
-              <CardTitle className="text-base">Schedule</CardTitle>
-              <CardDescription>When should this campaign start?</CardDescription>
-            </CardHeader>
-            <CardContent>
-              <div className="flex flex-col space-y-2">
-                <Label htmlFor="scheduledAt">Start Date & Time</Label>
-                <Input
-                  id="scheduledAt"
-                  type="datetime-local"
-                  value={scheduledAt}
-                  onChange={(e) => setScheduledAt(e.target.value)}
-                  className="max-w-md"
-                />
-                <p className="text-sm text-muted-foreground">
-                  {scheduledAt 
-                    ? `Campaign will start on ${new Date(scheduledAt).toLocaleString()}`
-                    : 'Campaign will start immediately upon launch.'}
-                </p>
-              </div>
-            </CardContent>
-          </Card>
+          <div className="bg-white border border-gray-200 rounded-xl p-6 space-y-4">
+            <div className="flex items-center justify-between">
+                <h4 className="font-semibold text-gray-900">Schedule Launch</h4>
+                <Switch checked={!!scheduledAt} onCheckedChange={(c) => setScheduledAt(c ? new Date().toISOString().slice(0, 16) : '')} />
+            </div>
+            {scheduledAt && (
+                <div className="pt-2">
+                    <Label htmlFor="scheduledAt" className="mb-2 block">Start Date & Time</Label>
+                    <Input
+                    id="scheduledAt"
+                    type="datetime-local"
+                    value={scheduledAt}
+                    onChange={(e) => setScheduledAt(e.target.value)}
+                    className="max-w-md"
+                    />
+                    <p className="text-sm text-gray-500 mt-2">
+                    Campaign will automatically start on {new Date(scheduledAt).toLocaleString()}
+                    </p>
+                </div>
+            )}
+          </div>
         </div>
 
         <div>
-          <Card className="h-full bg-gray-50">
-            <CardHeader>
-              <CardTitle className="text-base">Pre-flight Checklist</CardTitle>
-            </CardHeader>
-            <CardContent className="space-y-3">
-              <div className="flex items-center gap-2 text-sm text-green-700">
-                <CheckCircle2 className="h-4 w-4" />
-                <span>Subject line set</span>
-              </div>
-              <div className="flex items-center gap-2 text-sm text-green-700">
-                <CheckCircle2 className="h-4 w-4" />
-                <span>Content added</span>
-              </div>
-              <div className="flex items-center gap-2 text-sm text-green-700">
-                <CheckCircle2 className="h-4 w-4" />
-                <span>Recipients selected</span>
-              </div>
-              <div className="flex items-center gap-2 text-sm text-green-700">
-                <CheckCircle2 className="h-4 w-4" />
-                <span>Senders configured</span>
-              </div>
-              <Separator className="my-2" />
-              <div className="p-3 bg-yellow-50 text-yellow-800 rounded-md text-xs border border-yellow-100">
+          <div className="bg-gray-50 border border-gray-200 rounded-xl p-6 h-full">
+            <h4 className="font-semibold text-gray-900 mb-4">Pre-flight Checklist</h4>
+            <div className="space-y-3">
+              {[
+                  { label: 'Subject line set', valid: !!form.subject },
+                  { label: 'Content added', valid: !!form.content },
+                  { label: 'Recipients selected', valid: (audienceType === 'list' ? listCount > 0 : recipients.length > 0) },
+                  { label: 'Senders configured', valid: selectedConfigs.length > 0 },
+              ].map((item, i) => (
+                  <div key={i} className="flex items-center gap-3 text-sm">
+                    <div className={cn("w-5 h-5 rounded-full flex items-center justify-center", item.valid ? "bg-green-100 text-green-600" : "bg-gray-200 text-gray-400")}>
+                        {item.valid ? <Check className="h-3 w-3" /> : <X className="h-3 w-3" />}
+                    </div>
+                    <span className={item.valid ? "text-gray-700" : "text-gray-400"}>{item.label}</span>
+                  </div>
+              ))}
+              
+              <Separator className="my-4" />
+              
+              <div className="p-4 bg-yellow-50 text-yellow-800 rounded-lg text-xs border border-yellow-100 leading-relaxed">
                 <p className="font-medium mb-1 flex items-center gap-1"><AlertCircle className="h-3 w-3" /> Important</p>
                 <p>Emails will be queued immediately. Ensure your sender accounts are warmed up and ready.</p>
               </div>
-            </CardContent>
-          </Card>
+            </div>
+          </div>
         </div>
       </div>
     </div>
   );
 
   return (
-    <div className="max-w-6xl mx-auto py-8 px-4">
-      {renderStepIndicator()}
+    <div className="h-[calc(100vh-1rem)] bg-gray-50/50 p-4 font-sans flex flex-col overflow-hidden">
+      <div className="max-w-6xl mx-auto w-full flex flex-col h-full">
+        <div className="mb-4 text-center shrink-0">
+           <h1 className="text-2xl font-bold text-gray-900 tracking-tight">Create Campaign</h1>
+        </div>
 
-      <div className="mb-8 min-h-[400px]">
-        {currentStep === 1 && renderSetupStep()}
-        {currentStep === 2 && renderAudienceStep()}
-        {currentStep === 3 && renderContentStep()}
-        {currentStep === 4 && renderFollowupsStep()}
-        {currentStep === 5 && renderReviewStep()}
-      </div>
+        <div className="shrink-0">
+            {renderStepIndicator()}
+        </div>
 
-      <div className="flex justify-between items-center pt-6 border-t bg-white sticky bottom-0 py-4 z-10">
-        <Button
-          variant="outline"
-          onClick={handleBack}
-          disabled={currentStep === 1 || loading}
-          className="w-32"
-        >
-          <ArrowLeft className="h-4 w-4 mr-2" />
-          Back
-        </Button>
+        <div className="bg-white rounded-2xl shadow-xl shadow-gray-200/50 border border-gray-100 overflow-hidden transition-all duration-500 relative flex flex-col flex-1 min-h-0">
+            {/* Header */}
+            <div className="px-6 py-4 border-b border-gray-50 flex justify-between items-center bg-white shrink-0">
+                <div>
+                    <h2 className="text-lg font-semibold text-gray-900">{STEPS[currentStep-1].title}</h2>
+                    <p className="text-xs text-gray-500">{STEPS[currentStep-1].description}</p>
+                </div>
+                <div className="text-xs text-gray-400 font-medium bg-gray-50 px-3 py-1 rounded-full">
+                    Step {currentStep} of {STEPS.length}
+                </div>
+            </div>
 
-        <div className="flex gap-3">
-          {currentStep === 5 && (
-            <Button 
-              variant="outline" 
-              onClick={() => handleSave(true)}
-              disabled={loading}
-            >
-              Save Draft
-            </Button>
-          )}
-          
-          {currentStep < 5 ? (
-            <Button onClick={handleNext} className="w-32 bg-blue-600 hover:bg-blue-700">
-              Next
-              <ArrowRight className="h-4 w-4 ml-2" />
-            </Button>
-          ) : (
-            <Button onClick={() => handleSave(false)} disabled={loading} className="w-40 bg-green-600 hover:bg-green-700">
-              <Send className="h-4 w-4 mr-2" />
-              {loading ? 'Launching...' : 'Launch Campaign'}
-            </Button>
-          )}
+            {/* Content Body */}
+            <div className="p-6 flex-1 overflow-y-auto min-h-0">
+                {currentStep === 1 && renderSetupStep()}
+                {currentStep === 2 && renderAudienceStep()}
+                {currentStep === 3 && renderContentStep()}
+                {currentStep === 4 && renderFollowupsStep()}
+                {currentStep === 5 && renderReviewStep()}
+            </div>
+
+            {/* Footer Actions */}
+            <div className="px-6 py-4 bg-gray-50 border-t border-gray-100 flex justify-between items-center shrink-0">
+                <Button
+                    variant="ghost"
+                    onClick={handleBack}
+                    disabled={currentStep === 1 || loading}
+                    className="text-gray-500 hover:text-gray-900 hover:bg-gray-200/50"
+                >
+                    <ArrowLeft className="h-4 w-4 mr-2" />
+                    Back
+                </Button>
+
+                <div className="flex gap-3">
+                    {currentStep === 5 && (
+                        <Button 
+                        variant="outline" 
+                        onClick={() => handleSave(true)}
+                        disabled={loading}
+                        className="border-gray-300"
+                        >
+                        Save Draft
+                        </Button>
+                    )}
+                    
+                    {currentStep < 5 ? (
+                        <Button onClick={handleNext} className="bg-blue-600 hover:bg-blue-700 text-white px-8 shadow-lg shadow-blue-200">
+                        Next Step
+                        <ArrowRight className="h-4 w-4 ml-2" />
+                        </Button>
+                    ) : (
+                        <Button onClick={() => handleSave(false)} disabled={loading} className="bg-green-600 hover:bg-green-700 text-white px-8 shadow-lg shadow-green-200">
+                        {loading ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : <Send className="h-4 w-4 mr-2" />}
+                        {loading ? 'Launching...' : 'Launch Campaign'}
+                        </Button>
+                    )}
+                </div>
+            </div>
         </div>
       </div>
     </div>

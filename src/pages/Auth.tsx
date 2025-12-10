@@ -6,6 +6,7 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { toast } from '@/hooks/use-toast';
 import { Mail, Lock, ArrowRight, CheckCircle2 } from 'lucide-react';
+import Logo from '@/components/Logo';
 
 const Auth = () => {
   const [isLogin, setIsLogin] = useState(true);
@@ -94,11 +95,8 @@ const Auth = () => {
         <div className="absolute inset-0 bg-gradient-to-br from-slate-900/90 to-slate-800/90" />
         
         <div className="relative z-10">
-          <div className="flex items-center gap-2 text-2xl font-bold mb-2">
-            <div className="h-8 w-8 bg-blue-500 rounded-lg flex items-center justify-center">
-              <Mail className="h-5 w-5 text-white" />
-            </div>
-            EmailBridge Pro
+          <div className="mb-4">
+            <Logo />
           </div>
           <p className="text-slate-400">Advanced Email Campaign Management</p>
         </div>

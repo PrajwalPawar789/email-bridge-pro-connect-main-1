@@ -13,6 +13,7 @@ import {
   ChevronRight
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
+import Logo from '../Logo';
 
 interface SidebarProps {
   activeTab: string;
@@ -39,21 +40,12 @@ const Sidebar = ({ activeTab, onTabChange, isCollapsed, toggleSidebar }: Sidebar
       isCollapsed ? "w-20" : "w-64"
     )}>
       <div className={cn("p-6 flex items-center gap-2", isCollapsed && "justify-center px-2")}>
-        {/* Logo placeholder - matching the Hostinger style */}
-        <div className="flex items-center gap-2 font-bold text-xl text-gray-900">
-          <div className="w-8 h-8 bg-gray-900 rounded-full flex items-center justify-center text-white shrink-0">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="w-5 h-5">
-              <path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5" />
-            </svg>
-          </div>
-          {!isCollapsed && (
-            <div className="flex flex-col leading-none whitespace-nowrap overflow-hidden">
-              <span>EmailBridge Pro</span>
-              <span className="text-[10px] font-normal text-gray-500 mt-1">by The CIO Vision</span>
-            </div>
-          )}
-        </div>
+        <Logo 
+          showText={!isCollapsed} 
+          textClassName="text-xl text-gray-900"
+        />
       </div>
+
 
       <button
         onClick={toggleSidebar}
