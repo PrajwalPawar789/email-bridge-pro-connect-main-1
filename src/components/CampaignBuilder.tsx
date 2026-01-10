@@ -269,15 +269,49 @@ const CampaignBuilder: React.FC<CampaignBuilderProps> = ({ emailConfigs }) => {
         return selectedConfigs[index % selectedConfigs.length].configId;
       };
 
+      const normalizeEmail = (value?: string | null) => (value || '').trim().toLowerCase();
+
+      const selectedConfigByEmail = new Map<string, string>();
+      selectedConfigs.forEach((selected) => {
+        const config = emailConfigs.find((cfg) => cfg.id === selected.configId);
+        if (config?.smtp_username) {
+          selectedConfigByEmail.set(normalizeEmail(config.smtp_username), config.id);
+        }
+      });
+
+      const resolveAssignedConfigId = (senderEmail: string | null | undefined, index: number) => {
+        const normalized = normalizeEmail(senderEmail);
+        const matchedConfigId = normalized ? selectedConfigByEmail.get(normalized) : null;
+        return matchedConfigId || assignConfig(index);
+      };
+
       // Process Recipients
       if (selectedListId) {
-        const { data: listProspects } = await supabase
-          .from('email_list_prospects')
-          .select(`prospects (id, email, name, company)`)
-          .eq('list_id', selectedListId);
-
-        if (listProspects && listProspects.length > 0) {
-          const validProspects = listProspects
+        // Fetch all prospects in batches of 1000
+        let allProspects = [];
+        let from = 0;
+        const pageSize = 1000;
+        let fetchMore = true;
+        while (fetchMore) {
+          const { data: batch, error } = await supabase
+            .from('email_list_prospects')
+            .select(`prospects (id, email, name, company, sender_email)`)
+            .eq('list_id', selectedListId)
+            .range(from, from + pageSize - 1);
+          if (error) throw error;
+          if (batch && batch.length > 0) {
+            allProspects = allProspects.concat(batch);
+            if (batch.length < pageSize) {
+              fetchMore = false;
+            } else {
+              from += pageSize;
+            }
+          } else {
+            fetchMore = false;
+          }
+        }
+        if (allProspects.length > 0) {
+          const validProspects = allProspects
             .map(item => item.prospects)
             .filter(prospect => prospect && prospect.email && prospect.email.trim());
 
@@ -286,13 +320,18 @@ const CampaignBuilder: React.FC<CampaignBuilderProps> = ({ emailConfigs }) => {
             return index === self.findIndex(p => p.email.toLowerCase().trim() === currentEmail);
           });
 
-          const recipientsInserts = uniqueProspects.map((prospect, index) => ({
-            campaign_id: campaign.id,
-            email: prospect.email.trim().toLowerCase(),
-            name: prospect.name || '',
-            status: 'pending' as const,
-            assigned_email_config_id: assignConfig(index)
-          }));
+          const recipientsInserts = uniqueProspects.map((prospect, index) => {
+            const senderEmail = normalizeEmail(prospect.sender_email);
+
+            return {
+              campaign_id: campaign.id,
+              email: prospect.email.trim().toLowerCase(),
+              name: prospect.name || '',
+              status: 'pending' as const,
+              assigned_email_config_id: resolveAssignedConfigId(senderEmail, index),
+              sender_email: senderEmail || null
+            };
+          });
 
           const { data: insertedRecipients } = await supabase
             .from('recipients')

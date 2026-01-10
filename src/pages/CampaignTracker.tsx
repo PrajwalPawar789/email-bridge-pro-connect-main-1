@@ -53,6 +53,7 @@ const CampaignTracker = () => {
   const [stats, setStats] = useState({
     total: 0,
     sent: 0,
+    failed: 0,
     opens: 0,
     clicks: 0,
     replies: 0,
@@ -76,11 +77,19 @@ const CampaignTracker = () => {
           'postgres_changes',
           { event: '*', schema: 'public', table: 'recipients', filter: `campaign_id=eq.${id}` },
           () => {
-            // Debounce updates to prevent flickering
+            // Update immediately for recipients
+            fetchCampaignData(false);
+          }
+        )
+        .on(
+          'postgres_changes',
+          { event: '*', schema: 'public', table: 'campaigns', filter: `id=eq.${id}` },
+          () => {
+            // Update campaign data immediately
             clearTimeout(debounceTimer);
             debounceTimer = setTimeout(() => {
               fetchCampaignData(false);
-            }, 2000);
+            }, 500);
           }
         )
         .subscribe();
@@ -183,10 +192,16 @@ const CampaignTracker = () => {
       if (recipientsError) throw recipientsError;
       setRecipients(recipientsData || []);
 
-      // Calculate stats
+      // Calculate stats - use database counts for active campaigns to ensure consistency
+      const isActiveCampaign = campaignData.status === 'sending' || campaignData.status === 'paused';
       const currentStats = {
         total: recipientsData?.length || 0,
-        sent: recipientsData?.filter(r => r.status === 'sent' || r.status === 'completed').length || 0,
+        sent: isActiveCampaign
+          ? Math.max(campaignData.sent_count || 0, recipientsData?.filter(r => r.status === 'sent').length || 0)
+          : recipientsData?.filter(r => r.status === 'sent').length || 0,
+        failed: isActiveCampaign
+          ? Math.max(campaignData.failed_count || 0, recipientsData?.filter(r => r.status === 'failed').length || 0)
+          : recipientsData?.filter(r => r.status === 'failed').length || 0,
         opens: recipientsData?.filter(r => r.opened_at).length || 0,
         clicks: recipientsData?.filter(r => r.clicked_at).length || 0,
         replies: recipientsData?.filter(r => r.replied).length || 0,
@@ -427,7 +442,7 @@ const CampaignTracker = () => {
       >
         <div className="flex flex-col items-center justify-center h-[calc(100vh-200px)]">
           <h2 className="text-2xl font-bold text-gray-900">Campaign not found</h2>
-          <Button onClick={() => navigate('/dashboard')} className="mt-4">
+          <Button onClick={() => navigate('/campaigns')} className="mt-4">
             Go Back
           </Button>
         </div>
@@ -438,7 +453,7 @@ const CampaignTracker = () => {
   return (
     <DashboardLayout 
       activeTab="campaigns" 
-      onTabChange={() => navigate('/dashboard')} 
+      onTabChange={() => navigate('/campaigns')} 
       user={user} 
       onLogout={handleLogout}
     >
@@ -446,7 +461,7 @@ const CampaignTracker = () => {
         {/* Header */}
         <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
           <div className="flex items-center space-x-4">
-            <Button variant="ghost" size="icon" onClick={() => navigate('/dashboard')} className="rounded-full hover:bg-gray-200">
+            <Button variant="ghost" size="icon" onClick={() => navigate('/campaigns')} className="rounded-full hover:bg-gray-200">
               <ArrowLeft className="h-6 w-6" />
             </Button>
             <div>
@@ -455,6 +470,7 @@ const CampaignTracker = () => {
                 <Badge className={`${getStatusColor(campaign.status)} text-white px-3 py-1`}>
                   {campaign.status}
                 </Badge>
+                <span className="text-sm text-gray-400">ID: {campaign.id}</span>
               </div>
               <div className="flex items-center space-x-4 mt-2 text-sm text-gray-500">
                 <span className="flex items-center gap-1">
@@ -493,6 +509,12 @@ const CampaignTracker = () => {
                     <span className="text-blue-600 font-medium mr-1">{stats.sent}</span> sent
                     <span className="mx-1">•</span>
                     <span className="text-orange-500 font-medium mr-1">{stats.queued}</span> queued
+                    {stats.failed > 0 && (
+                      <>
+                        <span className="mx-1">•</span>
+                        <span className="text-red-500 font-medium mr-1">{stats.failed}</span> failed
+                      </>
+                    )}
                   </div>
                 </div>
                 <div className="p-2 bg-blue-50 rounded-lg">

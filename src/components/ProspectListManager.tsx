@@ -40,6 +40,8 @@ interface Prospect {
   phone?: string;
   sender_name?: string;
   sender_email?: string;
+  country?: string;
+  industry?: string;
 }
 
 interface EmailList {
@@ -72,8 +74,12 @@ const ProspectListManager: React.FC = () => {
     phone: "",
     sender_name: "",
     sender_email: "",
+    country: "",
+    industry: "",
   });
   const [excelUploading, setExcelUploading] = useState(false);
+  const [importProgress, setImportProgress] = useState({ processed: 0, total: 0, errors: 0 });
+  const [importResults, setImportResults] = useState<{ success: number; errors: number; skipped: number } | null>(null);
 
   useEffect(() => { fetchLists(); }, []);
   useEffect(() => { if (selectedList) fetchProspects(selectedList.id); }, [selectedList]);
@@ -111,9 +117,9 @@ const ProspectListManager: React.FC = () => {
 
     try {
       while (fetchMore) {
-        const { data, error } = await supabase
-          .from("email_list_prospects")
-          .select("id, prospect_id, prospects (id, name, email, company, phone, sender_name, sender_email)")
+            const { data, error } = await supabase
+              .from("email_list_prospects")
+              .select("id, prospect_id, prospects (id, name, email, company, phone, country, industry, sender_name, sender_email)")
           .eq("list_id", listId)
           .range(from, from + pageSize - 1);
 
@@ -219,7 +225,9 @@ const ProspectListManager: React.FC = () => {
           company: newProspectForm.company || null, 
           phone: newProspectForm.phone || null,
           sender_name: newProspectForm.sender_name || null,
-          sender_email: newProspectForm.sender_email || null
+          sender_email: newProspectForm.sender_email || null,
+          country: newProspectForm.country || null,
+          industry: newProspectForm.industry || null
         } as any)
         .select()
         .single();
@@ -239,7 +247,7 @@ const ProspectListManager: React.FC = () => {
 
       if (!linkError) {
         toast({ title: "Success", description: "Prospect added to list." });
-        setNewProspectForm({ name: "", email: "", company: "", phone: "", sender_name: "", sender_email: "" });
+        setNewProspectForm({ name: "", email: "", company: "", phone: "", sender_name: "", sender_email: "", country: "", industry: "" });
         setIsAddProspectOpen(false);
         fetchProspects(selectedList.id);
         fetchLists(); // Update counts
@@ -255,88 +263,305 @@ const ProspectListManager: React.FC = () => {
 
   const handleExcelUpload = async (evt: React.ChangeEvent<HTMLInputElement>) => {
     const file = evt.target.files && evt.target.files[0];
-    if (!selectedList || !file) return;
+    if (!selectedList || !file) {
+      console.log('Missing selectedList or file:', { selectedList, file });
+      toast({ title: "Error", description: "Please select a list first and choose a file.", variant: "destructive" });
+      return;
+    }
 
     setExcelUploading(true);
+    setImportProgress({ processed: 0, total: 0, errors: 0 });
+    setImportResults(null);
+    
+    console.log('Starting import for list:', selectedList.id, 'file:', file.name);
     const reader = new FileReader();
     reader.onload = async (e) => {
       try {
         const data = e.target?.result;
+        console.log('File loaded, parsing with XLSX...');
+        
         const workbook = XLSX.read(data, { type: "binary" });
-        const sheetName = workbook.SheetNames[0];
-        const sheet = workbook.Sheets[sheetName];
+        console.log('Workbook sheets:', workbook.SheetNames);
+        
+        // Find the first sheet with data
+        let sheetName = workbook.SheetNames[0];
+        let sheet = workbook.Sheets[sheetName];
+        
+        // If the first sheet is empty, try others
+        if (!sheet || Object.keys(sheet).length === 0) {
+          for (const name of workbook.SheetNames) {
+            const testSheet = workbook.Sheets[name];
+            if (testSheet && Object.keys(testSheet).length > 0) {
+              sheetName = name;
+              sheet = testSheet;
+              break;
+            }
+          }
+        }
+        
+        console.log('Using sheet:', sheetName);
+        console.log('Sheet data keys:', Object.keys(sheet));
+        
         const rows = XLSX.utils.sheet_to_json(sheet, { header: 1 }) as string[][];
+        console.log('Raw rows data:', rows);
+        console.log('Number of rows:', rows.length);
 
-        // Header mapping logic
+        // Header mapping logic - prefer exact matches and avoid confusing sender_email with main email
         let headerIdx: { [k: string]: number } = {};
         const headerRow = rows[0]?.map(x => (x || "").toString().toLowerCase().trim());
-        
-        if (!headerRow?.includes("email")) {
-          toast({ title: "Error", description: "Missing 'email' column in header", variant: "destructive" });
+
+        console.log('Raw header row:', rows[0]);
+        console.log('Processed headers:', headerRow);
+
+        // Find main email column: prefer exact 'email' (not 'sender_email')
+        const findEmailIndex = () => {
+          if (!headerRow) return -1;
+          // 1) exact matches
+          const exactNames = ['email', 'e-mail', 'email address', 'mail'];
+          for (const name of exactNames) {
+            const idx = headerRow.findIndex(c => c === name);
+            if (idx !== -1) return idx;
+          }
+          // 2) contains 'email' but not 'sender'
+          let idx = headerRow.findIndex(c => c.includes('email') && !c.includes('sender'));
+          if (idx !== -1) return idx;
+          // 3) fallback to first header containing 'email'
+          return headerRow.findIndex(c => c.includes('email'));
+        };
+
+        const emailIndex = findEmailIndex();
+        console.log('Email index found:', emailIndex);
+        if (emailIndex === -1 || emailIndex === undefined) {
+          toast({ title: "Error", description: "Missing 'email' column in header. Please ensure your file has an 'email' column.", variant: "destructive" });
           setExcelUploading(false);
           return;
         }
-        
-        headerRow?.forEach((col, idx) => headerIdx[col] = idx);
 
+        headerIdx['email'] = emailIndex;
+
+        // Map all possible column variations with prioritization (sender_* checked before general matches)
+        headerRow?.forEach((col, idx) => {
+          const lowerCol = (col || '').toLowerCase().trim();
+
+          // Sender-specific first
+          if ((lowerCol === 'sender_name' || lowerCol === 'sender name' || lowerCol === 'from name' || (lowerCol.includes('sender') && lowerCol.includes('name')))) {
+            headerIdx['sender_name'] = idx;
+            return;
+          }
+          if ((lowerCol === 'sender_email' || lowerCol === 'sender email' || lowerCol === 'from email' || (lowerCol.includes('sender') && lowerCol.includes('email')))) {
+            headerIdx['sender_email'] = idx;
+            return;
+          }
+
+          // General fields
+          if (lowerCol === 'name' || lowerCol === 'full name' || lowerCol === 'contact name' || lowerCol === 'first name' || lowerCol === 'contact') headerIdx['name'] = idx;
+          if (lowerCol === 'company' || lowerCol === 'organization' || lowerCol === 'organisation' || lowerCol.includes('company') || lowerCol.includes('org') || lowerCol === 'business' || lowerCol === 'employer') headerIdx['company'] = idx;
+          if (lowerCol === 'phone' || lowerCol === 'telephone' || lowerCol === 'mobile' || lowerCol === 'cell' || lowerCol === 'phone number' || lowerCol.includes('phone') || lowerCol === 'tel') headerIdx['phone'] = idx;
+          if (lowerCol === 'country' || lowerCol === 'nation' || lowerCol.includes('country') || lowerCol === 'location') headerIdx['country'] = idx;
+          if (lowerCol === 'industry' || lowerCol === 'sector' || lowerCol === 'business type' || lowerCol.includes('industry') || lowerCol === 'field' || lowerCol === 'category') headerIdx['industry'] = idx;
+        });
+
+        console.log('Final column mapping:', headerIdx);
         const { data: userData } = await supabase.auth.getUser();
         const user_id = userData?.user?.id;
-        if (!user_id) return;
+        
+        console.log('User data:', userData);
+        console.log('User ID:', user_id);
 
-        let addedCount = 0;
+        // Check which optional columns exist in the DB to avoid insert errors
+        const columnAvailability: { [k: string]: boolean } = {
+          country: true,
+          industry: true,
+          sender_name: true,
+          sender_email: true,
+        };
+
+        // Helper to test a single column
+        const testColumn = async (col: string) => {
+          try {
+            await supabase.from('prospects').select(col).limit(1);
+            return true;
+          } catch (err: any) {
+            // If PostgREST returns an error about missing column, mark unavailable
+            const msg = err?.message || '';
+            if (msg.toLowerCase().includes('could not find') || msg.toLowerCase().includes('column')) {
+              return false;
+            }
+            // For any other error, assume column might exist (we'll surface insert errors later)
+            return true;
+          }
+        };
+
+        // Test availability for each optional field (do them sequentially, cheap operations)
+        columnAvailability.country = await testColumn('country');
+        columnAvailability.industry = await testColumn('industry');
+        columnAvailability.sender_name = await testColumn('sender_name');
+        columnAvailability.sender_email = await testColumn('sender_email');
+
+        console.log('Column availability:', columnAvailability);
+        
+        if (!user_id) {
+          toast({ title: "Error", description: "You must be logged in to import prospects.", variant: "destructive" });
+          setExcelUploading(false);
+          return;
+        }
+
+        const totalRows = rows.length - 1; // Exclude header
+        setImportProgress({ processed: 0, total: totalRows, errors: 0 });
+        
+        let successCount = 0;
+        let errorCount = 0;
+        let skippedCount = 0;
 
         // Process rows
         for (let i = 1; i < rows.length; i++) {
           const row = rows[i];
-          const email = row[headerIdx["email"]];
-          const name = row[headerIdx["name"]] || email?.split('@')[0] || "Unknown"; // Fallback name
+          
+          // Skip empty rows
+          if (!row || row.every(cell => !cell || cell.toString().trim() === '')) {
+            console.log(`Skipping empty row ${i + 1}`);
+            continue;
+          }
+          
+          console.log(`Processing row ${i + 1}:`, row);
+          
+          const email = row[headerIdx["email"]]?.toString().trim();
+          console.log(`Email extracted: "${email}" from index ${headerIdx["email"]}`);
+          
+          if (!email) {
+            console.log(`Skipping row ${i + 1}: no email found`);
+            skippedCount++;
+            setImportProgress(prev => ({ ...prev, processed: i, errors: prev.errors + 1 }));
+            continue;
+          }
+          
+          // Validate email format
+          const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+          if (!emailRegex.test(email)) {
+            console.log(`Skipping row ${i + 1}: invalid email format: ${email}`);
+            errorCount++;
+            setImportProgress(prev => ({ ...prev, processed: i, errors: prev.errors + 1 }));
+            continue;
+          }
+          
+          const name = row[headerIdx["name"]]?.toString().trim() || email.split('@')[0] || "Unknown";
 
-          if (!email) continue;
+          console.log(`Processing row ${i + 1}: ${name} <${email}>`);
 
           // Create/Get Prospect
           let { data: prospect } = await supabase
             .from("prospects")
             .select("id")
-            .eq("email", email.trim().toLowerCase())
+            .eq("email", email.toLowerCase())
             .eq("user_id", user_id)
             .maybeSingle();
 
+          console.log('Existing prospect check result:', prospect);
+
           if (!prospect) {
-            const { data: newProspect } = await supabase
+            // Start with basic required fields
+            const prospectData: any = {
+              user_id,
+              name,
+              email: email.toLowerCase(),
+            };
+
+            // Add optional fields only if they exist in the data
+            if (headerIdx["company"] !== undefined && row[headerIdx["company"]]) {
+              prospectData.company = row[headerIdx["company"]]?.toString().trim();
+            }
+            if (headerIdx["phone"] !== undefined && row[headerIdx["phone"]]) {
+              prospectData.phone = row[headerIdx["phone"]]?.toString().trim();
+            }
+            // Add optional fields only if present in the file, non-empty, and column exists in DB
+            if (headerIdx["country"] !== undefined && row[headerIdx["country"]] && columnAvailability.country) {
+              prospectData.country = row[headerIdx["country"]]?.toString().trim();
+            }
+            if (headerIdx["industry"] !== undefined && row[headerIdx["industry"]] && columnAvailability.industry) {
+              prospectData.industry = row[headerIdx["industry"]]?.toString().trim();
+            }
+            if (headerIdx["sender_name"] !== undefined && row[headerIdx["sender_name"]] && columnAvailability.sender_name) {
+              prospectData.sender_name = row[headerIdx["sender_name"]]?.toString().trim();
+            }
+            if (headerIdx["sender_email"] !== undefined && row[headerIdx["sender_email"]] && columnAvailability.sender_email) {
+              prospectData.sender_email = row[headerIdx["sender_email"]]?.toString().trim();
+            }
+
+            console.log('Inserting prospect:', prospectData);
+
+            const { data: newProspect, error: insertError } = await supabase
               .from("prospects")
-              .insert({
-                user_id,
-                name,
-                email: email.trim().toLowerCase(),
-                company: headerIdx["company"] !== undefined ? row[headerIdx["company"]] : null,
-                phone: headerIdx["phone"] !== undefined ? row[headerIdx["phone"]] : null,
-                sender_name: headerIdx["sender_name"] !== undefined ? row[headerIdx["sender_name"]] : null,
-                sender_email: headerIdx["sender_email"] !== undefined ? row[headerIdx["sender_email"]] : null
-              } as any)
+              .insert(prospectData)
               .select("id")
               .single();
+              
+            if (insertError) {
+              console.error('Error inserting prospect:', insertError, 'Data:', prospectData);
+              errorCount++;
+              setImportProgress(prev => ({ ...prev, processed: i, errors: prev.errors + 1 }));
+              continue; // Skip this row but continue with others
+            }
+            
             prospect = newProspect;
+            console.log('New prospect created:', prospect);
           }
 
           // Link to List
           if (prospect) {
-            const { error: linkError } = await supabase
-              .from("email_list_prospects")
-              .insert({ list_id: selectedList.id, prospect_id: prospect.id });
+            console.log('Checking if prospect', prospect.id, 'is already linked to list', selectedList.id);
             
-            if (!linkError) addedCount++;
+            // Check if already linked
+            const { data: existingLink } = await supabase
+              .from("email_list_prospects")
+              .select("id")
+              .eq("list_id", selectedList.id)
+              .eq("prospect_id", prospect.id)
+              .maybeSingle();
+
+            if (existingLink) {
+              console.log('Prospect already linked to list, skipping');
+              successCount++; // Count as success since prospect exists and is linked
+            } else {
+              console.log('Linking prospect', prospect.id, 'to list', selectedList.id);
+              const { error: linkError } = await supabase
+                .from("email_list_prospects")
+                .insert({ list_id: selectedList.id, prospect_id: prospect.id });
+
+              if (!linkError) {
+                successCount++;
+                console.log('Successfully linked prospect to list');
+              } else {
+                console.error('Error linking prospect to list:', linkError);
+                errorCount++;
+              }
+            }
           }
+          
+          setImportProgress(prev => ({ ...prev, processed: i }));
         }
 
-        toast({ title: "Import Complete", description: `Successfully added ${addedCount} prospects.` });
-        setIsImportOpen(false);
-        fetchProspects(selectedList.id);
-        fetchLists();
+        setImportResults({ success: successCount, errors: errorCount, skipped: skippedCount });
+        
+        console.log('Import completed:', { successCount, errorCount, skippedCount });
+        
+        if (successCount > 0) {
+          toast({ title: "Import Complete", description: `Successfully processed ${successCount} prospects. ${errorCount > 0 ? `${errorCount} errors occurred.` : ''} Duplicates were automatically skipped.` });
+          // Don't close dialog immediately so user can see results
+          setTimeout(() => {
+            setIsImportOpen(false);
+            fetchProspects(selectedList.id);
+            fetchLists();
+          }, 2000);
+        } else {
+          toast({ title: "Import Warning", description: "No new prospects were added. All prospects may already exist in this list.", variant: "destructive" });
+          // Keep dialog open so user can see the results and try again
+        }
       } catch (err: any) {
         console.error(err);
         toast({ title: "Import Failed", description: "Could not parse the file.", variant: "destructive" });
       } finally {
         setExcelUploading(false);
+        setImportProgress({ processed: 0, total: 0, errors: 0 });
       }
     };
     reader.readAsBinaryString(file);
@@ -351,7 +576,9 @@ const ProspectListManager: React.FC = () => {
   const filteredProspects = prospects.filter(p => 
     p.name.toLowerCase().includes(prospectSearchQuery.toLowerCase()) ||
     p.email.toLowerCase().includes(prospectSearchQuery.toLowerCase()) ||
-    (p.company && p.company.toLowerCase().includes(prospectSearchQuery.toLowerCase()))
+    (p.company && p.company.toLowerCase().includes(prospectSearchQuery.toLowerCase())) ||
+    (p.country && p.country.toLowerCase().includes(prospectSearchQuery.toLowerCase())) ||
+    (p.industry && p.industry.toLowerCase().includes(prospectSearchQuery.toLowerCase()))
   );
 
   if (selectedList) {
@@ -424,13 +651,16 @@ const ProspectListManager: React.FC = () => {
                       <th className="h-12 px-4 align-middle font-medium text-muted-foreground">Email</th>
                       <th className="h-12 px-4 align-middle font-medium text-muted-foreground">Company</th>
                       <th className="h-12 px-4 align-middle font-medium text-muted-foreground">Phone</th>
-                      <th className="h-12 px-4 align-middle font-medium text-muted-foreground">Sender Profile</th>
+                      <th className="h-12 px-4 align-middle font-medium text-muted-foreground">Country</th>
+                      <th className="h-12 px-4 align-middle font-medium text-muted-foreground">Industry</th>
+                      <th className="h-12 px-4 align-middle font-medium text-muted-foreground">Sender Name</th>
+                      <th className="h-12 px-4 align-middle font-medium text-muted-foreground">Sender Email</th>
                     </tr>
                   </thead>
                   <tbody className="[&_tr:last-child]:border-0">
                     {filteredProspects.length === 0 ? (
                       <tr>
-                        <td colSpan={5} className="h-24 text-center text-muted-foreground">
+                        <td colSpan={8} className="h-24 text-center text-muted-foreground">
                           No prospects found.
                         </td>
                       </tr>
@@ -441,14 +671,10 @@ const ProspectListManager: React.FC = () => {
                           <td className="p-4 align-middle text-blue-600">{p.email}</td>
                           <td className="p-4 align-middle">{p.company || '-'}</td>
                           <td className="p-4 align-middle">{p.phone || '-'}</td>
-                          <td className="p-4 align-middle text-xs text-gray-500">
-                            {p.sender_name ? (
-                              <div className="flex flex-col">
-                                <span>{p.sender_name}</span>
-                                <span className="opacity-70">{p.sender_email}</span>
-                              </div>
-                            ) : '-'}
-                          </td>
+                          <td className="p-4 align-middle">{p.country || '-'}</td>
+                          <td className="p-4 align-middle">{p.industry || '-'}</td>
+                          <td className="p-4 align-middle">{p.sender_name || '-'}</td>
+                          <td className="p-4 align-middle">{p.sender_email || '-'}</td>
                         </tr>
                       ))
                     )}
@@ -496,6 +722,20 @@ const ProspectListManager: React.FC = () => {
                     onChange={(e) => setNewProspectForm({...newProspectForm, phone: e.target.value})}
                   />
                 </div>
+                <div className="space-y-2">
+                  <Label>Country</Label>
+                  <Input 
+                    value={newProspectForm.country} 
+                    onChange={(e) => setNewProspectForm({...newProspectForm, country: e.target.value})}
+                  />
+                </div>
+                <div className="space-y-2">
+                  <Label>Industry</Label>
+                  <Input 
+                    value={newProspectForm.industry} 
+                    onChange={(e) => setNewProspectForm({...newProspectForm, industry: e.target.value})}
+                  />
+                </div>
               </div>
               <Separator />
               <div className="space-y-2">
@@ -529,6 +769,41 @@ const ProspectListManager: React.FC = () => {
               <DialogDescription>Upload a CSV or Excel file to bulk import prospects.</DialogDescription>
             </DialogHeader>
             <div className="space-y-4 py-4">
+              {excelUploading && importProgress.total > 0 && (
+                <div className="bg-gray-50 p-4 rounded-md">
+                  <div className="flex justify-between text-sm mb-2">
+                    <span>Processing prospects...</span>
+                    <span>{importProgress.processed}/{importProgress.total}</span>
+                  </div>
+                  <div className="w-full bg-gray-200 rounded-full h-2">
+                    <div 
+                      className="bg-blue-600 h-2 rounded-full transition-all duration-300" 
+                      style={{ width: `${(importProgress.processed / importProgress.total) * 100}%` }}
+                    ></div>
+                  </div>
+                  {importProgress.errors > 0 && (
+                    <p className="text-xs text-red-600 mt-2">
+                      {importProgress.errors} errors encountered
+                    </p>
+                  )}
+                </div>
+              )}
+              
+              {importResults && (
+                <div className="bg-green-50 p-4 rounded-md">
+                  <h4 className="font-semibold text-green-800 mb-2">Import Results</h4>
+                  <div className="text-sm space-y-1">
+                    <p className="text-green-700">✓ {importResults.success} prospects added successfully</p>
+                    {importResults.errors > 0 && (
+                      <p className="text-red-600">✗ {importResults.errors} errors occurred</p>
+                    )}
+                    {importResults.skipped > 0 && (
+                      <p className="text-yellow-600">⚠ {importResults.skipped} rows skipped</p>
+                    )}
+                  </div>
+                </div>
+              )}
+              
               <div className="border-2 border-dashed rounded-lg p-8 text-center hover:bg-gray-50 transition-colors cursor-pointer relative">
                 <input 
                   type="file" 
@@ -536,6 +811,7 @@ const ProspectListManager: React.FC = () => {
                   className="absolute inset-0 w-full h-full opacity-0 cursor-pointer"
                   onChange={handleExcelUpload}
                   disabled={excelUploading}
+                  key={Date.now()} // Force re-render to allow same file re-upload
                 />
                 <div className="flex flex-col items-center gap-2">
                   {excelUploading ? (
@@ -544,20 +820,22 @@ const ProspectListManager: React.FC = () => {
                     <FileUp className="h-8 w-8 text-gray-400" />
                   )}
                   <p className="text-sm font-medium text-gray-900">
-                    {excelUploading ? "Uploading..." : "Click to upload or drag and drop"}
+                    {excelUploading ? "Processing file..." : "Click to upload or drag and drop"}
                   </p>
                   <p className="text-xs text-gray-500">CSV, Excel (max 5MB)</p>
                 </div>
               </div>
-              <div className="bg-blue-50 p-4 rounded-md text-xs text-blue-800 space-y-2">
-                <p className="font-semibold">Required Columns:</p>
-                <ul className="list-disc list-inside">
-                  <li>email (Required)</li>
-                  <li>name (Recommended)</li>
-                </ul>
-                <p className="mt-2 font-semibold">Optional Columns:</p>
-                <p>company, phone, sender_name, sender_email</p>
-              </div>
+                <div className="bg-blue-50 p-4 rounded-md text-xs text-blue-800 space-y-2">
+                  <p className="font-semibold">Required Columns:</p>
+                  <ul className="list-disc list-inside">
+                    <li>email (or e-mail, mail, email address)</li>
+                  </ul>
+                  <p className="mt-2 font-semibold">Supported Optional Columns:</p>
+                  <p>name (or full name, contact name), company (or organization), phone (or telephone, mobile)</p>
+                  <p className="mt-2 text-xs italic">Column names are automatically matched with flexible variations.</p>
+                  <p className="mt-2 text-xs text-orange-600">Note: Country, industry, and sender fields are temporarily disabled while database schema updates are applied.</p>
+                  <p className="mt-2 text-xs text-green-600">Note: Duplicate prospects will be skipped automatically.</p>
+                </div>
             </div>
           </DialogContent>
         </Dialog>

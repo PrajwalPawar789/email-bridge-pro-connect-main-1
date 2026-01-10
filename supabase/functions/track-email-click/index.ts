@@ -42,7 +42,7 @@ serve(async (req) => {
             const now = new Date().getTime();
             const timeDiff = now - sentTime;
             
-            if (timeDiff < 2000) { 
+            if (timeDiff < 5000) { 
                 botScore += 90;
                 botReasons.push('speed_trap_critical');
             }

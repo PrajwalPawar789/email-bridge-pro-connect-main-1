@@ -77,7 +77,12 @@ const Dashboard = () => {
     switch (activeTab) {
       case 'home':
       case 'analytics': return <EmailAnalyticsDashboard />;
-      case 'campaigns': return <CampaignList onCreateCampaign={() => setActiveTab('builder')} />;
+      case 'campaigns': 
+        navigate('/campaigns');
+        return <div></div>;
+      case 'inbox': 
+        navigate('/inbox');
+        return <div></div>;
       case 'builder': return <CampaignBuilder emailConfigs={emailConfigs} />;
       case 'templates': return <TemplateManager />;
       case 'mailbox': return <Mailbox emailConfigs={emailConfigs} />;

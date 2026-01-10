@@ -56,6 +56,7 @@ interface Recipient {
   assigned_email_config_id: string | null;
   message_id?: string;
   thread_id?: string;
+  sender_email?: string | null;
 }
 
 type PersonalizationData = {
@@ -217,7 +218,20 @@ const fetchEmailConfigForCampaign = async (campaign: Campaign): Promise<EmailCon
   return normalizeEmailConfig(emailConfigRow);
 };
 
-const sendEmail = async (config: EmailConfig, recipient: Recipient, campaign: Campaign, extraData: PersonalizationData = {}, previousMessageId?: string, threadId?: string) => {
+type EmailContentOverride = {
+  subject: string;
+  body: string;
+};
+
+const sendEmail = async (
+  config: EmailConfig,
+  recipient: Recipient,
+  campaign: Campaign,
+  extraData: PersonalizationData = {},
+  previousMessageId?: string,
+  threadId?: string,
+  contentOverride?: EmailContentOverride
+) => {
   console.log(`Attempting to send email to: ${recipient.email}`);
 
   const transporter = createTransport({
@@ -243,10 +257,13 @@ const sendEmail = async (config: EmailConfig, recipient: Recipient, campaign: Ca
     throw error instanceof Error ? error : new Error(getErrorMessage(error));
   }
 
-  const personalizedSubject = personalizeContent(campaign.subject, recipient, extraData, true);
+  const subjectToSend = contentOverride?.subject ?? campaign.subject;
+  const bodyToSend = contentOverride?.body ?? campaign.body;
+
+  const personalizedSubject = personalizeContent(subjectToSend, recipient, extraData, true);
   console.log(`Personalized subject: ${personalizedSubject}`);
 
-  const personalizedContent = personalizeContent(campaign.body, recipient, extraData);
+  const personalizedContent = personalizeContent(bodyToSend, recipient, extraData);
   console.log(`Personalizing content for recipient: ${recipient.id} (${recipient.email})`);
 
   const { content: contentWithClickTracking, trackingUrls } = addTrackingToLinks(personalizedContent, campaign.id, recipient.id);
@@ -407,13 +424,85 @@ const processBatch = async (campaignId: string, batchSize = 3, step = 0, emailCo
       };
     }
 
+    if (step === 0) {
+      const { count: followupCount, error: followupCountError } = await supabase
+        .from('campaign_followups')
+        .select('id', { count: 'exact', head: true })
+        .eq('campaign_id', campaignId);
+
+      if (followupCountError) {
+        console.warn('Error checking follow-up count:', followupCountError.message);
+      } else if ((followupCount || 0) > 0) {
+        const totalSteps = 1 + (followupCount || 0);
+
+        const startOfDay = new Date();
+        startOfDay.setHours(0, 0, 0, 0);
+
+        let followupsSentTodayQuery = supabase
+          .from('recipients')
+          .select('id', { count: 'exact', head: true })
+          .eq('campaign_id', campaignId)
+          .gt('current_step', 0)
+          .gte('last_email_sent_at', startOfDay.toISOString());
+
+        if (emailConfigId) {
+          followupsSentTodayQuery = followupsSentTodayQuery.or(
+            `assigned_email_config_id.eq.${emailConfigId},assigned_email_config_id.is.null`
+          );
+        }
+
+        const { count: followupsSentToday, error: followupsSentTodayError } = await followupsSentTodayQuery;
+
+        if (followupsSentTodayError) {
+          console.warn('Error checking follow-ups sent today:', followupsSentTodayError.message);
+        } else if ((followupsSentToday || 0) > 0) {
+          console.log(`Follow-ups already sent today for campaign ${campaignId}. Pausing initial batch.`);
+          return {
+            success: true,
+            message: 'Follow-ups sent today; delaying initial batch',
+            emailsSent: 0,
+            hasMore: true
+          };
+        }
+
+        let pendingFollowupsQuery = supabase
+          .from('recipients')
+          .select('id', { count: 'exact', head: true })
+          .eq('campaign_id', campaignId)
+          .eq('replied', false)
+          .eq('bounced', false)
+          .in('status', ['sent', 'processing'])
+          .or(`current_step.is.null,current_step.lt.${totalSteps - 1}`);
+
+        if (emailConfigId) {
+          pendingFollowupsQuery = pendingFollowupsQuery.or(
+            `assigned_email_config_id.eq.${emailConfigId},assigned_email_config_id.is.null`
+          );
+        }
+
+        const { count: pendingFollowups, error: pendingFollowupsError } = await pendingFollowupsQuery;
+
+        if (pendingFollowupsError) {
+          console.warn('Error checking pending follow-ups:', pendingFollowupsError.message);
+        } else if ((pendingFollowups || 0) > 0) {
+          console.log(`Follow-ups pending for campaign ${campaignId}. Pausing initial batch.`);
+          return {
+            success: true,
+            message: 'Follow-ups pending; delaying initial batch',
+            emailsSent: 0,
+            hasMore: true
+          };
+        }
+      }
+    }
+
     // const emailConfig = await fetchEmailConfigForCampaign(campaign); // Moved inside loop
 
     // Get recipients based on step
     // We first select IDs to lock them, preventing race conditions
     let recipientsQuery = supabase
       .from('recipients')
-      .select('id, assigned_email_config_id') // Select assigned config
+      .select('id, assigned_email_config_id, sender_email') // Select assigned config and sender_email
       .eq('campaign_id', campaignId)
       .eq('replied', false) // Don't send if they replied
       .neq('status', 'processing') // Exclude currently processing
@@ -481,8 +570,60 @@ const processBatch = async (campaignId: string, batchSize = 3, step = 0, emailCo
       };
     }
 
+    // Check daily limits for the email config
+    let effectiveBatchSize = recipientIds.length;
+    if (emailConfigId) {
+      const { data: configData, error: configError } = await supabase
+        .from('campaign_email_configurations')
+        .select('daily_limit, last_sent_at')
+        .eq('campaign_id', campaignId)
+        .eq('email_config_id', emailConfigId)
+        .single();
+
+      if (configError) {
+        console.error(`Error fetching config limits: ${configError.message}`);
+      } else if (configData) {
+        const dailyLimit = configData.daily_limit || 100;
+        
+        // Count emails sent today from this config
+        const today = new Date();
+        today.setHours(0, 0, 0, 0);
+        const tomorrow = new Date(today);
+        tomorrow.setDate(tomorrow.getDate() + 1);
+        
+        const { count: sentToday, error: countError } = await supabase
+          .from('recipients')
+          .select('id', { count: 'exact', head: true })
+          .eq('assigned_email_config_id', emailConfigId)
+          .eq('campaign_id', campaignId)
+          .gte('last_email_sent_at', today.toISOString())
+          .lt('last_email_sent_at', tomorrow.toISOString());
+
+        if (countError) {
+          console.error(`Error counting sent emails: ${countError.message}`);
+        } else {
+          const remainingCapacity = dailyLimit - (sentToday || 0);
+          if (remainingCapacity <= 0) {
+            console.log(`Daily limit of ${dailyLimit} reached for config ${emailConfigId}. Skipping batch.`);
+            return { 
+              success: true, 
+              message: 'Daily limit reached',
+              emailsSent: 0,
+              hasMore: true // Try again tomorrow
+            };
+          }
+          
+          effectiveBatchSize = Math.min(effectiveBatchSize, remainingCapacity);
+          console.log(`Config ${emailConfigId}: sent ${sentToday} today, limit ${dailyLimit}, remaining ${remainingCapacity}, will send ${effectiveBatchSize}`);
+        }
+      }
+    }
+
+    // Limit recipients to effective batch size
+    const recipientsToProcess = recipientIds.slice(0, effectiveBatchSize);
+
     // LOCKING: Mark these recipients as 'processing' to prevent other workers from picking them up
-    const idsToProcess = recipientIds.map(r => r.id);
+    const idsToProcess = recipientsToProcess.map(r => r.id);
     
     // Atomic lock: Only update if status matches what we expect
     const expectedStatus = step === 0 ? 'pending' : 'sent';
@@ -551,7 +692,30 @@ const processBatch = async (campaignId: string, batchSize = 3, step = 0, emailCo
       
       try {
         // Determine which email config to use
-        let configIdToUse = emailConfigId || recipient.assigned_email_config_id || campaign.email_config_id;
+        let configIdToUse = emailConfigId;
+        
+        if (!configIdToUse && recipient.sender_email) {
+          // If recipient has a specific sender_email, find the matching email config
+          const { data: senderConfig, error: senderError } = await supabase
+            .from('email_configs')
+            .select('id')
+            .eq('smtp_username', recipient.sender_email)
+            .eq('user_id', campaign.user_id)
+            .maybeSingle();
+            
+          if (senderError) {
+            console.warn(`Error finding config for sender_email ${recipient.sender_email}:`, senderError.message);
+          } else if (senderConfig) {
+            configIdToUse = senderConfig.id;
+            console.log(`Using specific sender config ${configIdToUse} for recipient ${recipient.email} (sender_email: ${recipient.sender_email})`);
+          } else {
+            console.warn(`No email config found for sender_email ${recipient.sender_email}, falling back to assigned config`);
+          }
+        }
+        
+        if (!configIdToUse) {
+          configIdToUse = recipient.assigned_email_config_id || campaign.email_config_id;
+        }
         
         if (!configIdToUse) {
            throw new Error("No email configuration assigned to recipient or campaign.");
@@ -600,7 +764,15 @@ const processBatch = async (campaignId: string, batchSize = 3, step = 0, emailCo
         const prospectData = prospectMap.get(recipient.email) || {};
 
         // Send email
-        const info = await sendEmail(emailConfig, recipient, campaign, prospectData, recipient.message_id, recipient.thread_id);
+        const info = await sendEmail(
+          emailConfig,
+          recipient,
+          campaign,
+          prospectData,
+          recipient.message_id,
+          recipient.thread_id,
+          { subject, body }
+        );
 
         // Update recipient status
         const updateData: any = { 
@@ -636,6 +808,15 @@ const processBatch = async (campaignId: string, batchSize = 3, step = 0, emailCo
           .update({ status: 'failed' })
           .eq('id', recipient.id);
       }
+    }
+
+    // Update last_sent_at for the email config if any emails were sent
+    if (emailsSent > 0 && emailConfigId) {
+      await supabase
+        .from('campaign_email_configurations')
+        .update({ last_sent_at: new Date().toISOString() })
+        .eq('campaign_id', campaignId)
+        .eq('email_config_id', emailConfigId);
     }
 
     // Check if there are more pending recipients

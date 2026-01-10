@@ -59,12 +59,9 @@ serve(async (req) => {
             const now = new Date().getTime();
             const timeDiff = now - sentTime;
 
-            if (timeDiff < 2000) { // < 2 seconds
+            if (timeDiff < 5000) { // < 5 seconds
                 botScore += 90;
                 botReasons.push('speed_trap_critical');
-            } else if (timeDiff < 5000) { // < 5 seconds
-                botScore += 50;
-                botReasons.push('speed_trap_suspicious');
             }
         }
 

@@ -86,6 +86,60 @@ const monitorCampaigns = async () => {
         }
       }
 
+      // For sending campaigns, check follow-ups first, then initial emails
+      // For sent campaigns, only check follow-ups
+      if (campaign.status === 'sending' || campaign.status === 'sent') {
+        // --- FOLLOW-UP STEPS FIRST (for sending campaigns) ---
+        const campaignFollowups = followups?.filter(f => f.campaign_id === campaign.id) || [];
+        const campaignConfigsForFollowup = emailConfigs?.filter(c => c.campaign_id === campaign.id) || [];
+
+        if (campaignConfigsForFollowup.length > 0) {
+          // Parallel follow-ups per sender
+          const promises = campaignConfigsForFollowup.map(async (config) => {
+            for (const fp of campaignFollowups) {
+              try {
+                const { data, error } = await supabase.functions.invoke('send-campaign-batch', {
+                  body: { 
+                    campaignId: campaign.id, 
+                    batchSize: 10, 
+                    step: fp.step_number,
+                    emailConfigId: config.email_config_id
+                  }
+                });
+                
+                if (error) {
+                  console.error(`Failed to trigger Step ${fp.step_number} for ${campaign.name} (Sender: ${config.email_config_id}):`, error);
+                  results.push({ id: campaign.id, name: campaign.name, step: fp.step_number, sender: config.email_config_id, status: 'error', error });
+                } else {
+                  results.push({ id: campaign.id, name: campaign.name, step: fp.step_number, sender: config.email_config_id, status: 'triggered', data });
+                }
+              } catch (err) {
+                console.error(`Exception triggering Step ${fp.step_number} for ${campaign.name}:`, err);
+              }
+            }
+          });
+          await Promise.all(promises);
+        } else {
+          // Legacy single sender follow-ups
+          for (const fp of campaignFollowups) {
+            try {
+              const { data, error } = await supabase.functions.invoke('send-campaign-batch', {
+                body: { campaignId: campaign.id, batchSize: 10, step: fp.step_number }
+              });
+              
+              if (error) {
+                console.error(`Failed to trigger Step ${fp.step_number} for ${campaign.name}:`, error);
+                results.push({ id: campaign.id, name: campaign.name, step: fp.step_number, status: 'error', error });
+              } else {
+                results.push({ id: campaign.id, name: campaign.name, step: fp.step_number, status: 'triggered', data });
+              }
+            } catch (err) {
+              console.error(`Exception triggering Step ${fp.step_number} for ${campaign.name}:`, err);
+            }
+          }
+        }
+      }
+
       // --- STEP 0: Initial Emails ---
       if (campaign.status === 'sending') {
         // Default delay to 1 minute if not set
@@ -160,62 +214,7 @@ const monitorCampaigns = async () => {
         }
       }
 
-      // --- FOLLOW-UP STEPS ---
-      const campaignFollowups = followups?.filter(f => f.campaign_id === campaign.id) || [];
-      const campaignConfigsForFollowup = emailConfigs?.filter(c => c.campaign_id === campaign.id) || [];
-
-      if (campaignConfigsForFollowup.length > 0) {
-        // Parallel follow-ups per sender
-        const promises = campaignConfigsForFollowup.map(async (config) => {
-          for (const fp of campaignFollowups) {
-            try {
-              const { data, error } = await supabase.functions.invoke('send-campaign-batch', {
-                body: { 
-                  campaignId: campaign.id, 
-                  batchSize: 10, 
-                  step: fp.step_number,
-                  emailConfigId: config.email_config_id
-                }
-              });
-              
-              if (error) {
-                console.error(`Failed to trigger Step ${fp.step_number} for ${campaign.name} (Sender: ${config.email_config_id}):`, error);
-                results.push({ id: campaign.id, name: campaign.name, step: fp.step_number, sender: config.email_config_id, status: 'error', error });
-              } else {
-                results.push({ id: campaign.id, name: campaign.name, step: fp.step_number, sender: config.email_config_id, status: 'triggered', data });
-              }
-            } catch (err) {
-              console.error(`Exception triggering Step ${fp.step_number} for ${campaign.name}:`, err);
-            }
-          }
-        });
-        await Promise.all(promises);
-      } else {
-        // Legacy single sender follow-ups
-        for (const fp of campaignFollowups) {
-          // For follow-ups, we just trigger the worker. It handles the "is eligible?" logic per recipient.
-          // We don't want to spam it too hard, but since we don't track "last_followup_batch_at",
-          // we rely on the worker being efficient.
-          
-          // console.log(`Triggering follow-up check for ${campaign.name} (Step ${fp.step_number})`);
-          
-          try {
-            const { data, error } = await supabase.functions.invoke('send-campaign-batch', {
-              body: { campaignId: campaign.id, batchSize: 10, step: fp.step_number }
-            });
-            
-            if (error) {
-              console.error(`Failed to trigger Step ${fp.step_number} for ${campaign.name}:`, error);
-              results.push({ id: campaign.id, name: campaign.name, step: fp.step_number, status: 'error', error });
-            } else {
-              // Only log if it actually did something (optional, but hard to know from here without parsing data)
-              results.push({ id: campaign.id, name: campaign.name, step: fp.step_number, status: 'triggered', data });
-            }
-          } catch (err) {
-            console.error(`Exception triggering Step ${fp.step_number} for ${campaign.name}:`, err);
-          }
-        }
-      }
+    }
     }
     
     return { 

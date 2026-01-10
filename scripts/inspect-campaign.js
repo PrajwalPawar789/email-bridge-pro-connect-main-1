@@ -15,14 +15,14 @@ const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.VITE_SU
 const supabase = createClient(supabaseUrl, supabaseKey);
 
 async function inspectCampaign() {
-  const campaignName = 'Prajwal 3333';
+  const campaignId = '59d00bc7-08e7-4af8-83b8-c4921d3c7d12';
   
-  console.log(`Searching for campaign: ${campaignName}`);
+  console.log(`Searching for campaign: ${campaignId}`);
 
   const { data: campaigns, error } = await supabase
     .from('campaigns')
     .select('*')
-    .ilike('name', `%${campaignName}%`);
+    .eq('id', campaignId);
 
   if (error) {
     console.error('Error fetching campaign:', error);

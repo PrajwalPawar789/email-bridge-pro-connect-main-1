@@ -107,9 +107,35 @@ const CampaignList = ({ onCreateCampaign }: CampaignListProps) => {
     };
   };
 
-  const getRecipientStats = (recipients: any[]) => {
+  const getRecipientStats = (recipients: any[], campaign: any) => {
     if (!recipients) return { total: 0, sent: 0, pending: 0, failed: 0, bounced: 0, replied: 0, processing: 0, other: 0 };
-    
+
+    // For active campaigns, prefer database counts for consistency
+    if (campaign.status === 'sending' || campaign.status === 'paused') {
+      const dbSent = campaign.sent_count || 0;
+      const dbFailed = campaign.failed_count || 0;
+      const actualSent = recipients.filter(r => r.status === 'sent').length;
+      const actualFailed = recipients.filter(r => r.status === 'failed').length;
+
+      // Use the higher of database vs actual counts to avoid showing stale data
+      const sent = Math.max(dbSent, actualSent);
+      const failed = Math.max(dbFailed, actualFailed);
+      const pending = recipients.filter(r => r.status === 'pending').length;
+      const processing = recipients.filter(r => r.status === 'processing').length;
+
+      return {
+        total: recipients.length,
+        sent,
+        pending,
+        failed,
+        bounced: recipients.filter(r => r.bounced).length,
+        replied: recipients.filter(r => r.replied).length,
+        processing,
+        other: recipients.filter(r => !['sent', 'pending', 'failed', 'processing'].includes(r.status)).length
+      };
+    }
+
+    // For completed campaigns, calculate accurately from recipients
     return {
       total: recipients.length,
       sent: recipients.filter(r => r.status === 'sent').length,
@@ -120,9 +146,7 @@ const CampaignList = ({ onCreateCampaign }: CampaignListProps) => {
       processing: recipients.filter(r => r.status === 'processing').length,
       other: recipients.filter(r => !['sent', 'pending', 'failed', 'processing'].includes(r.status)).length
     };
-  };
-
-  if (loading) {
+  };  if (loading) {
     return (
       <div className="flex items-center justify-center p-8">
         <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600"></div>
@@ -189,7 +213,7 @@ const CampaignList = ({ onCreateCampaign }: CampaignListProps) => {
       ) : (
         <div className="grid gap-4">
           {campaigns.map((campaign: any) => {
-            const stats = getRecipientStats(campaign.recipients);
+            const stats = getRecipientStats(campaign.recipients, campaign);
             const delayMinutes = campaign.send_delay_minutes || 1;
             const trackingStats = getActualTrackingStats(campaign);
             
@@ -255,6 +279,7 @@ const CampaignList = ({ onCreateCampaign }: CampaignListProps) => {
                     <div>
                       <CardTitle className="text-lg">{campaign.name}</CardTitle>
                       <p className="text-sm text-gray-600 mt-1">{campaign.subject}</p>
+                      <p className="text-xs text-gray-400 mt-1">ID: {campaign.id}</p>
                     </div>
                     <Badge className={getStatusColor(campaign.status, isFollowUpMode, isCompleted)}>
                       {displayStatus}

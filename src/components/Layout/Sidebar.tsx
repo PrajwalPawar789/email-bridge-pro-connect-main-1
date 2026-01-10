@@ -10,7 +10,8 @@ import {
   Settings, 
   ExternalLink,
   ChevronLeft,
-  ChevronRight
+  ChevronRight,
+  Inbox
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import Logo from '../Logo';
@@ -26,6 +27,7 @@ const Sidebar = ({ activeTab, onTabChange, isCollapsed, toggleSidebar }: Sidebar
   const navItems = [
     { id: 'home', label: 'Home', icon: Home },
     { id: 'campaigns', label: 'Campaigns', icon: Send },
+    { id: 'inbox', label: 'Inbox', icon: Inbox },
     { id: 'automations', label: 'Automations', icon: RefreshCw },
     { id: 'contacts', label: 'Contacts', icon: Users },
     { id: 'segments', label: 'Segments', icon: Sparkles, badge: 'Beta' },
