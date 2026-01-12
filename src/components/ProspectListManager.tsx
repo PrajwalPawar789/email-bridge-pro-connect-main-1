@@ -5,6 +5,16 @@ import { Button } from "@/components/ui/button";
 import { Card, CardHeader, CardTitle, CardContent, CardDescription, CardFooter } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import {
+  Pagination,
+  PaginationContent,
+  PaginationEllipsis,
+  PaginationItem,
+  PaginationLink,
+  PaginationNext,
+  PaginationPrevious,
+} from "@/components/ui/pagination";
 import { toast } from "@/hooks/use-toast";
 import { 
   Plus, FileUp, Search, Users, MoreVertical, 
@@ -59,6 +69,10 @@ const ProspectListManager: React.FC = () => {
   const [loading, setLoading] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
   const [prospectSearchQuery, setProspectSearchQuery] = useState("");
+  const [currentPage, setCurrentPage] = useState(1);
+  const [pageSize, setPageSize] = useState(100);
+  const [totalProspects, setTotalProspects] = useState(0);
+  const pageSizeOptions = [100, 500, 1000];
 
   // Dialog States
   const [isCreateListOpen, setIsCreateListOpen] = useState(false);
@@ -82,7 +96,11 @@ const ProspectListManager: React.FC = () => {
   const [importResults, setImportResults] = useState<{ success: number; errors: number; skipped: number } | null>(null);
 
   useEffect(() => { fetchLists(); }, []);
-  useEffect(() => { if (selectedList) fetchProspects(selectedList.id); }, [selectedList]);
+  useEffect(() => {
+    if (selectedList) {
+      fetchProspects(selectedList.id, currentPage, pageSize);
+    }
+  }, [selectedList, currentPage, pageSize]);
 
   const fetchLists = async () => {
     setLoading(true);
@@ -108,46 +126,54 @@ const ProspectListManager: React.FC = () => {
     setLoading(false);
   };
 
-  const fetchProspects = async (listId: string) => {
+  const fetchProspects = async (listId: string, page = currentPage, size = pageSize) => {
     setLoading(true);
-    let allProspects: any[] = [];
-    let from = 0;
-    const pageSize = 1000;
-    let fetchMore = true;
+    const from = (page - 1) * size;
+    const to = from + size - 1;
 
     try {
-      while (fetchMore) {
-            const { data, error } = await supabase
-              .from("email_list_prospects")
-              .select("id, prospect_id, prospects (id, name, email, company, phone, country, industry, sender_name, sender_email)")
-          .eq("list_id", listId)
-          .range(from, from + pageSize - 1);
+      const { data, error, count } = await supabase
+        .from("email_list_prospects")
+        .select("id, prospect_id, prospects (id, name, email, company, phone, country, industry, sender_name, sender_email)", { count: "exact" })
+        .eq("list_id", listId)
+        .order("created_at", { ascending: false })
+        .range(from, to);
 
-        if (error) throw error;
-
-        if (data && data.length > 0) {
-          allProspects = [...allProspects, ...data];
-          if (data.length < pageSize) {
-            fetchMore = false;
-          } else {
-            from += pageSize;
-          }
-        } else {
-          fetchMore = false;
-        }
-      }
+      if (error) throw error;
 
       setProspects(
-        allProspects
+        (data || [])
           .map((row: any) => row.prospects)
           .filter((p: any) => !!p)
       );
+      setTotalProspects(count ?? 0);
     } catch (error: any) {
       toast({ title: "Error", description: error.message, variant: "destructive" });
       setProspects([]);
+      setTotalProspects(0);
     } finally {
       setLoading(false);
     }
+  };
+
+  useEffect(() => {
+    const totalPages = Math.max(1, Math.ceil(totalProspects / pageSize));
+    if (currentPage > totalPages) {
+      setCurrentPage(totalPages);
+    }
+  }, [currentPage, pageSize, totalProspects]);
+
+  const handlePageChange = (page: number) => {
+    const totalPages = Math.max(1, Math.ceil(totalProspects / pageSize));
+    if (page < 1 || page > totalPages || page === currentPage) return;
+    setCurrentPage(page);
+  };
+
+  const handlePageSizeChange = (value: string) => {
+    const nextSize = Number(value);
+    if (!Number.isFinite(nextSize)) return;
+    setPageSize(nextSize);
+    setCurrentPage(1);
   };
 
   const handleCreateList = async () => {
@@ -568,6 +594,29 @@ const ProspectListManager: React.FC = () => {
   };
 
   // --- RENDER HELPERS ---
+  const getPaginationItems = (page: number, total: number) => {
+    if (total <= 7) {
+      return Array.from({ length: total }, (_, i) => i + 1);
+    }
+
+    const pages = new Set<number>([1, total, page, page - 1, page + 1]);
+    const sorted = Array.from(pages)
+      .filter((p) => p >= 1 && p <= total)
+      .sort((a, b) => a - b);
+
+    const items: Array<number | "ellipsis"> = [];
+    let previous = 0;
+
+    sorted.forEach((p) => {
+      if (p - previous > 1) {
+        if (previous !== 0) items.push("ellipsis");
+      }
+      items.push(p);
+      previous = p;
+    });
+
+    return items;
+  };
 
   const filteredLists = lists.filter(l => 
     l.name.toLowerCase().includes(searchQuery.toLowerCase())
@@ -580,6 +629,11 @@ const ProspectListManager: React.FC = () => {
     (p.country && p.country.toLowerCase().includes(prospectSearchQuery.toLowerCase())) ||
     (p.industry && p.industry.toLowerCase().includes(prospectSearchQuery.toLowerCase()))
   );
+
+  const totalPages = Math.max(1, Math.ceil(totalProspects / pageSize));
+  const pageStart = totalProspects === 0 ? 0 : (currentPage - 1) * pageSize + 1;
+  const pageEnd = Math.min(currentPage * pageSize, totalProspects);
+  const paginationItems = getPaginationItems(currentPage, totalPages);
 
   if (selectedList) {
     // --- DETAIL VIEW ---
@@ -595,7 +649,7 @@ const ProspectListManager: React.FC = () => {
               <h2 className="text-2xl font-bold tracking-tight flex items-center gap-2">
                 {selectedList.name}
                 <Badge variant="secondary" className="ml-2 text-sm font-normal">
-                  {prospects.length} Prospects
+                  {totalProspects} Prospects
                 </Badge>
               </h2>
               <p className="text-gray-500 text-sm">{selectedList.description || "No description provided."}</p>
@@ -643,21 +697,21 @@ const ProspectListManager: React.FC = () => {
           </CardHeader>
           <CardContent className="p-0">
             <div className="rounded-md border-t">
-              <div className="relative w-full overflow-auto">
-                <table className="w-full caption-bottom text-sm text-left">
-                  <thead className="[&_tr]:border-b">
-                    <tr className="border-b transition-colors hover:bg-muted/50 data-[state=selected]:bg-muted">
-                      <th className="h-12 px-4 align-middle font-medium text-muted-foreground">Name</th>
-                      <th className="h-12 px-4 align-middle font-medium text-muted-foreground">Email</th>
-                      <th className="h-12 px-4 align-middle font-medium text-muted-foreground">Company</th>
-                      <th className="h-12 px-4 align-middle font-medium text-muted-foreground">Phone</th>
-                      <th className="h-12 px-4 align-middle font-medium text-muted-foreground">Country</th>
-                      <th className="h-12 px-4 align-middle font-medium text-muted-foreground">Industry</th>
-                      <th className="h-12 px-4 align-middle font-medium text-muted-foreground">Sender Name</th>
-                      <th className="h-12 px-4 align-middle font-medium text-muted-foreground">Sender Email</th>
+              <div className="relative max-h-[60vh] w-full overflow-auto">
+                <table className="w-full min-w-[1280px] caption-bottom text-sm text-left">
+                  <thead className="bg-white/95">
+                    <tr className="border-b border-slate-200/70">
+                      <th className="sticky top-0 z-30 h-11 min-w-[160px] bg-white/95 px-4 align-middle text-xs font-semibold uppercase tracking-wide text-slate-500 backdrop-blur-sm">Name</th>
+                      <th className="sticky top-0 z-30 h-11 min-w-[240px] bg-white/95 px-4 align-middle text-xs font-semibold uppercase tracking-wide text-slate-500 backdrop-blur-sm">Email</th>
+                      <th className="sticky top-0 z-30 h-11 min-w-[160px] bg-white/95 px-4 align-middle text-xs font-semibold uppercase tracking-wide text-slate-500 backdrop-blur-sm">Company</th>
+                      <th className="sticky top-0 z-30 h-11 min-w-[140px] bg-white/95 px-4 align-middle text-xs font-semibold uppercase tracking-wide text-slate-500 backdrop-blur-sm">Phone</th>
+                      <th className="sticky top-0 z-30 h-11 min-w-[120px] bg-white/95 px-4 align-middle text-xs font-semibold uppercase tracking-wide text-slate-500 backdrop-blur-sm">Country</th>
+                      <th className="sticky top-0 z-30 h-11 min-w-[140px] bg-white/95 px-4 align-middle text-xs font-semibold uppercase tracking-wide text-slate-500 backdrop-blur-sm">Industry</th>
+                      <th className="sticky top-0 right-[220px] z-40 h-11 w-[180px] min-w-[180px] border-l border-slate-200/70 bg-white/95 px-4 align-middle text-xs font-semibold uppercase tracking-wide text-slate-500 shadow-[-4px_0_8px_rgba(15,23,42,0.06)] backdrop-blur-sm">Sender Name</th>
+                      <th className="sticky top-0 right-0 z-40 h-11 w-[220px] min-w-[220px] border-l border-slate-200/70 bg-white/95 px-4 align-middle text-xs font-semibold uppercase tracking-wide text-slate-500 shadow-[-8px_0_12px_rgba(15,23,42,0.08)] backdrop-blur-sm">Sender Email</th>
                     </tr>
                   </thead>
-                  <tbody className="[&_tr:last-child]:border-0">
+                  <tbody className="divide-y divide-slate-100">
                     {filteredProspects.length === 0 ? (
                       <tr>
                         <td colSpan={8} className="h-24 text-center text-muted-foreground">
@@ -666,20 +720,98 @@ const ProspectListManager: React.FC = () => {
                       </tr>
                     ) : (
                       filteredProspects.map((p) => (
-                        <tr key={p.id} className="border-b transition-colors hover:bg-muted/50">
-                          <td className="p-4 align-middle font-medium">{p.name}</td>
-                          <td className="p-4 align-middle text-blue-600">{p.email}</td>
-                          <td className="p-4 align-middle">{p.company || '-'}</td>
-                          <td className="p-4 align-middle">{p.phone || '-'}</td>
-                          <td className="p-4 align-middle">{p.country || '-'}</td>
-                          <td className="p-4 align-middle">{p.industry || '-'}</td>
-                          <td className="p-4 align-middle">{p.sender_name || '-'}</td>
-                          <td className="p-4 align-middle">{p.sender_email || '-'}</td>
+                        <tr key={p.id} className="group transition-colors hover:bg-slate-50/80">
+                          <td className="px-4 py-3 align-middle font-medium text-slate-800">{p.name}</td>
+                          <td className="px-4 py-3 align-middle text-blue-600 whitespace-nowrap truncate max-w-[240px]" title={p.email}>
+                            {p.email}
+                          </td>
+                          <td className="px-4 py-3 align-middle text-slate-600">{p.company || '-'}</td>
+                          <td className="px-4 py-3 align-middle text-slate-600 whitespace-nowrap">{p.phone || '-'}</td>
+                          <td className="px-4 py-3 align-middle text-slate-600">{p.country || '-'}</td>
+                          <td className="px-4 py-3 align-middle text-slate-600">{p.industry || '-'}</td>
+                          <td
+                            className="sticky right-[220px] z-20 w-[180px] min-w-[180px] border-l border-slate-200/70 bg-white px-4 py-3 align-middle text-slate-600 shadow-[-4px_0_8px_rgba(15,23,42,0.06)] group-hover:bg-slate-50/80"
+                            title={p.sender_name || '-'}
+                          >
+                            <span className="block truncate">{p.sender_name || '-'}</span>
+                          </td>
+                          <td
+                            className="sticky right-0 z-20 w-[220px] min-w-[220px] border-l border-slate-200/70 bg-white px-4 py-3 align-middle text-slate-600 shadow-[-8px_0_12px_rgba(15,23,42,0.08)] group-hover:bg-slate-50/80"
+                            title={p.sender_email || '-'}
+                          >
+                            <span className="block truncate">{p.sender_email || '-'}</span>
+                          </td>
                         </tr>
                       ))
                     )}
                   </tbody>
                 </table>
+              </div>
+              <div className="border-t border-slate-200/70 bg-white/95 px-4 py-3 shadow-[0_-10px_18px_rgba(15,23,42,0.08)] backdrop-blur-sm">
+                <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+                  <div className="flex flex-wrap items-center gap-3 text-xs text-muted-foreground">
+                    <span className="font-semibold uppercase tracking-wide text-slate-500">Items per page</span>
+                    <Select value={String(pageSize)} onValueChange={handlePageSizeChange}>
+                      <SelectTrigger className="h-8 w-[120px]">
+                        <SelectValue placeholder="Per page" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {pageSizeOptions.map((size) => (
+                          <SelectItem key={size} value={String(size)}>
+                            {size} / page
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                    <span className="text-slate-500">
+                      Showing {pageStart}-{pageEnd} of {totalProspects}
+                    </span>
+                  </div>
+                  <Pagination className="w-auto justify-end">
+                    <PaginationContent>
+                      <PaginationItem>
+                        <PaginationPrevious
+                          href="#"
+                          onClick={(event) => {
+                            event.preventDefault();
+                            handlePageChange(currentPage - 1);
+                          }}
+                          className={currentPage === 1 ? "pointer-events-none opacity-50" : ""}
+                        />
+                      </PaginationItem>
+                      {paginationItems.map((item, index) =>
+                        item === "ellipsis" ? (
+                          <PaginationItem key={`ellipsis-${index}`}>
+                            <PaginationEllipsis />
+                          </PaginationItem>
+                        ) : (
+                          <PaginationItem key={item}>
+                            <PaginationLink
+                              href="#"
+                              isActive={item === currentPage}
+                              onClick={(event) => {
+                                event.preventDefault();
+                                handlePageChange(item);
+                              }}
+                            >
+                              {item}
+                            </PaginationLink>
+                          </PaginationItem>
+                        )
+                      )}
+                      <PaginationItem>
+                        <PaginationNext
+                          href="#"
+                          onClick={(event) => {
+                            event.preventDefault();
+                            handlePageChange(currentPage + 1);
+                          }}
+                          className={currentPage === totalPages ? "pointer-events-none opacity-50" : ""}
+                        />
+                      </PaginationItem>
+                    </PaginationContent>
+                  </Pagination>
+                </div>
               </div>
             </div>
           </CardContent>
@@ -882,7 +1014,12 @@ const ProspectListManager: React.FC = () => {
             <Card 
               key={list.id} 
               className="group hover:shadow-md transition-all duration-200 cursor-pointer border-l-4 border-l-transparent hover:border-l-blue-600"
-              onClick={() => setSelectedList(list)}
+              onClick={() => {
+                setSelectedList(list);
+                setCurrentPage(1);
+                setTotalProspects(list.count || 0);
+                setProspectSearchQuery("");
+              }}
             >
               <CardHeader className="pb-2">
                 <div className="flex justify-between items-start">

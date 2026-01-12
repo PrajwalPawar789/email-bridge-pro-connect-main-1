@@ -7,6 +7,7 @@ import { BrowserRouter, Routes, Route } from "react-router-dom";
 import LandingPage from "./pages/LandingPage";
 import Auth from "./pages/Auth";
 import Dashboard from "./pages/Dashboard";
+import Profile from "./pages/Profile";
 import Campaigns from "./pages/Campaigns";
 import CampaignTracker from "./pages/CampaignTracker";
 import Inbox from "./pages/Inbox";
@@ -24,6 +25,7 @@ const App = () => (
           <Route path="/" element={<LandingPage />} />
           <Route path="/auth" element={<Auth />} />
           <Route path="/dashboard" element={<Dashboard />} />
+          <Route path="/profile" element={<Profile />} />
           <Route path="/campaigns" element={<Campaigns />} />
           <Route path="/inbox" element={<Inbox />} />
           <Route path="/campaign/:id" element={<CampaignTracker />} />

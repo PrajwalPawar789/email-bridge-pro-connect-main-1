@@ -56,7 +56,6 @@ interface Recipient {
   assigned_email_config_id: string | null;
   message_id?: string;
   thread_id?: string;
-  sender_email?: string | null;
 }
 
 type PersonalizationData = {
@@ -368,6 +367,25 @@ const processBatch = async (campaignId: string, batchSize = 3, step = 0, emailCo
       throw new Error(`Campaign not found: ${campaignError?.message}`);
     }
 
+    const { data: campaignConfigRows, error: campaignConfigError } = await supabase
+      .from('campaign_email_configurations')
+      .select('email_config_id')
+      .eq('campaign_id', campaignId);
+
+    if (campaignConfigError) {
+      console.warn(`Error loading campaign configs for ${campaignId}:`, campaignConfigError.message);
+    }
+
+    const campaignConfigIds = (campaignConfigRows || [])
+      .map((row) => row.email_config_id)
+      .filter((id) => !!id);
+
+    const pickRandomConfigId = () => {
+      if (campaignConfigIds.length === 0) return null;
+      const choice = campaignConfigIds[Math.floor(Math.random() * campaignConfigIds.length)];
+      return choice ?? null;
+    };
+
     // Determine content based on step
     let subject = campaign.subject;
     let body = campaign.body;
@@ -424,77 +442,8 @@ const processBatch = async (campaignId: string, batchSize = 3, step = 0, emailCo
       };
     }
 
-    if (step === 0) {
-      const { count: followupCount, error: followupCountError } = await supabase
-        .from('campaign_followups')
-        .select('id', { count: 'exact', head: true })
-        .eq('campaign_id', campaignId);
-
-      if (followupCountError) {
-        console.warn('Error checking follow-up count:', followupCountError.message);
-      } else if ((followupCount || 0) > 0) {
-        const totalSteps = 1 + (followupCount || 0);
-
-        const startOfDay = new Date();
-        startOfDay.setHours(0, 0, 0, 0);
-
-        let followupsSentTodayQuery = supabase
-          .from('recipients')
-          .select('id', { count: 'exact', head: true })
-          .eq('campaign_id', campaignId)
-          .gt('current_step', 0)
-          .gte('last_email_sent_at', startOfDay.toISOString());
-
-        if (emailConfigId) {
-          followupsSentTodayQuery = followupsSentTodayQuery.or(
-            `assigned_email_config_id.eq.${emailConfigId},assigned_email_config_id.is.null`
-          );
-        }
-
-        const { count: followupsSentToday, error: followupsSentTodayError } = await followupsSentTodayQuery;
-
-        if (followupsSentTodayError) {
-          console.warn('Error checking follow-ups sent today:', followupsSentTodayError.message);
-        } else if ((followupsSentToday || 0) > 0) {
-          console.log(`Follow-ups already sent today for campaign ${campaignId}. Pausing initial batch.`);
-          return {
-            success: true,
-            message: 'Follow-ups sent today; delaying initial batch',
-            emailsSent: 0,
-            hasMore: true
-          };
-        }
-
-        let pendingFollowupsQuery = supabase
-          .from('recipients')
-          .select('id', { count: 'exact', head: true })
-          .eq('campaign_id', campaignId)
-          .eq('replied', false)
-          .eq('bounced', false)
-          .in('status', ['sent', 'processing'])
-          .or(`current_step.is.null,current_step.lt.${totalSteps - 1}`);
-
-        if (emailConfigId) {
-          pendingFollowupsQuery = pendingFollowupsQuery.or(
-            `assigned_email_config_id.eq.${emailConfigId},assigned_email_config_id.is.null`
-          );
-        }
-
-        const { count: pendingFollowups, error: pendingFollowupsError } = await pendingFollowupsQuery;
-
-        if (pendingFollowupsError) {
-          console.warn('Error checking pending follow-ups:', pendingFollowupsError.message);
-        } else if ((pendingFollowups || 0) > 0) {
-          console.log(`Follow-ups pending for campaign ${campaignId}. Pausing initial batch.`);
-          return {
-            success: true,
-            message: 'Follow-ups pending; delaying initial batch',
-            emailsSent: 0,
-            hasMore: true
-          };
-        }
-      }
-    }
+    // Do not pause initial batches just because follow-ups exist.
+    // Follow-up steps are handled by step > 0 runs and respect per-recipient delays.
 
     // const emailConfig = await fetchEmailConfigForCampaign(campaign); // Moved inside loop
 
@@ -502,10 +451,9 @@ const processBatch = async (campaignId: string, batchSize = 3, step = 0, emailCo
     // We first select IDs to lock them, preventing race conditions
     let recipientsQuery = supabase
       .from('recipients')
-      .select('id, assigned_email_config_id, sender_email') // Select assigned config and sender_email
+      .select('id, assigned_email_config_id')
       .eq('campaign_id', campaignId)
-      .eq('replied', false) // Don't send if they replied
-      .neq('status', 'processing') // Exclude currently processing
+      .or('replied.is.null,replied.eq.false') // Don't send if they replied
       .order('id', { ascending: true })
       .limit(batchSize);
 
@@ -515,7 +463,7 @@ const processBatch = async (campaignId: string, batchSize = 3, step = 0, emailCo
     }
 
     if (step === 0) {
-      recipientsQuery = recipientsQuery.eq('status', 'pending');
+      recipientsQuery = recipientsQuery.or('status.is.null,status.eq.pending');
     } else {
       // For follow-ups: Must have received previous step (current_step = step - 1)
       // And status must be 'sent' (meaning they got the previous one)
@@ -548,7 +496,7 @@ const processBatch = async (campaignId: string, batchSize = 3, step = 0, emailCo
           .from('recipients')
           .select('id', { count: 'exact', head: true })
           .eq('campaign_id', campaignId)
-          .eq('status', 'pending');
+          .or('status.is.null,status.eq.pending');
 
         if (count === 0) {
           // Only mark as sent if truly no one is left pending
@@ -624,24 +572,54 @@ const processBatch = async (campaignId: string, batchSize = 3, step = 0, emailCo
 
     // LOCKING: Mark these recipients as 'processing' to prevent other workers from picking them up
     const idsToProcess = recipientsToProcess.map(r => r.id);
-    
-    // Atomic lock: Only update if status matches what we expect
-    const expectedStatus = step === 0 ? 'pending' : 'sent';
-    
-    const { data: recipients, error: lockError } = await supabase
-      .from('recipients')
-      .update({ status: 'processing', updated_at: new Date().toISOString() })
-      .in('id', idsToProcess)
-      .eq('status', expectedStatus)
-      .select('*');
+    const lockUpdate = { status: 'processing', updated_at: new Date().toISOString() };
+    let recipients: Recipient[] = [];
 
-    if (lockError) {
-      throw new Error(`Error locking recipients: ${lockError.message}`);
+    if (step === 0) {
+      // Avoid PostgREST OR update return bug by locking pending and null in separate updates.
+      const { data: pendingRows, error: pendingError } = await supabase
+        .from('recipients')
+        .update(lockUpdate)
+        .in('id', idsToProcess)
+        .eq('status', 'pending')
+        .select('*');
+
+      if (pendingError) {
+        throw new Error(`Error locking pending recipients: ${pendingError.message}`);
+      }
+
+      recipients = (pendingRows || []).slice();
+
+      const { data: nullRows, error: nullError } = await supabase
+        .from('recipients')
+        .update(lockUpdate)
+        .in('id', idsToProcess)
+        .is('status', null)
+        .select('*');
+
+      if (nullError) {
+        throw new Error(`Error locking null recipients: ${nullError.message}`);
+      }
+
+      recipients = recipients.concat(nullRows || []);
+    } else {
+      const { data: sentRows, error: sentError } = await supabase
+        .from('recipients')
+        .update(lockUpdate)
+        .in('id', idsToProcess)
+        .eq('status', 'sent')
+        .select('*');
+
+      if (sentError) {
+        throw new Error(`Error locking follow-up recipients: ${sentError.message}`);
+      }
+
+      recipients = sentRows || [];
     }
 
     if (!recipients || recipients.length === 0) {
-       console.log('Could not lock any recipients (race condition?). Skipping batch.');
-       return { success: true, message: 'Race condition encountered', emailsSent: 0, hasMore: true };
+      console.log('Could not lock any recipients (race condition?). Skipping batch.');
+      return { success: true, message: 'Race condition encountered', emailsSent: 0, hasMore: true };
     }
 
     console.log(`Processing ${recipients.length} recipients in this batch`);
@@ -692,29 +670,14 @@ const processBatch = async (campaignId: string, batchSize = 3, step = 0, emailCo
       
       try {
         // Determine which email config to use
-        let configIdToUse = emailConfigId;
-        
-        if (!configIdToUse && recipient.sender_email) {
-          // If recipient has a specific sender_email, find the matching email config
-          const { data: senderConfig, error: senderError } = await supabase
-            .from('email_configs')
-            .select('id')
-            .eq('smtp_username', recipient.sender_email)
-            .eq('user_id', campaign.user_id)
-            .maybeSingle();
-            
-          if (senderError) {
-            console.warn(`Error finding config for sender_email ${recipient.sender_email}:`, senderError.message);
-          } else if (senderConfig) {
-            configIdToUse = senderConfig.id;
-            console.log(`Using specific sender config ${configIdToUse} for recipient ${recipient.email} (sender_email: ${recipient.sender_email})`);
-          } else {
-            console.warn(`No email config found for sender_email ${recipient.sender_email}, falling back to assigned config`);
-          }
-        }
-        
+        let configIdToUse =
+          emailConfigId || recipient.assigned_email_config_id || campaign.email_config_id;
+
         if (!configIdToUse) {
-          configIdToUse = recipient.assigned_email_config_id || campaign.email_config_id;
+          configIdToUse = pickRandomConfigId();
+          if (configIdToUse) {
+            console.log(`Assigned random sender config ${configIdToUse} for recipient ${recipient.email}`);
+          }
         }
         
         if (!configIdToUse) {

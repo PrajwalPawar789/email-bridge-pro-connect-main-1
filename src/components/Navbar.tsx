@@ -29,6 +29,7 @@ const Navbar = () => {
           <a href="#features" className="text-slate-300 hover:text-white transition-colors text-sm font-medium">Features</a>
           <a href="#pricing" className="text-slate-300 hover:text-white transition-colors text-sm font-medium">Pricing</a>
           <a href="#testimonials" className="text-slate-300 hover:text-white transition-colors text-sm font-medium">Testimonials</a>
+          <Link to="/profile" className="text-slate-300 hover:text-white transition-colors text-sm font-medium">Profile</Link>
           <Link to="/auth" className="text-white font-medium hover:text-indigo-400 transition-colors">Sign In</Link>
           <Link 
             to="/auth" 
@@ -56,6 +57,7 @@ const Navbar = () => {
         >
           <a href="#features" className="text-slate-300 hover:text-white py-2">Features</a>
           <a href="#pricing" className="text-slate-300 hover:text-white py-2">Pricing</a>
+          <Link to="/profile" className="text-slate-300 hover:text-white py-2">Profile</Link>
           <Link to="/auth" className="text-slate-300 hover:text-white py-2">Sign In</Link>
           <Link to="/auth" className="bg-indigo-600 text-white py-3 rounded-lg text-center font-semibold">Get Started</Link>
         </motion.div>

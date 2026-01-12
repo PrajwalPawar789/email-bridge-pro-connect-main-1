@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { supabase } from '@/integrations/supabase/client';
 import DashboardLayout from '@/components/Layout/DashboardLayout';
 import CampaignList from '@/components/CampaignList';
@@ -8,6 +9,7 @@ const Campaigns = () => {
   const [user, setUser] = useState<any>(null);
   const [emailConfigs, setEmailConfigs] = useState<any[]>([]);
   const [showBuilder, setShowBuilder] = useState(false);
+  const navigate = useNavigate();
 
   useEffect(() => {
     supabase.auth.getSession().then(({ data: { session } }) => {
@@ -35,7 +37,7 @@ const Campaigns = () => {
 
   const handleLogout = async () => {
     await supabase.auth.signOut();
-    window.location.href = '/auth';
+    navigate('/auth');
   };
 
   const handleCreateCampaign = () => {
@@ -59,14 +61,14 @@ const Campaigns = () => {
       activeTab="campaigns"
       onTabChange={(tab) => {
         if (tab === 'home') {
-          window.location.href = '/dashboard';
+          navigate('/dashboard');
         } else if (tab === 'inbox') {
-          window.location.href = '/inbox';
+          navigate('/inbox');
         } else if (tab === 'automations' || tab === 'contacts' || tab === 'segments' || 
                    tab === 'templates' || tab === 'connect' || tab === 'settings') {
-          window.location.href = '/dashboard';
+          navigate('/dashboard');
         } else {
-          window.location.href = `/${tab}`;
+          navigate(`/${tab}`);
         }
       }}
       user={user}
@@ -80,7 +82,7 @@ const Campaigns = () => {
                 onClick={handleBackToList}
                 className="flex items-center gap-2 text-gray-600 hover:text-gray-900"
               >
-                ← Back to Campaigns
+                Back to Campaigns
               </button>
             </div>
             <CampaignBuilder emailConfigs={emailConfigs} />

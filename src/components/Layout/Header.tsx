@@ -1,6 +1,7 @@
 import React from 'react';
-import { Gift, User, LogOut } from 'lucide-react';
+import { Gift, User, LogOut, Search, Settings, CreditCard, Clock, Crown } from 'lucide-react';
 import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -9,21 +10,57 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import { Link, useNavigate } from 'react-router-dom';
 
 interface HeaderProps {
   user: any;
   onLogout: () => void;
+  activeTab?: string;
 }
 
-const Header = ({ user, onLogout }: HeaderProps) => {
+const Header = ({ user, onLogout, activeTab }: HeaderProps) => {
+  const tabLabels: Record<string, string> = {
+    home: 'Home',
+    campaigns: 'Campaigns',
+    inbox: 'Inbox',
+    automations: 'Automations',
+    contacts: 'Contacts',
+    segments: 'Segments',
+    templates: 'Templates',
+    connect: 'Connect',
+    settings: 'Settings'
+  };
+  const activeLabel = activeTab ? tabLabels[activeTab] || 'Workspace' : 'Workspace';
+
   return (
-    <header className="h-16 bg-white border-b border-gray-200 flex items-center justify-between px-8 w-full">
-      <div className="flex-1"></div>
-      
-      <div className="flex items-center gap-4">
+    <header className="h-16 bg-[var(--shell-surface-strong)]/90 border-b border-[var(--shell-border)] backdrop-blur flex items-center justify-between px-6 w-full">
+      <div className="flex items-center gap-3">
+        <div>
+          <p className="text-[10px] font-semibold uppercase tracking-[0.28em] text-[var(--shell-muted)]">
+            Workspace
+          </p>
+          <h2 className="text-lg font-semibold text-[var(--shell-ink)]" style={{ fontFamily: 'var(--shell-font-display)' }}>
+            {activeLabel}
+          </h2>
+        </div>
+        <span className="hidden sm:inline-flex items-center gap-2 rounded-full border border-emerald-200 bg-emerald-50 px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.2em] text-emerald-700">
+          <span className="h-2 w-2 rounded-full bg-emerald-500 shadow-[0_0_8px_rgba(16,185,129,0.6)]"></span>
+          Live
+        </span>
+      </div>
+
+      <div className="flex items-center gap-3">
+        <div className="hidden lg:flex items-center gap-2 rounded-full border border-[var(--shell-border)] bg-white/70 px-3 py-1.5 text-[var(--shell-muted)]">
+          <Search className="h-4 w-4" />
+          <Input
+            placeholder="Search workspace"
+            className="h-6 w-44 border-0 bg-transparent p-0 text-xs font-semibold text-[var(--shell-ink)] placeholder:text-[var(--shell-muted)] focus-visible:ring-0"
+          />
+        </div>
+
         <Button 
-          variant="ghost" 
-          className="bg-purple-50 text-purple-700 hover:bg-purple-100 hover:text-purple-800 font-medium gap-2"
+          variant="outline" 
+          className="h-9 rounded-full border-[var(--shell-border)] bg-white/80 text-[var(--shell-ink)] font-semibold gap-2 hover:bg-white"
         >
           <Gift className="h-4 w-4" />
           Refer a friend
@@ -31,29 +68,96 @@ const Header = ({ user, onLogout }: HeaderProps) => {
 
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
-            <Button variant="ghost" className="flex items-center gap-2 hover:bg-gray-50">
-              <div className="w-8 h-8 bg-gray-100 rounded-full flex items-center justify-center text-gray-600">
-                <User className="h-5 w-5" />
+            <Button variant="ghost" className="flex items-center gap-2 rounded-full border border-[var(--shell-border)] bg-white/80 px-2 py-1.5 hover:bg-white">
+              <div className="w-8 h-8 bg-emerald-50 rounded-full flex items-center justify-center text-emerald-700 overflow-hidden">
+                {user?.user_metadata?.avatar_url ? (
+                  <img src={user.user_metadata.avatar_url} alt="avatar" className="w-full h-full object-cover" />
+                ) : (
+                  <User className="h-4 w-4" />
+                )}
               </div>
-              <span className="text-sm font-medium text-gray-700 hidden md:block">
+              <span className="text-sm font-semibold text-[var(--shell-ink)] hidden md:block">
                 {user?.email?.split('@')[0] || 'User'}
               </span>
-              <svg className="w-4 h-4 text-gray-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <svg className="w-4 h-4 text-[var(--shell-muted)]" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
               </svg>
             </Button>
           </DropdownMenuTrigger>
-          <DropdownMenuContent align="end" className="w-56">
-            <DropdownMenuLabel>My Account</DropdownMenuLabel>
+          <DropdownMenuContent align="end" className="w-80 border-[var(--shell-border)] bg-white/95">
+            <div className="p-3 bg-amber-50 rounded-md">
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 rounded-full overflow-hidden">
+                  {user?.user_metadata?.avatar_url ? (
+                    <img src={user.user_metadata.avatar_url} alt="avatar" className="w-full h-full object-cover" />
+                  ) : (
+                    <div className="w-full h-full bg-emerald-50 flex items-center justify-center text-emerald-700">
+                      <User className="h-4 w-4" />
+                    </div>
+                  )}
+                </div>
+                <div className="flex-1">
+                  <div className="font-semibold">{(user?.user_metadata as any)?.first_name ? `${user.user_metadata.first_name} ${user.user_metadata.last_name || ''}` : (user?.email?.split('@')[0] || 'User')}</div>
+                  <div className="text-xs text-slate-600">{user?.email}</div>
+                </div>
+                <div className="text-xs text-amber-600 font-semibold flex items-center gap-1">
+                  <Crown className="h-4 w-4" />
+                  <span>Enterprise Plan (Power)</span>
+                </div>
+              </div>
+
+              <div className="mt-3 text-xs text-slate-600 flex items-center justify-between">
+                <div>Daily Limit</div>
+                <div className="font-semibold text-amber-600">0/38,000</div>
+              </div>
+              <div className="w-full bg-white rounded-full h-2 mt-2 overflow-hidden border border-white/30">
+                <div className="h-2 bg-amber-200" style={{ width: '0%' }} />
+              </div>
+            </div>
+
+            <div className="p-2">
+              <div className="text-[10px] uppercase tracking-wider text-[var(--shell-muted)] font-semibold px-2 py-1">Account Management</div>
+              <DropdownMenuSeparator />
+              <DropdownMenuItem asChild>
+                <Link to="/profile" className="flex items-center gap-2 w-full">
+                  <Settings className="h-4 w-4 text-slate-500" />
+                  <div className="flex-1 text-sm">Account Settings</div>
+                  <div className="text-xs text-slate-400">Manage your account details</div>
+                </Link>
+              </DropdownMenuItem>
+
+              <DropdownMenuItem asChild>
+                <Link to="/subscription" className="flex items-center gap-2 w-full">
+                  <Crown className="h-4 w-4 text-slate-500" />
+                  <div className="flex-1 text-sm">Subscription</div>
+                  <div className="text-xs text-slate-400">Upgrade & Manage plans</div>
+                </Link>
+              </DropdownMenuItem>
+
+              <DropdownMenuItem asChild>
+                <Link to="/billing" className="flex items-center gap-2 w-full">
+                  <CreditCard className="h-4 w-4 text-slate-500" />
+                  <div className="flex-1 text-sm">Payments & Billing</div>
+                  <div className="text-xs text-slate-400">Transactions, Invoices & Billing</div>
+                </Link>
+              </DropdownMenuItem>
+
+              <DropdownMenuItem asChild>
+                <Link to="/spending" className="flex items-center gap-2 w-full">
+                  <Clock className="h-4 w-4 text-slate-500" />
+                  <div className="flex-1 text-sm">Spending History</div>
+                  <div className="text-xs text-slate-400"> </div>
+                </Link>
+              </DropdownMenuItem>
+            </div>
+
             <DropdownMenuSeparator />
-            <DropdownMenuItem className="text-gray-600">
-              {user?.email}
-            </DropdownMenuItem>
-            <DropdownMenuSeparator />
-            <DropdownMenuItem onClick={onLogout} className="text-red-600 cursor-pointer">
-              <LogOut className="mr-2 h-4 w-4" />
-              <span>Log out</span>
-            </DropdownMenuItem>
+            <div className="p-2">
+              <DropdownMenuItem onClick={onLogout} className="text-amber-600 font-semibold">
+                <LogOut className="mr-2 h-4 w-4" />
+                <span>Sign Out</span>
+              </DropdownMenuItem>
+            </div>
           </DropdownMenuContent>
         </DropdownMenu>
       </div>

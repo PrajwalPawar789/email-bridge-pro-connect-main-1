@@ -65,6 +65,20 @@ const Dashboard = () => {
     });
   };
 
+  const handleTabChange = (tab: string) => {
+    if (tab === 'campaigns') {
+      navigate('/campaigns');
+      return;
+    }
+
+    if (tab === 'inbox') {
+      navigate('/inbox');
+      return;
+    }
+
+    setActiveTab(tab);
+  };
+
   if (!user) {
     return (
       <div className="min-h-screen flex items-center justify-center">
@@ -77,12 +91,6 @@ const Dashboard = () => {
     switch (activeTab) {
       case 'home':
       case 'analytics': return <EmailAnalyticsDashboard />;
-      case 'campaigns': 
-        navigate('/campaigns');
-        return <div></div>;
-      case 'inbox': 
-        navigate('/inbox');
-        return <div></div>;
       case 'builder': return <CampaignBuilder emailConfigs={emailConfigs} />;
       case 'templates': return <TemplateManager />;
       case 'mailbox': return <Mailbox emailConfigs={emailConfigs} />;
@@ -100,7 +108,7 @@ const Dashboard = () => {
   return (
     <DashboardLayout 
       activeTab={activeTab} 
-      onTabChange={setActiveTab} 
+      onTabChange={handleTabChange} 
       user={user} 
       onLogout={handleLogout}
     >

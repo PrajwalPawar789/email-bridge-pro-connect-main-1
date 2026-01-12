@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { supabase } from '@/integrations/supabase/client';
 import DashboardLayout from '@/components/Layout/DashboardLayout';
 import Mailbox from '@/components/Mailbox';
@@ -6,6 +7,7 @@ import Mailbox from '@/components/Mailbox';
 const Inbox = () => {
   const [user, setUser] = useState<any>(null);
   const [emailConfigs, setEmailConfigs] = useState<any[]>([]);
+  const navigate = useNavigate();
 
   useEffect(() => {
     supabase.auth.getSession().then(({ data: { session } }) => {
@@ -33,7 +35,7 @@ const Inbox = () => {
 
   const handleLogout = async () => {
     await supabase.auth.signOut();
-    window.location.href = '/auth';
+    navigate('/auth');
   };
 
   if (!user) {
@@ -49,14 +51,14 @@ const Inbox = () => {
       activeTab="inbox"
       onTabChange={(tab) => {
         if (tab === 'home') {
-          window.location.href = '/dashboard';
+          navigate('/dashboard');
         } else if (tab === 'campaigns') {
-          window.location.href = '/campaigns';
+          navigate('/campaigns');
         } else if (tab === 'automations' || tab === 'contacts' || tab === 'segments' || 
                    tab === 'templates' || tab === 'connect' || tab === 'settings') {
-          window.location.href = '/dashboard';
+          navigate('/dashboard');
         } else {
-          window.location.href = `/${tab}`;
+          navigate(`/${tab}`);
         }
       }}
       user={user}
