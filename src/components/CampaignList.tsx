@@ -104,14 +104,21 @@ const CampaignList = ({ onCreateCampaign }: CampaignListProps) => {
 
   const getActualTrackingStats = (campaign: any) => {
     const recipients = campaign.recipients || [];
-    const actualOpens = recipients.filter((r: any) => r.opened_at).length;
-    const actualClicks = recipients.filter((r: any) => r.clicked_at).length;
+    const totalFromCampaign = campaign.total_recipients || 0;
+    const isPartial = totalFromCampaign > 0 && recipients.length < totalFromCampaign;
+    const actualOpens = isPartial
+      ? (campaign.opened_count ?? 0)
+      : recipients.filter((r: any) => r.opened_at).length;
+    const actualClicks = isPartial
+      ? (campaign.clicked_count ?? 0)
+      : recipients.filter((r: any) => r.clicked_at).length;
     
     return {
       dbOpens: campaign.opened_count ?? 0,
       dbClicks: campaign.clicked_count ?? 0,
       actualOpens,
-      actualClicks
+      actualClicks,
+      isPartial
     };
   };
 
@@ -290,8 +297,9 @@ const CampaignList = ({ onCreateCampaign }: CampaignListProps) => {
       const bounceRate = sentCount > 0 ? (stats.bounced / sentCount) * 100 : 0;
       const sentRate = stats.total > 0 ? Math.min(100, Math.round((stats.sent / stats.total) * 100)) : 0;
 
-      const trackingMismatch = trackingStats.dbOpens !== trackingStats.actualOpens ||
-        trackingStats.dbClicks !== trackingStats.actualClicks;
+      const trackingMismatch = !trackingStats.isPartial &&
+        (trackingStats.dbOpens !== trackingStats.actualOpens ||
+        trackingStats.dbClicks !== trackingStats.actualClicks);
 
       return {
         campaign,
@@ -438,7 +446,7 @@ const CampaignList = ({ onCreateCampaign }: CampaignListProps) => {
 
   return (
     <div
-      className="relative -m-8 min-h-[calc(100vh-4rem)] bg-[var(--camp-bg)] text-[var(--camp-ink)]"
+      className="relative -my-8 min-h-[calc(100vh-4rem)] bg-[var(--camp-bg)] text-[var(--camp-ink)]"
       style={campaignStyles}
     >
       <style>{`
@@ -1020,9 +1028,10 @@ const CampaignList = ({ onCreateCampaign }: CampaignListProps) => {
               ? selectedCampaign.status.charAt(0).toUpperCase() + selectedCampaign.status.slice(1)
               : 'Unknown';
             const statusMeta = getStatusMeta(selectedCampaign.status, statusLabel);
-            const trackingMismatch =
+            const trackingMismatch = !trackingStats.isPartial && (
               (selectedCampaign.opened_count ?? 0) !== trackingStats.actualOpens ||
-              (selectedCampaign.clicked_count ?? 0) !== trackingStats.actualClicks;
+              (selectedCampaign.clicked_count ?? 0) !== trackingStats.actualClicks
+            );
 
             return (
               <div className="space-y-4 text-sm">

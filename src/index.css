@@ -88,6 +88,24 @@
     --sidebar-border: 240 3.7% 15.9%;
     --sidebar-ring: 217.2 91.2% 59.8%;
   }
+
+  .landing-theme {
+    --lp-bg: #071a1c;
+    --lp-bg-strong: #051214;
+    --lp-surface: #0f2426;
+    --lp-surface-2: #132d30;
+    --lp-ink: #e9f5f3;
+    --lp-ink-strong: #f5fffd;
+    --lp-muted: #a8c1bc;
+    --lp-accent: #ff5c3b;
+    --lp-accent-2: #2dd4bf;
+    --lp-accent-3: #ffb347;
+    --lp-card: #f7f4ed;
+    --lp-card-ink: #122423;
+    --lp-border: rgba(45, 78, 76, 0.5);
+    --lp-border-light: rgba(15, 36, 36, 0.12);
+    --lp-shadow: rgba(6, 12, 13, 0.35);
+  }
 }
 
 @layer base {

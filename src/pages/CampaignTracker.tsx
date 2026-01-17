@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { supabase } from '@/integrations/supabase/client';
 import { Button } from '@/components/ui/button';
@@ -6,21 +6,31 @@ import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/com
 import { Badge } from '@/components/ui/badge';
 import { Input } from '@/components/ui/input';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from '@/components/ui/dialog';
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { ScrollArea } from '@/components/ui/scroll-area';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
+import {
+  Pagination,
+  PaginationContent,
+  PaginationEllipsis,
+  PaginationItem,
+  PaginationLink,
+  PaginationNext,
+  PaginationPrevious
+} from '@/components/ui/pagination';
 import { 
   ArrowLeft, Search, RefreshCw, Mail, MousePointerClick, Eye, 
-  MessageSquare, AlertCircle, CheckCircle2, Clock, Calendar, 
-  TrendingUp, Users, Activity, Filter, Send, ChevronDown, ChevronUp,
-  Download, PieChart, BarChart2, Share2, Lightbulb
+  MessageSquare, AlertCircle, Clock, Calendar, 
+  Users, Activity, Filter, ChevronDown, ChevronUp,
+  Download, BarChart2, Lightbulb
 } from 'lucide-react';
-import { format, addMinutes, addHours, addDays, formatDistanceToNow, startOfDay, getDay, getHours } from 'date-fns';
+import { format, addHours, addDays, formatDistanceToNow } from 'date-fns';
 import { 
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, 
-  LineChart, Line, AreaChart, Area, Pie, Cell, PieChart as RePieChart, Legend
+  AreaChart, Area, Cell, Legend
 } from 'recharts';
 import DashboardLayout from '@/components/Layout/DashboardLayout';
+import { useAuth } from '@/providers/AuthProvider';
 
 const CampaignTracker = () => {
   const { id } = useParams();
@@ -35,19 +45,46 @@ const CampaignTracker = () => {
   const [selectedRecipient, setSelectedRecipient] = useState<any>(null);
   const [replies, setReplies] = useState<any[]>([]);
   const [expandedReply, setExpandedReply] = useState<string | null>(null);
-  const [user, setUser] = useState<any>(null);
+  const { user, loading: authLoading } = useAuth();
+  const [recipientPage, setRecipientPage] = useState(1);
+  const [recipientPageSize, setRecipientPageSize] = useState(100);
+  const [recipientTotal, setRecipientTotal] = useState(0);
+  const [analyticsRecipients, setAnalyticsRecipients] = useState<any[]>([]);
+  const [analyticsLoading, setAnalyticsLoading] = useState(false);
+  const analyticsCacheRef = useRef<{ id?: string; total?: number }>({});
+  const pageSizeOptions = [100, 500, 1000];
 
   useEffect(() => {
-    supabase.auth.getSession().then(({ data: { session } }) => {
-      if (session) {
-        setUser(session.user);
-      }
-    });
-  }, []);
+    if (!authLoading && !user) {
+      navigate('/auth');
+    }
+  }, [authLoading, user, navigate]);
 
   const handleLogout = async () => {
     await supabase.auth.signOut();
     navigate('/auth');
+  };
+
+  const handleTabChange = (tab: string) => {
+    if (tab === 'home') {
+      navigate('/dashboard');
+    } else if (tab === 'campaigns') {
+      navigate('/campaigns');
+    } else if (tab === 'inbox') {
+      navigate('/inbox');
+    } else if (tab === 'automations') {
+      navigate('/automations');
+    } else if (
+      tab === 'contacts' ||
+      tab === 'segments' ||
+      tab === 'templates' ||
+      tab === 'connect' ||
+      tab === 'settings'
+    ) {
+      navigate(`/dashboard?tab=${tab}`);
+    } else {
+      navigate(`/${tab}`);
+    }
   };
   
   const [stats, setStats] = useState({
@@ -99,29 +136,55 @@ const CampaignTracker = () => {
         clearTimeout(debounceTimer);
       };
     }
-  }, [id]);
+  }, [id, recipientPage, recipientPageSize]);
 
   useEffect(() => {
-    if (activeTab === 'replies' && recipients.length > 0) {
-        fetchReplies();
+    if (activeTab === 'replies') {
+      fetchReplies();
     }
-  }, [activeTab, recipients]);
+  }, [activeTab, id]);
+
+  useEffect(() => {
+    const totalPages = Math.max(1, Math.ceil(recipientTotal / recipientPageSize));
+    if (recipientPage > totalPages) {
+      setRecipientPage(totalPages);
+    }
+  }, [recipientPage, recipientPageSize, recipientTotal]);
+
+  useEffect(() => {
+    if (activeTab === 'overview' || activeTab === 'analytics') {
+      fetchAnalyticsRecipients();
+    }
+  }, [activeTab, id, recipientTotal]);
 
   const fetchReplies = async () => {
-    const repliedRecipients = recipients.filter(r => r.replied);
-    if (repliedRecipients.length === 0) {
-        setReplies([]);
-        return;
+    if (!id) return;
+
+    const { data: repliedRecipients, error: recipientsError } = await supabase
+      .from('recipients')
+      .select('id, email, name, updated_at')
+      .eq('campaign_id', id)
+      .eq('replied', true);
+
+    if (recipientsError) {
+      console.error('Error fetching replied recipients:', recipientsError);
+      setReplies([]);
+      return;
     }
-    
+
+    if (!repliedRecipients || repliedRecipients.length === 0) {
+      setReplies([]);
+      return;
+    }
+
     const emails = repliedRecipients.map(r => r.email);
-    
+
     const { data, error } = await supabase
       .from('email_messages')
       .select('*')
       .in('from_email', emails)
       .order('date', { ascending: false });
-      
+
     if (error) {
       console.error('Error fetching replies:', error);
     } else {
@@ -129,40 +192,39 @@ const CampaignTracker = () => {
       const messageMap = new Map();
       data.forEach(msg => {
         if (msg.from_email) {
-            const normalizedEmail = msg.from_email.toLowerCase();
-            // Store the most recent message for each email
-            if (!messageMap.has(normalizedEmail)) {
-                messageMap.set(normalizedEmail, msg);
-            }
+          const normalizedEmail = msg.from_email.toLowerCase();
+          // Store the most recent message for each email
+          if (!messageMap.has(normalizedEmail)) {
+            messageMap.set(normalizedEmail, msg);
+          }
         }
       });
 
       const repliesList = repliedRecipients.map(recipient => {
         const normalizedRecipientEmail = recipient.email.toLowerCase();
         const msg = messageMap.get(normalizedRecipientEmail);
-        
+
         if (msg) {
-            return { 
-                ...msg, 
-                recipientName: recipient.name, 
-                recipientId: recipient.id,
-                hasContent: true
-            };
-        } else {
-            // Fallback for when we know they replied but don't have the message body
-            return {
-                id: `placeholder-${recipient.id}`,
-                from_email: recipient.email,
-                recipientName: recipient.name,
-                recipientId: recipient.id,
-                subject: "Reply detected (Content not synced)",
-                body: "<div class='text-gray-500 italic p-4 bg-gray-50 rounded border'>This reply was detected by the system scan, but the full message content has not been synced to the local database yet. <br/><br/>Please go to the <b>Mailbox</b> tab and click <b>Sync Mailbox</b> to download the latest messages.</div>",
-                date: recipient.updated_at || new Date().toISOString(),
-                hasContent: false
-            };
+          return {
+            ...msg,
+            recipientName: recipient.name,
+            recipientId: recipient.id,
+            hasContent: true
+          };
         }
+        // Fallback for when we know they replied but don't have the message body
+        return {
+          id: `placeholder-${recipient.id}`,
+          from_email: recipient.email,
+          recipientName: recipient.name,
+          recipientId: recipient.id,
+          subject: "Reply detected (Content not synced)",
+          body: "<div class='text-gray-500 italic p-4 bg-gray-50 rounded border'>This reply was detected by the system scan, but the full message content has not been synced to the local database yet. <br/><br/>Please go to the <b>Mailbox</b> tab and click <b>Sync Mailbox</b> to download the latest messages.</div>",
+          date: recipient.updated_at || new Date().toISOString(),
+          hasContent: false
+        };
       });
-      
+
       setReplies(repliesList);
     }
   };
@@ -170,6 +232,7 @@ const CampaignTracker = () => {
   const fetchCampaignData = async (showLoading = true) => {
     // Only show loading on initial fetch
     if (showLoading && !campaign) setLoading(true);
+    let resolvedTotal = recipientTotal;
     
     try {
       // Fetch campaign details
@@ -182,68 +245,155 @@ const CampaignTracker = () => {
       if (campaignError) throw campaignError;
       setCampaign(campaignData);
 
-      // Fetch recipients with their assigned config
-      const { data: recipientsData, error: recipientsError } = await supabase
+      const from = (recipientPage - 1) * recipientPageSize;
+      const to = from + recipientPageSize - 1;
+
+      // Fetch recipients for the current page with their assigned config
+      const { data: recipientsData, error: recipientsError, count } = await supabase
         .from('recipients')
-        .select('*, email_configs(smtp_username)')
+        .select('*, email_configs(smtp_username)', { count: 'exact' })
         .eq('campaign_id', id)
-        .order('id', { ascending: true });
+        .order('id', { ascending: true })
+        .range(from, to);
 
       if (recipientsError) throw recipientsError;
-      setRecipients(recipientsData || []);
+      const pageRecipients = recipientsData || [];
+      setRecipients(pageRecipients);
 
-      // Calculate stats - use database counts for active campaigns to ensure consistency
-      const isActiveCampaign = campaignData.status === 'sending' || campaignData.status === 'paused';
-      const currentStats = {
-        total: recipientsData?.length || 0,
-        sent: isActiveCampaign
-          ? Math.max(campaignData.sent_count || 0, recipientsData?.filter(r => r.status === 'sent').length || 0)
-          : recipientsData?.filter(r => r.status === 'sent').length || 0,
-        failed: isActiveCampaign
-          ? Math.max(campaignData.failed_count || 0, recipientsData?.filter(r => r.status === 'failed').length || 0)
-          : recipientsData?.filter(r => r.status === 'failed').length || 0,
-        opens: recipientsData?.filter(r => r.opened_at).length || 0,
-        clicks: recipientsData?.filter(r => r.clicked_at).length || 0,
-        replies: recipientsData?.filter(r => r.replied).length || 0,
-        bounces: recipientsData?.filter(r => r.bounced).length || 0,
-        processing: recipientsData?.filter(r => r.status === 'processing').length || 0,
-        queued: recipientsData?.filter(r => r.status === 'pending').length || 0,
+      const totalCount = typeof count === 'number'
+        ? count
+        : (campaignData?.total_recipients ?? pageRecipients.length);
+      resolvedTotal = totalCount;
+      setRecipientTotal(totalCount);
+
+      const baseStats = getRecipientStats(campaignData, pageRecipients, totalCount);
+      setStats({
+        ...baseStats,
         botOpens: (campaignData as any).bot_open_count || 0,
         botClicks: (campaignData as any).bot_click_count || 0
-      };
-      setStats(currentStats);
-
-      // Generate Recent Activity Feed
-      const activity: any[] = [];
-      recipientsData?.forEach(r => {
-        if (r.opened_at) activity.push({ type: 'open', date: new Date(r.opened_at), email: r.email, name: r.name });
-        if (r.clicked_at) activity.push({ type: 'click', date: new Date(r.clicked_at), email: r.email, name: r.name });
-        if (r.replied) activity.push({ type: 'reply', date: new Date(r.last_email_sent_at || new Date()), email: r.email, name: r.name }); // Approximate
-        if (r.bounced) activity.push({ type: 'bounce', date: new Date(r.bounced_at || r.last_email_sent_at || new Date()), email: r.email, name: r.name });
       });
-      
-      // Sort by date desc and take top 20
-      activity.sort((a, b) => b.date.getTime() - a.date.getTime());
-      setRecentActivity(activity.slice(0, 20));
 
     } catch (error) {
       console.error('Error fetching campaign data:', error);
     } finally {
       setLoading(false);
     }
+    return resolvedTotal;
+  };
+
+  const fetchAllRecipients = async (selectFields: string, totalOverride?: number) => {
+    if (!id) return [];
+    const total = typeof totalOverride === 'number'
+      ? totalOverride
+      : (recipientTotal || campaign?.total_recipients || recipients.length);
+    if (!total) return [];
+
+    const batchSize = 1000;
+    const batches = Math.ceil(total / batchSize);
+    const results: any[] = [];
+
+    for (let batch = 0; batch < batches; batch += 1) {
+      const from = batch * batchSize;
+      const to = Math.min(total - 1, from + batchSize - 1);
+      const { data, error } = await supabase
+        .from('recipients')
+        .select(selectFields)
+        .eq('campaign_id', id)
+        .order('id', { ascending: true })
+        .range(from, to);
+
+      if (error) throw error;
+      results.push(...(data || []));
+    }
+
+    return results;
+  };
+
+  const fetchAnalyticsRecipients = async (force = false, totalOverride?: number) => {
+    if (!id || analyticsLoading) return;
+    const total = typeof totalOverride === 'number'
+      ? totalOverride
+      : (recipientTotal || campaign?.total_recipients || recipients.length);
+    if (!total) {
+      setAnalyticsRecipients([]);
+      return;
+    }
+
+    const cached = analyticsCacheRef.current;
+    if (!force && cached.id === id && cached.total === total && analyticsRecipients.length >= total) {
+      return;
+    }
+
+    setAnalyticsLoading(true);
+    try {
+      const analyticsData = await fetchAllRecipients(
+        'id, email, name, status, opened_at, clicked_at, replied, bounced, bounced_at, updated_at, last_email_sent_at, current_step',
+        total
+      );
+      setAnalyticsRecipients(analyticsData);
+      analyticsCacheRef.current = { id, total };
+    } catch (error) {
+      console.error('Error fetching analytics recipients:', error);
+    } finally {
+      setAnalyticsLoading(false);
+    }
   };
 
   const getStatusColor = (status: string) => {
     switch (status) {
-      case 'draft': return 'bg-gray-500';
-      case 'ready': return 'bg-blue-500';
-      case 'sending': return 'bg-blue-600 animate-pulse';
-      case 'paused': return 'bg-yellow-500';
-      case 'sent': return 'bg-green-500';
-      case 'completed': return 'bg-green-600';
-      case 'failed': return 'bg-red-500';
-      default: return 'bg-gray-500';
+      case 'draft': return 'border-slate-200 bg-slate-100 text-slate-600';
+      case 'ready': return 'border-emerald-200 bg-emerald-100 text-emerald-700';
+      case 'sending': return 'border-blue-200 bg-blue-100 text-blue-700';
+      case 'paused': return 'border-amber-200 bg-amber-100 text-amber-700';
+      case 'sent': return 'border-emerald-200 bg-emerald-100 text-emerald-700';
+      case 'completed': return 'border-emerald-200 bg-emerald-100 text-emerald-700';
+      case 'failed': return 'border-rose-200 bg-rose-100 text-rose-700';
+      default: return 'border-slate-200 bg-slate-100 text-slate-600';
     }
+  };
+
+  const getPaginationItems = (page: number, total: number) => {
+    const pages = new Set<number>([1, total, page, page - 1, page + 1]);
+    const sorted = Array.from(pages)
+      .filter((p) => p >= 1 && p <= total)
+      .sort((a, b) => a - b);
+
+    const items: Array<number | 'ellipsis'> = [];
+    let previous = 0;
+
+    sorted.forEach((p) => {
+      if (p - previous > 1) {
+        if (previous !== 0) items.push('ellipsis');
+      }
+      items.push(p);
+      previous = p;
+    });
+
+    return items;
+  };
+
+  const isSentRecipient = (recipient: any) => {
+    if (recipient.last_email_sent_at) return true;
+    return ['sent', 'opened', 'clicked', 'replied', 'bounced', 'completed'].includes(recipient.status);
+  };
+
+  const getRecipientStats = (campaignData: any, recipientsData: any[], totalCount: number) => {
+    const totalFromCampaign = campaignData?.total_recipients || 0;
+    const total = totalCount || totalFromCampaign || recipientsData.length;
+    const isPartial = total > recipientsData.length;
+
+    const sent = Math.max(campaignData?.sent_count || 0, recipientsData.filter(isSentRecipient).length);
+    const failed = Math.max(campaignData?.failed_count || 0, recipientsData.filter((r) => r.status === 'failed').length);
+    const opens = Math.max(campaignData?.opened_count || 0, recipientsData.filter((r) => r.opened_at).length);
+    const clicks = Math.max(campaignData?.clicked_count || 0, recipientsData.filter((r) => r.clicked_at).length);
+    const replies = Math.max((campaignData as any)?.replied_count || 0, recipientsData.filter((r) => r.replied).length);
+    const bounces = Math.max(campaignData?.bounced_count || 0, recipientsData.filter((r) => r.bounced).length);
+    const processing = isPartial ? 0 : recipientsData.filter((r) => r.status === 'processing').length;
+    const queued = isPartial
+      ? Math.max(0, total - sent - failed)
+      : recipientsData.filter((r) => r.status === 'pending').length;
+
+    return { total, sent, failed, opens, clicks, replies, bounces, processing, queued };
   };
 
   // Helper to calculate next send time (reused logic)
@@ -286,6 +436,25 @@ const CampaignTracker = () => {
     return true;
   });
 
+  const totalPages = Math.max(1, Math.ceil(recipientTotal / recipientPageSize));
+  const pageStart = recipientTotal === 0 ? 0 : (recipientPage - 1) * recipientPageSize + 1;
+  const pageEnd = Math.min(recipientPage * recipientPageSize, recipientTotal);
+  const paginationItems = getPaginationItems(recipientPage, totalPages);
+  const analyticsIsPartial = recipientTotal > (analyticsRecipients.length || recipients.length);
+  const analyticsSampleSize = analyticsRecipients.length || recipients.length;
+
+  const handleRecipientPageChange = (page: number) => {
+    if (page < 1 || page > totalPages || page === recipientPage) return;
+    setRecipientPage(page);
+  };
+
+  const handleRecipientPageSizeChange = (value: string) => {
+    const nextSize = Number(value);
+    if (!Number.isFinite(nextSize)) return;
+    setRecipientPageSize(nextSize);
+    setRecipientPage(1);
+  };
+
   const getActivityIcon = (type: string) => {
     switch (type) {
       case 'open': return <Eye className="h-4 w-4 text-green-500" />;
@@ -297,8 +466,9 @@ const CampaignTracker = () => {
   };
 
   const hourlyStats = React.useMemo(() => {
+    const source = analyticsRecipients.length > 0 ? analyticsRecipients : recipients;
     const stats = Array(24).fill(0).map((_, i) => ({ hour: `${i}:00`, opens: 0, clicks: 0 }));
-    recipients.forEach(r => {
+    source.forEach(r => {
       if (r.opened_at) {
         const h = new Date(r.opened_at).getHours();
         stats[h].opens++;
@@ -309,19 +479,20 @@ const CampaignTracker = () => {
       }
     });
     return stats;
-  }, [recipients]);
+  }, [analyticsRecipients, recipients]);
 
   const timelineData = React.useMemo(() => {
+    const source = analyticsRecipients.length > 0 ? analyticsRecipients : recipients;
     const days = new Map();
     // Initialize with last 7 days to ensure continuity
     for (let i = 6; i >= 0; i--) {
-        const d = new Date();
-        d.setDate(d.getDate() - i);
-        const dateStr = format(d, 'MMM dd');
-        days.set(dateStr, { date: dateStr, opens: 0, clicks: 0, replies: 0 });
+      const d = new Date();
+      d.setDate(d.getDate() - i);
+      const dateStr = format(d, 'MMM dd');
+      days.set(dateStr, { date: dateStr, opens: 0, clicks: 0, replies: 0 });
     }
 
-    recipients.forEach(r => {
+    source.forEach(r => {
       if (r.opened_at) {
         const date = format(new Date(r.opened_at), 'MMM dd');
         if (days.has(date)) days.get(date).opens++;
@@ -336,30 +507,59 @@ const CampaignTracker = () => {
       }
     });
     return Array.from(days.values());
-  }, [recipients]);
+  }, [analyticsRecipients, recipients]);
 
-  const handleExport = () => {
-    const headers = ['Email', 'Name', 'Status', 'Opened At', 'Clicked At', 'Replied', 'Bounced', 'Last Sent'];
-    const csvContent = [
-      headers.join(','),
-      ...recipients.map(r => [
-        r.email,
-        `"${r.name || ''}"`,
-        r.status,
-        r.opened_at ? new Date(r.opened_at).toISOString() : '',
-        r.clicked_at ? new Date(r.clicked_at).toISOString() : '',
-        r.replied ? 'Yes' : 'No',
-        r.bounced ? 'Yes' : 'No',
-        r.last_email_sent_at ? new Date(r.last_email_sent_at).toISOString() : ''
-      ].join(','))
-    ].join('\n');
-    
-    const blob = new Blob([csvContent], { type: 'text/csv' });
-    const url = window.URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = `campaign-export-${campaign?.name || 'data'}.csv`;
-    a.click();
+  useEffect(() => {
+    const source = analyticsRecipients.length > 0 ? analyticsRecipients : recipients;
+    const activity: any[] = [];
+    source.forEach(r => {
+      if (r.opened_at) activity.push({ type: 'open', date: new Date(r.opened_at), email: r.email, name: r.name });
+      if (r.clicked_at) activity.push({ type: 'click', date: new Date(r.clicked_at), email: r.email, name: r.name });
+      if (r.replied) activity.push({ type: 'reply', date: new Date(r.last_email_sent_at || new Date()), email: r.email, name: r.name }); // Approximate
+      if (r.bounced) activity.push({ type: 'bounce', date: new Date(r.bounced_at || r.last_email_sent_at || new Date()), email: r.email, name: r.name });
+    });
+
+    activity.sort((a, b) => b.date.getTime() - a.date.getTime());
+    setRecentActivity(activity.slice(0, 20));
+  }, [analyticsRecipients, recipients]);
+
+  const handleRefresh = async () => {
+    const total = await fetchCampaignData(true);
+    await fetchAnalyticsRecipients(true, total);
+  };
+
+  const handleExport = async () => {
+    try {
+      const total = recipientTotal || campaign?.total_recipients || recipients.length;
+      const exportRecipients = analyticsRecipients.length >= total && total > 0
+        ? analyticsRecipients
+        : await fetchAllRecipients('email, name, status, opened_at, clicked_at, replied, bounced, last_email_sent_at', total);
+
+      const rows = exportRecipients.length ? exportRecipients : recipients;
+      const headers = ['Email', 'Name', 'Status', 'Opened At', 'Clicked At', 'Replied', 'Bounced', 'Last Sent'];
+      const csvContent = [
+        headers.join(','),
+        ...rows.map(r => [
+          r.email,
+          `"${r.name || ''}"`,
+          r.status,
+          r.opened_at ? new Date(r.opened_at).toISOString() : '',
+          r.clicked_at ? new Date(r.clicked_at).toISOString() : '',
+          r.replied ? 'Yes' : 'No',
+          r.bounced ? 'Yes' : 'No',
+          r.last_email_sent_at ? new Date(r.last_email_sent_at).toISOString() : ''
+        ].join(','))
+      ].join('\n');
+
+      const blob = new Blob([csvContent], { type: 'text/csv' });
+      const url = window.URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `campaign-export-${campaign?.name || 'data'}.csv`;
+      a.click();
+    } catch (error) {
+      console.error('Error exporting recipients:', error);
+    }
   };
 
   const getInsights = () => {
@@ -417,11 +617,23 @@ const CampaignTracker = () => {
     return insights;
   };
 
+  if (authLoading) {
+    return (
+      <div className="flex items-center justify-center min-h-screen">
+        <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600"></div>
+      </div>
+    );
+  }
+
+  if (!user) {
+    return null;
+  }
+
   if (loading) {
     return (
       <DashboardLayout 
         activeTab="campaigns" 
-        onTabChange={() => navigate('/dashboard')} 
+        onTabChange={handleTabChange} 
         user={user} 
         onLogout={handleLogout}
       >
@@ -436,7 +648,7 @@ const CampaignTracker = () => {
     return (
       <DashboardLayout 
         activeTab="campaigns" 
-        onTabChange={() => navigate('/dashboard')} 
+        onTabChange={handleTabChange} 
         user={user} 
         onLogout={handleLogout}
       >
@@ -453,136 +665,166 @@ const CampaignTracker = () => {
   return (
     <DashboardLayout 
       activeTab="campaigns" 
-      onTabChange={() => navigate('/campaigns')} 
+      onTabChange={handleTabChange} 
       user={user} 
       onLogout={handleLogout}
     >
       <div className="space-y-8">
         {/* Header */}
-        <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
-          <div className="flex items-center space-x-4">
-            <Button variant="ghost" size="icon" onClick={() => navigate('/campaigns')} className="rounded-full hover:bg-gray-200">
-              <ArrowLeft className="h-6 w-6" />
-            </Button>
-            <div>
-              <div className="flex items-center gap-3">
-                <h1 className="text-3xl font-bold text-gray-900 tracking-tight">{campaign.name}</h1>
-                <Badge className={`${getStatusColor(campaign.status)} text-white px-3 py-1`}>
-                  {campaign.status}
-                </Badge>
-                <span className="text-sm text-gray-400">ID: {campaign.id}</span>
-              </div>
-              <div className="flex items-center space-x-4 mt-2 text-sm text-gray-500">
-                <span className="flex items-center gap-1">
-                  <Mail className="h-4 w-4" /> {campaign.subject}
-                </span>
-                <span className="flex items-center gap-1">
-                  <Calendar className="h-4 w-4" /> Created {format(new Date(campaign.created_at), 'MMM d, yyyy')}
-                </span>
+        <div className="rounded-2xl border border-[var(--shell-border)] bg-[var(--shell-surface-strong)]/90 p-6 shadow-[0_18px_40px_rgba(15,23,42,0.08)]">
+          <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-6">
+            <div className="flex items-start gap-4">
+              <Button
+                variant="ghost"
+                size="icon"
+                onClick={() => navigate('/campaigns')}
+                className="rounded-full border border-[var(--shell-border)] bg-white/80 hover:bg-white"
+              >
+                <ArrowLeft className="h-5 w-5" />
+              </Button>
+              <div className="space-y-3">
+                <div className="flex flex-wrap items-center gap-3">
+                  <h1
+                    className="text-3xl font-semibold tracking-tight text-[var(--shell-ink)]"
+                    style={{ fontFamily: 'var(--shell-font-display)' }}
+                  >
+                    {campaign.name}
+                  </h1>
+                  <Badge variant="outline" className={`rounded-full px-3 py-1 text-xs font-semibold capitalize ${getStatusColor(campaign.status)}`}>
+                    {campaign.status}
+                  </Badge>
+                  <span className="text-xs font-semibold uppercase tracking-[0.2em] text-[var(--shell-muted)]">
+                    ID {campaign.id}
+                  </span>
+                </div>
+                <div className="flex flex-wrap items-center gap-4 text-sm text-[var(--shell-muted)]">
+                  <span className="flex items-center gap-2">
+                    <Mail className="h-4 w-4" /> {campaign.subject}
+                  </span>
+                  <span className="flex items-center gap-2">
+                    <Calendar className="h-4 w-4" /> Created {format(new Date(campaign.created_at), 'MMM d, yyyy')}
+                  </span>
+                </div>
               </div>
             </div>
-          </div>
-          <div className="flex gap-2">
-            <Button onClick={handleExport} variant="outline" className="bg-white">
-              <Download className="h-4 w-4 mr-2" />
-              Export Data
-            </Button>
-            <Button onClick={() => fetchCampaignData(true)} variant="outline" className="bg-white">
-              <RefreshCw className="h-4 w-4 mr-2" />
-              Refresh
-            </Button>
-            <Button variant="default" className="bg-blue-600 hover:bg-blue-700">
-              Edit Campaign
-            </Button>
+            <div className="flex flex-wrap gap-2">
+              <Button
+                onClick={handleExport}
+                variant="outline"
+                className="rounded-full border-[var(--shell-border)] bg-white/80 font-semibold text-[var(--shell-ink)] hover:bg-white"
+              >
+                <Download className="h-4 w-4 mr-2" />
+                Export Data
+              </Button>
+              <Button
+                onClick={handleRefresh}
+                variant="outline"
+                className="rounded-full border-[var(--shell-border)] bg-white/80 font-semibold text-[var(--shell-ink)] hover:bg-white"
+              >
+                <RefreshCw className="h-4 w-4 mr-2" />
+                Refresh
+              </Button>
+              <Button variant="default" className="rounded-full bg-blue-600 hover:bg-blue-700">
+                Edit Campaign
+              </Button>
+            </div>
           </div>
         </div>
 
-        {/* Stats Overview Cards - Enhanced */}
+        {/* Stats Overview Cards */}
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
-          <Card className="bg-white border-l-4 border-l-blue-500 shadow-sm">
+          <Card className="relative overflow-hidden border border-[var(--shell-border)] bg-[var(--shell-surface-strong)]/90 shadow-[0_12px_30px_rgba(15,23,42,0.08)]">
             <CardContent className="p-6">
-              <div className="flex justify-between items-start">
+              <div className="flex items-start justify-between gap-6">
                 <div>
-                  <p className="text-sm font-medium text-gray-500">Total Recipients</p>
-                  <h3 className="text-2xl font-bold text-gray-900 mt-1">{stats.total}</h3>
-                  <div className="flex items-center mt-2 text-xs text-gray-500">
-                    <span className="text-blue-600 font-medium mr-1">{stats.sent}</span> sent
-                    <span className="mx-1">•</span>
-                    <span className="text-orange-500 font-medium mr-1">{stats.queued}</span> queued
+                  <p className="text-xs font-semibold uppercase tracking-wide text-[var(--shell-muted)]">Total Recipients</p>
+                  <h3 className="mt-2 text-3xl font-semibold text-[var(--shell-ink)]">{stats.total.toLocaleString()}</h3>
+                  <div className="mt-3 flex flex-wrap items-center gap-2 text-xs text-[var(--shell-muted)]">
+                    <span className="text-blue-700 font-semibold">{stats.sent.toLocaleString()}</span>
+                    <span>sent</span>
+                    <span className="text-slate-300">|</span>
+                    <span className="text-amber-600 font-semibold">{stats.queued.toLocaleString()}</span>
+                    <span>queued</span>
                     {stats.failed > 0 && (
                       <>
-                        <span className="mx-1">•</span>
-                        <span className="text-red-500 font-medium mr-1">{stats.failed}</span> failed
+                        <span className="text-slate-300">|</span>
+                        <span className="text-rose-600 font-semibold">{stats.failed.toLocaleString()}</span>
+                        <span>failed</span>
                       </>
                     )}
                   </div>
                 </div>
-                <div className="p-2 bg-blue-50 rounded-lg">
-                  <Users className="h-5 w-5 text-blue-600" />
+                <div className="rounded-2xl bg-blue-50 p-3 text-blue-600 shadow-sm">
+                  <Users className="h-5 w-5" />
                 </div>
               </div>
             </CardContent>
           </Card>
 
-          <Card className="bg-white border-l-4 border-l-green-500 shadow-sm">
+          <Card className="relative overflow-hidden border border-[var(--shell-border)] bg-[var(--shell-surface-strong)]/90 shadow-[0_12px_30px_rgba(15,23,42,0.08)]">
             <CardContent className="p-6">
-              <div className="flex justify-between items-start">
+              <div className="flex items-start justify-between gap-6">
                 <div>
-                  <p className="text-sm font-medium text-gray-500">Engagement Rate</p>
-                  <h3 className="text-2xl font-bold text-gray-900 mt-1">
+                  <p className="text-xs font-semibold uppercase tracking-wide text-[var(--shell-muted)]">Engagement Rate</p>
+                  <h3 className="mt-2 text-3xl font-semibold text-[var(--shell-ink)]">
                     {stats.sent > 0 ? Math.round(((stats.opens + stats.clicks) / stats.sent) * 100) : 0}%
                   </h3>
-                  <div className="flex items-center mt-2 text-xs text-gray-500">
-                    <span className="text-green-600 font-medium mr-1">{stats.opens}</span> opens
-                    <span className="mx-1">•</span>
-                    <span className="text-purple-600 font-medium mr-1">{stats.clicks}</span> clicks
+                  <div className="mt-3 flex flex-wrap items-center gap-2 text-xs text-[var(--shell-muted)]">
+                    <span className="text-emerald-600 font-semibold">{stats.opens.toLocaleString()}</span>
+                    <span>opens</span>
+                    <span className="text-slate-300">|</span>
+                    <span className="text-violet-600 font-semibold">{stats.clicks.toLocaleString()}</span>
+                    <span>clicks</span>
                   </div>
                   {(stats.botOpens > 0 || stats.botClicks > 0) && (
-                    <div className="mt-1 text-xs text-gray-400 flex items-center" title="Filtered bot activity">
-                        <span className="mr-1">🤖</span> {stats.botOpens} bot opens, {stats.botClicks} bot clicks
+                    <div className="mt-2 flex items-center gap-1 text-xs text-slate-500" title="Filtered bot activity">
+                      <Filter className="h-3 w-3" />
+                      {stats.botOpens.toLocaleString()} bot opens, {stats.botClicks.toLocaleString()} bot clicks
                     </div>
                   )}
                 </div>
-                <div className="p-2 bg-green-50 rounded-lg">
-                  <MousePointerClick className="h-5 w-5 text-green-600" />
+                <div className="rounded-2xl bg-emerald-50 p-3 text-emerald-600 shadow-sm">
+                  <MousePointerClick className="h-5 w-5" />
                 </div>
               </div>
             </CardContent>
           </Card>
 
-          <Card className="bg-white border-l-4 border-l-yellow-500 shadow-sm">
+          <Card className="relative overflow-hidden border border-[var(--shell-border)] bg-[var(--shell-surface-strong)]/90 shadow-[0_12px_30px_rgba(15,23,42,0.08)]">
             <CardContent className="p-6">
-              <div className="flex justify-between items-start">
+              <div className="flex items-start justify-between gap-6">
                 <div>
-                  <p className="text-sm font-medium text-gray-500">Reply Rate</p>
-                  <h3 className="text-2xl font-bold text-gray-900 mt-1">
+                  <p className="text-xs font-semibold uppercase tracking-wide text-[var(--shell-muted)]">Reply Rate</p>
+                  <h3 className="mt-2 text-3xl font-semibold text-[var(--shell-ink)]">
                     {stats.sent > 0 ? ((stats.replies / stats.sent) * 100).toFixed(1) : 0}%
                   </h3>
-                  <div className="flex items-center mt-2 text-xs text-gray-500">
-                    <span className="text-yellow-600 font-medium mr-1">{stats.replies}</span> replies
+                  <div className="mt-3 flex items-center gap-2 text-xs text-[var(--shell-muted)]">
+                    <span className="text-amber-600 font-semibold">{stats.replies.toLocaleString()}</span>
+                    <span>replies</span>
                   </div>
                 </div>
-                <div className="p-2 bg-yellow-50 rounded-lg">
-                  <MessageSquare className="h-5 w-5 text-yellow-600" />
+                <div className="rounded-2xl bg-amber-50 p-3 text-amber-600 shadow-sm">
+                  <MessageSquare className="h-5 w-5" />
                 </div>
               </div>
             </CardContent>
           </Card>
 
-          <Card className="bg-white border-l-4 border-l-red-500 shadow-sm">
+          <Card className="relative overflow-hidden border border-[var(--shell-border)] bg-[var(--shell-surface-strong)]/90 shadow-[0_12px_30px_rgba(15,23,42,0.08)]">
             <CardContent className="p-6">
-              <div className="flex justify-between items-start">
+              <div className="flex items-start justify-between gap-6">
                 <div>
-                  <p className="text-sm font-medium text-gray-500">Bounce Rate</p>
-                  <h3 className="text-2xl font-bold text-gray-900 mt-1">
+                  <p className="text-xs font-semibold uppercase tracking-wide text-[var(--shell-muted)]">Bounce Rate</p>
+                  <h3 className="mt-2 text-3xl font-semibold text-[var(--shell-ink)]">
                     {stats.sent > 0 ? ((stats.bounces / stats.sent) * 100).toFixed(1) : 0}%
                   </h3>
-                  <div className="flex items-center mt-2 text-xs text-gray-500">
-                    <span className="text-red-600 font-medium mr-1">{stats.bounces}</span> bounced
+                  <div className="mt-3 flex items-center gap-2 text-xs text-[var(--shell-muted)]">
+                    <span className="text-rose-600 font-semibold">{stats.bounces.toLocaleString()}</span>
+                    <span>bounced</span>
                   </div>
                 </div>
-                <div className="p-2 bg-red-50 rounded-lg">
-                  <AlertCircle className="h-5 w-5 text-red-600" />
+                <div className="rounded-2xl bg-rose-50 p-3 text-rose-600 shadow-sm">
+                  <AlertCircle className="h-5 w-5" />
                 </div>
               </div>
             </CardContent>
@@ -590,28 +832,34 @@ const CampaignTracker = () => {
         </div>
 
         <Tabs value={activeTab} onValueChange={setActiveTab} className="space-y-6">
-          <TabsList className="bg-white p-1 border rounded-lg w-full justify-start h-auto">
-            <TabsTrigger value="overview" className="px-4 py-2 data-[state=active]:bg-blue-50 data-[state=active]:text-blue-700">Overview</TabsTrigger>
-            <TabsTrigger value="analytics" className="px-4 py-2 data-[state=active]:bg-blue-50 data-[state=active]:text-blue-700">
+          <TabsList className="w-full justify-start gap-2 rounded-2xl border border-[var(--shell-border)] bg-[var(--shell-surface-strong)]/90 p-2 shadow-[0_10px_24px_rgba(15,23,42,0.08)]">
+            <TabsTrigger value="overview" className="rounded-full px-4 py-2 text-sm font-semibold text-slate-600 data-[state=active]:bg-white data-[state=active]:text-slate-900 data-[state=active]:shadow">Overview</TabsTrigger>
+            <TabsTrigger value="analytics" className="rounded-full px-4 py-2 text-sm font-semibold text-slate-600 data-[state=active]:bg-white data-[state=active]:text-slate-900 data-[state=active]:shadow">
                 <BarChart2 className="h-4 w-4 mr-2" />
                 Analytics
             </TabsTrigger>
-            <TabsTrigger value="recipients" className="px-4 py-2 data-[state=active]:bg-blue-50 data-[state=active]:text-blue-700">
-              Recipients <Badge variant="secondary" className="ml-2 bg-gray-100 text-gray-600">{recipients.length}</Badge>
+            <TabsTrigger value="recipients" className="rounded-full px-4 py-2 text-sm font-semibold text-slate-600 data-[state=active]:bg-white data-[state=active]:text-slate-900 data-[state=active]:shadow">
+              Recipients <Badge variant="secondary" className="ml-2 bg-white/70 text-slate-600">{stats.total.toLocaleString()}</Badge>
             </TabsTrigger>
-            <TabsTrigger value="replies" className="px-4 py-2 data-[state=active]:bg-blue-50 data-[state=active]:text-blue-700">
-              Replies <Badge variant="secondary" className="ml-2 bg-gray-100 text-gray-600">{stats.replies}</Badge>
+            <TabsTrigger value="replies" className="rounded-full px-4 py-2 text-sm font-semibold text-slate-600 data-[state=active]:bg-white data-[state=active]:text-slate-900 data-[state=active]:shadow">
+              Replies <Badge variant="secondary" className="ml-2 bg-white/70 text-slate-600">{stats.replies.toLocaleString()}</Badge>
             </TabsTrigger>
-            <TabsTrigger value="sequence" className="px-4 py-2 data-[state=active]:bg-blue-50 data-[state=active]:text-blue-700">Sequence</TabsTrigger>
+            <TabsTrigger value="sequence" className="rounded-full px-4 py-2 text-sm font-semibold text-slate-600 data-[state=active]:bg-white data-[state=active]:text-slate-900 data-[state=active]:shadow">Sequence</TabsTrigger>
           </TabsList>
 
           <TabsContent value="analytics" className="space-y-6">
             <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
                 {/* Engagement Timeline */}
-                <Card className="lg:col-span-2">
+                <Card className="lg:col-span-2 border border-[var(--shell-border)] bg-[var(--shell-surface-strong)]/95 shadow-[0_12px_30px_rgba(15,23,42,0.08)]">
                     <CardHeader>
-                        <CardTitle>Engagement Over Time</CardTitle>
-                        <CardDescription>Daily opens, clicks, and replies for the last 7 days</CardDescription>
+                        <CardTitle className="text-base font-semibold text-[var(--shell-ink)]">Engagement Over Time</CardTitle>
+                        <CardDescription className="text-sm text-[var(--shell-muted)]">Daily opens, clicks, and replies for the last 7 days</CardDescription>
+                        {analyticsIsPartial && analyticsSampleSize > 0 && (
+                          <div className="mt-2 flex items-center gap-1 text-xs text-amber-600">
+                            <AlertCircle className="h-3 w-3" />
+                            Showing activity for {analyticsSampleSize.toLocaleString()} recipients. Refresh for full history.
+                          </div>
+                        )}
                     </CardHeader>
                     <CardContent className="h-[300px]">
                         <ResponsiveContainer width="100%" height="100%">
@@ -640,13 +888,13 @@ const CampaignTracker = () => {
                 </Card>
 
                 {/* AI Insights */}
-                <Card>
+                <Card className="border border-[var(--shell-border)] bg-[var(--shell-surface-strong)]/95 shadow-[0_12px_30px_rgba(15,23,42,0.08)]">
                     <CardHeader>
-                        <CardTitle className="flex items-center gap-2">
+                        <CardTitle className="flex items-center gap-2 text-base font-semibold text-[var(--shell-ink)]">
                             <Lightbulb className="h-5 w-5 text-yellow-500" />
                             Campaign Insights
                         </CardTitle>
-                        <CardDescription>AI-driven recommendations</CardDescription>
+                        <CardDescription className="text-sm text-[var(--shell-muted)]">AI-driven recommendations</CardDescription>
                     </CardHeader>
                     <CardContent className="space-y-4">
                         {getInsights().map((insight, i) => (
@@ -662,7 +910,7 @@ const CampaignTracker = () => {
                                     insight.type === 'danger' ? 'text-red-800' :
                                     'text-blue-800'
                                 }`}>{insight.title}</h4>
-                                <p className="text-xs text-gray-600">{insight.message}</p>
+                                <p className="text-xs text-slate-600">{insight.message}</p>
                             </div>
                         ))}
                     </CardContent>
@@ -671,10 +919,16 @@ const CampaignTracker = () => {
 
             <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                 {/* Hourly Engagement */}
-                <Card>
+                <Card className="border border-[var(--shell-border)] bg-[var(--shell-surface-strong)]/95 shadow-[0_12px_30px_rgba(15,23,42,0.08)]">
                     <CardHeader>
-                        <CardTitle>Best Time to Email</CardTitle>
-                        <CardDescription>When your recipients are most active (24h)</CardDescription>
+                        <CardTitle className="text-base font-semibold text-[var(--shell-ink)]">Best Time to Email</CardTitle>
+                        <CardDescription className="text-sm text-[var(--shell-muted)]">When your recipients are most active (24h)</CardDescription>
+                        {analyticsIsPartial && analyticsSampleSize > 0 && (
+                          <div className="mt-2 flex items-center gap-1 text-xs text-amber-600">
+                            <AlertCircle className="h-3 w-3" />
+                            Showing activity for {analyticsSampleSize.toLocaleString()} recipients. Refresh for full history.
+                          </div>
+                        )}
                     </CardHeader>
                     <CardContent className="h-[300px]">
                         <ResponsiveContainer width="100%" height="100%">
@@ -694,10 +948,10 @@ const CampaignTracker = () => {
                 </Card>
 
                 {/* Funnel */}
-                <Card>
+                <Card className="border border-[var(--shell-border)] bg-[var(--shell-surface-strong)]/95 shadow-[0_12px_30px_rgba(15,23,42,0.08)]">
                     <CardHeader>
-                        <CardTitle>Conversion Funnel</CardTitle>
-                        <CardDescription>Drop-off rates between stages</CardDescription>
+                        <CardTitle className="text-base font-semibold text-[var(--shell-ink)]">Conversion Funnel</CardTitle>
+                        <CardDescription className="text-sm text-[var(--shell-muted)]">Drop-off rates between stages</CardDescription>
                     </CardHeader>
                     <CardContent className="h-[300px] flex items-center justify-center">
                         <ResponsiveContainer width="100%" height="100%">
@@ -738,10 +992,10 @@ const CampaignTracker = () => {
           <TabsContent value="overview" className="space-y-6">
             <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
               {/* Funnel Chart */}
-              <Card className="border-none shadow-sm">
+              <Card className="border border-[var(--shell-border)] bg-[var(--shell-surface-strong)]/95 shadow-[0_12px_30px_rgba(15,23,42,0.08)]">
                 <CardHeader>
-                  <CardTitle>Campaign Funnel</CardTitle>
-                  <CardDescription>Conversion rates through the email stages</CardDescription>
+                  <CardTitle className="text-base font-semibold text-[var(--shell-ink)]">Campaign Funnel</CardTitle>
+                  <CardDescription className="text-sm text-[var(--shell-muted)]">Conversion rates through the email stages</CardDescription>
                 </CardHeader>
                 <CardContent className="h-[350px]">
                   <ResponsiveContainer width="100%" height="100%">
@@ -777,10 +1031,16 @@ const CampaignTracker = () => {
               </Card>
 
               {/* Hourly Engagement Chart */}
-              <Card className="border-none shadow-sm">
+              <Card className="border border-[var(--shell-border)] bg-[var(--shell-surface-strong)]/95 shadow-[0_12px_30px_rgba(15,23,42,0.08)]">
                 <CardHeader>
-                  <CardTitle>Engagement by Hour</CardTitle>
-                  <CardDescription>When do recipients open and click?</CardDescription>
+                  <CardTitle className="text-base font-semibold text-[var(--shell-ink)]">Engagement by Hour</CardTitle>
+                  <CardDescription className="text-sm text-[var(--shell-muted)]">When do recipients open and click?</CardDescription>
+                  {analyticsIsPartial && analyticsSampleSize > 0 && (
+                    <div className="mt-2 flex items-center gap-1 text-xs text-amber-600">
+                      <AlertCircle className="h-3 w-3" />
+                      Showing activity for {analyticsSampleSize.toLocaleString()} recipients. Refresh for full history.
+                    </div>
+                  )}
                 </CardHeader>
                 <CardContent className="h-[350px]">
                   <ResponsiveContainer width="100%" height="100%">
@@ -800,9 +1060,9 @@ const CampaignTracker = () => {
             </div>
 
             {/* Recent Activity Feed */}
-            <Card className="border-none shadow-sm">
+            <Card className="border border-[var(--shell-border)] bg-[var(--shell-surface-strong)]/95 shadow-[0_12px_30px_rgba(15,23,42,0.08)]">
                 <CardHeader>
-                  <CardTitle className="flex items-center gap-2">
+                  <CardTitle className="flex items-center gap-2 text-base font-semibold text-[var(--shell-ink)]">
                     <Activity className="h-5 w-5 text-blue-600" />
                     Live Activity
                   </CardTitle>
@@ -810,8 +1070,10 @@ const CampaignTracker = () => {
                 <CardContent>
                   <ScrollArea className="h-[350px] pr-4">
                     <div className="space-y-4">
-                      {recentActivity.length === 0 ? (
-                        <div className="text-center text-gray-500 py-8">No activity yet</div>
+                      {analyticsLoading ? (
+                        <div className="text-center text-slate-500 py-8">Loading activity...</div>
+                      ) : recentActivity.length === 0 ? (
+                        <div className="text-center text-slate-500 py-8">No activity yet</div>
                       ) : (
                         recentActivity.map((item, i) => (
                           <div key={i} className="flex items-start gap-3 pb-3 border-b last:border-0">
@@ -819,16 +1081,16 @@ const CampaignTracker = () => {
                               {getActivityIcon(item.type)}
                             </div>
                             <div className="flex-1 min-w-0">
-                              <p className="text-sm font-medium text-gray-900">
+                              <p className="text-sm font-medium text-slate-900">
                                 {item.email}
                               </p>
-                              <p className="text-xs text-gray-500 capitalize">
+                              <p className="text-xs text-slate-500 capitalize">
                                 {item.type === 'open' ? 'Opened email' : 
                                  item.type === 'click' ? 'Clicked link' : 
                                  item.type === 'reply' ? 'Replied' : 'Bounced'}
                               </p>
                             </div>
-                            <span className="text-xs text-gray-400 whitespace-nowrap">
+                            <span className="text-xs text-slate-400 whitespace-nowrap">
                               {formatDistanceToNow(item.date, { addSuffix: true })}
                             </span>
                           </div>
@@ -842,10 +1104,10 @@ const CampaignTracker = () => {
 
           {/* REPLIES TAB */}
           <TabsContent value="replies">
-            <Card className="border-none shadow-sm">
+            <Card className="border border-[var(--shell-border)] bg-[var(--shell-surface-strong)]/95 shadow-[0_12px_30px_rgba(15,23,42,0.08)]">
               <CardHeader>
-                <CardTitle>Inbox Replies</CardTitle>
-                <CardDescription>Responses from your campaign recipients</CardDescription>
+                <CardTitle className="text-base font-semibold text-[var(--shell-ink)]">Inbox Replies</CardTitle>
+                <CardDescription className="text-sm text-[var(--shell-muted)]">Responses from your campaign recipients</CardDescription>
               </CardHeader>
               <CardContent>
                 {replies.length === 0 ? (
@@ -857,7 +1119,7 @@ const CampaignTracker = () => {
                 ) : (
                   <div className="space-y-4">
                     {replies.map((reply) => (
-                      <Card key={reply.id} className="border shadow-sm overflow-hidden">
+                      <Card key={reply.id} className="border border-[var(--shell-border)] bg-white/95 shadow-sm overflow-hidden">
                         <div 
                           className="p-4 cursor-pointer hover:bg-gray-50 transition-colors flex items-start gap-4"
                           onClick={() => setExpandedReply(expandedReply === reply.id ? null : reply.id)}
@@ -905,13 +1167,16 @@ const CampaignTracker = () => {
 
           {/* RECIPIENTS TAB */}
           <TabsContent value="recipients">
-            <Card className="border-none shadow-sm">
-              <CardHeader>
-                <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
-                  <CardTitle>Recipient Management</CardTitle>
-                  <div className="flex gap-2">
+            <Card className="border border-[var(--shell-border)] bg-[var(--shell-surface-strong)]/95 shadow-[0_12px_30px_rgba(15,23,42,0.08)]">
+              <CardHeader className="pb-3">
+                <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4">
+                  <div>
+                    <CardTitle className="text-base font-semibold text-[var(--shell-ink)]">Recipients</CardTitle>
+                    <CardDescription className="text-sm text-[var(--shell-muted)]">Delivery status and engagement details by recipient.</CardDescription>
+                  </div>
+                  <div className="flex flex-wrap gap-2">
                     <div className="relative w-64">
-                      <Search className="absolute left-2 top-2.5 h-4 w-4 text-gray-500" />
+                      <Search className="absolute left-2 top-2.5 h-4 w-4 text-slate-400" />
                       <Input
                         placeholder="Search recipients..."
                         value={searchTerm}
@@ -919,123 +1184,193 @@ const CampaignTracker = () => {
                         className="pl-8"
                       />
                     </div>
-                    <select 
-                      className="h-10 rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
-                      value={statusFilter}
-                      onChange={(e) => setStatusFilter(e.target.value)}
-                    >
-                      <option value="all">All Status</option>
-                      <option value="processing">Processing</option>
-                      <option value="queued">Queued</option>
-                      <option value="sent">Sent</option>
-                      <option value="opened">Opened</option>
-                      <option value="clicked">Clicked</option>
-                      <option value="replied">Replied</option>
-                      <option value="bounced">Bounced</option>
-                    </select>
+                    <Select value={statusFilter} onValueChange={setStatusFilter}>
+                      <SelectTrigger className="h-10 w-[180px]">
+                        <SelectValue placeholder="All status" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="all">All Status</SelectItem>
+                        <SelectItem value="processing">Processing</SelectItem>
+                        <SelectItem value="queued">Queued</SelectItem>
+                        <SelectItem value="sent">Sent</SelectItem>
+                        <SelectItem value="opened">Opened</SelectItem>
+                        <SelectItem value="clicked">Clicked</SelectItem>
+                        <SelectItem value="replied">Replied</SelectItem>
+                        <SelectItem value="bounced">Bounced</SelectItem>
+                      </SelectContent>
+                    </Select>
                   </div>
                 </div>
               </CardHeader>
-              <CardContent>
-                <div className="rounded-md border">
-                  <Table>
-                    <TableHeader>
-                      <TableRow className="bg-gray-50">
-                        <TableHead>Recipient</TableHead>
-                        <TableHead>Sender</TableHead>
-                        <TableHead>Status</TableHead>
-                        <TableHead>Progress</TableHead>
-                        <TableHead>Engagement</TableHead>
-                        <TableHead>Next Scheduled</TableHead>
-                      </TableRow>
-                    </TableHeader>
-                    <TableBody>
-                      {filteredRecipients.map((recipient) => {
-                        const nextSend = calculateNextSendTime(recipient);
-                        return (
-                          <TableRow 
-                            key={recipient.id} 
-                            className="hover:bg-gray-50/50 cursor-pointer transition-colors"
-                            onClick={() => setSelectedRecipient(recipient)}
-                          >
-                            <TableCell>
-                              <div className="font-medium text-gray-900">{recipient.email}</div>
-                              {recipient.name && <div className="text-xs text-gray-500">{recipient.name}</div>}
-                            </TableCell>
-                            <TableCell>
-                              <div className="text-sm text-gray-600">
-                                {recipient.email_configs?.smtp_username || '-'}
-                              </div>
-                            </TableCell>
-                            <TableCell>
-                              {recipient.bounced ? (
-                                <Badge variant="destructive" className="bg-red-100 text-red-700 hover:bg-red-200 border-none">Bounced</Badge>
-                              ) : recipient.replied ? (
-                                <Badge className="bg-yellow-100 text-yellow-700 hover:bg-yellow-200 border-none">Replied</Badge>
-                              ) : recipient.status === 'processing' ? (
-                                <Badge className="bg-blue-100 text-blue-700 hover:bg-blue-200 border-none animate-pulse">Processing</Badge>
-                              ) : recipient.status === 'sent' ? (
-                                <Badge className="bg-green-100 text-green-700 hover:bg-green-200 border-none">Sent</Badge>
-                              ) : recipient.status === 'pending' ? (
-                                <Badge variant="outline" className="bg-gray-100 text-gray-700 border-none">Queued</Badge>
-                              ) : (
-                                <Badge variant="outline" className="capitalize bg-gray-100 text-gray-700 border-none">{recipient.status}</Badge>
-                              )}
-                            </TableCell>
-                            <TableCell>
-                              <div className="flex items-center gap-2">
-                                <div className="text-sm font-medium">Step {recipient.current_step ?? 0}</div>
-                                <span className="text-xs text-gray-400">
-                                  {recipient.last_email_sent_at ? format(new Date(recipient.last_email_sent_at), 'MMM d') : '-'}
-                                </span>
-                              </div>
-                            </TableCell>
-                            <TableCell>
-                              <div className="flex space-x-2">
-                                <div className={`flex items-center gap-1 px-2 py-1 rounded text-xs ${recipient.opened_at ? 'bg-green-50 text-green-700' : 'bg-gray-50 text-gray-400'}`}>
-                                  <Eye className="h-3 w-3" /> {recipient.opened_at ? 'Open' : 'No'}
-                                </div>
-                                <div className={`flex items-center gap-1 px-2 py-1 rounded text-xs ${recipient.clicked_at ? 'bg-purple-50 text-purple-700' : 'bg-gray-50 text-gray-400'}`}>
-                                  <MousePointerClick className="h-3 w-3" /> {recipient.clicked_at ? 'Click' : 'No'}
-                                </div>
-                              </div>
-                            </TableCell>
-                            <TableCell>
-                              {nextSend ? (
-                                <div className="flex items-center gap-2 text-sm text-blue-600 bg-blue-50 px-2 py-1 rounded w-fit">
-                                  <Clock className="h-3 w-3" />
-                                  {format(nextSend, 'MMM d, HH:mm')}
-                                </div>
-                              ) : (
-                                <span className="text-xs text-gray-400 italic">Completed</span>
-                              )}
-                            </TableCell>
-                          </TableRow>
-                        );
-                      })}
-                      {filteredRecipients.length === 0 && (
-                        <TableRow>
-                          <TableCell colSpan={5} className="text-center py-12 text-gray-500">
-                            <div className="flex flex-col items-center gap-2">
-                              <Search className="h-8 w-8 text-gray-300" />
-                              <p>No recipients found matching your filters.</p>
-                            </div>
-                          </TableCell>
-                        </TableRow>
-                      )}
-                    </TableBody>
-                  </Table>
+              <CardContent className="p-0">
+                <div className="rounded-md border-t border-[var(--shell-border)]">
+                  <div className="relative max-h-[60vh] w-full overflow-auto">
+                    <table className="w-full min-w-[1200px] caption-bottom text-sm text-left">
+                      <thead className="bg-white/95">
+                        <tr className="border-b border-slate-200/70">
+                          <th className="sticky top-0 z-30 h-11 min-w-[180px] bg-white/95 px-4 align-middle text-xs font-semibold uppercase tracking-wide text-slate-500 backdrop-blur-sm">Name</th>
+                          <th className="sticky top-0 z-30 h-11 min-w-[240px] bg-white/95 px-4 align-middle text-xs font-semibold uppercase tracking-wide text-slate-500 backdrop-blur-sm">Email</th>
+                          <th className="sticky top-0 z-30 h-11 min-w-[200px] bg-white/95 px-4 align-middle text-xs font-semibold uppercase tracking-wide text-slate-500 backdrop-blur-sm">Sender</th>
+                          <th className="sticky top-0 z-30 h-11 min-w-[140px] bg-white/95 px-4 align-middle text-xs font-semibold uppercase tracking-wide text-slate-500 backdrop-blur-sm">Status</th>
+                          <th className="sticky top-0 z-30 h-11 min-w-[120px] bg-white/95 px-4 align-middle text-xs font-semibold uppercase tracking-wide text-slate-500 backdrop-blur-sm">Step</th>
+                          <th className="sticky top-0 z-30 h-11 min-w-[220px] bg-white/95 px-4 align-middle text-xs font-semibold uppercase tracking-wide text-slate-500 backdrop-blur-sm">Engagement</th>
+                          <th className="sticky top-0 z-30 h-11 min-w-[200px] bg-white/95 px-4 align-middle text-xs font-semibold uppercase tracking-wide text-slate-500 backdrop-blur-sm">Next Scheduled</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-slate-100">
+                        {filteredRecipients.length === 0 ? (
+                          <tr>
+                            <td colSpan={7} className="h-24 text-center text-muted-foreground">
+                              No recipients found matching your filters.
+                            </td>
+                          </tr>
+                        ) : (
+                          filteredRecipients.map((recipient) => {
+                            const nextSend = calculateNextSendTime(recipient);
+                            return (
+                              <tr
+                                key={recipient.id}
+                                className="group cursor-pointer transition-colors hover:bg-slate-50/80"
+                                onClick={() => setSelectedRecipient(recipient)}
+                              >
+                                <td className="px-4 py-3 align-middle font-medium text-slate-800">
+                                  {recipient.name || '-'}
+                                </td>
+                                <td className="px-4 py-3 align-middle text-blue-600 whitespace-nowrap truncate max-w-[240px]" title={recipient.email}>
+                                  {recipient.email}
+                                </td>
+                                <td className="px-4 py-3 align-middle text-slate-600">
+                                  {recipient.email_configs?.smtp_username || '-'}
+                                </td>
+                                <td className="px-4 py-3 align-middle">
+                                  {recipient.bounced ? (
+                                    <Badge className="bg-rose-100 text-rose-700 hover:bg-rose-200 border-none">Bounced</Badge>
+                                  ) : recipient.replied ? (
+                                    <Badge className="bg-amber-100 text-amber-700 hover:bg-amber-200 border-none">Replied</Badge>
+                                  ) : recipient.status === 'processing' ? (
+                                    <Badge className="bg-blue-100 text-blue-700 hover:bg-blue-200 border-none animate-pulse">Processing</Badge>
+                                  ) : recipient.status === 'sent' ? (
+                                    <Badge className="bg-emerald-100 text-emerald-700 hover:bg-emerald-200 border-none">Sent</Badge>
+                                  ) : recipient.status === 'pending' ? (
+                                    <Badge variant="outline" className="bg-slate-100 text-slate-700 border-none">Queued</Badge>
+                                  ) : (
+                                    <Badge variant="outline" className="capitalize bg-slate-100 text-slate-700 border-none">{recipient.status}</Badge>
+                                  )}
+                                </td>
+                                <td className="px-4 py-3 align-middle text-slate-600">
+                                  <div className="text-sm font-medium text-slate-700">Step {recipient.current_step ?? 0}</div>
+                                  <div className="text-xs text-slate-500">
+                                    {recipient.last_email_sent_at ? format(new Date(recipient.last_email_sent_at), 'MMM d') : 'Not sent yet'}
+                                  </div>
+                                </td>
+                                <td className="px-4 py-3 align-middle">
+                                  <div className="flex flex-wrap gap-2">
+                                    <div className={`flex items-center gap-1 rounded-full px-2 py-1 text-xs ${recipient.opened_at ? 'bg-emerald-50 text-emerald-700' : 'bg-slate-50 text-slate-400'}`}>
+                                      <Eye className="h-3 w-3" /> {recipient.opened_at ? 'Opened' : 'No open'}
+                                    </div>
+                                    <div className={`flex items-center gap-1 rounded-full px-2 py-1 text-xs ${recipient.clicked_at ? 'bg-violet-50 text-violet-700' : 'bg-slate-50 text-slate-400'}`}>
+                                      <MousePointerClick className="h-3 w-3" /> {recipient.clicked_at ? 'Clicked' : 'No click'}
+                                    </div>
+                                    {recipient.replied && (
+                                      <div className="flex items-center gap-1 rounded-full bg-amber-50 px-2 py-1 text-xs text-amber-700">
+                                        <MessageSquare className="h-3 w-3" /> Replied
+                                      </div>
+                                    )}
+                                  </div>
+                                </td>
+                                <td className="px-4 py-3 align-middle text-slate-600">
+                                  {nextSend ? (
+                                    <div className="inline-flex items-center gap-2 rounded-full bg-blue-50 px-2 py-1 text-xs text-blue-700">
+                                      <Clock className="h-3 w-3" />
+                                      {format(nextSend, 'MMM d, HH:mm')}
+                                    </div>
+                                  ) : (
+                                    <span className="text-xs text-slate-400 italic">Completed</span>
+                                  )}
+                                </td>
+                              </tr>
+                            );
+                          })
+                        )}
+                      </tbody>
+                    </table>
+                  </div>
+                  <div className="border-t border-slate-200/70 bg-white/95 px-4 py-3 shadow-[0_-10px_18px_rgba(15,23,42,0.08)] backdrop-blur-sm">
+                    <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+                      <div className="flex flex-wrap items-center gap-3 text-xs text-muted-foreground">
+                        <span className="font-semibold uppercase tracking-wide text-slate-500">Items per page</span>
+                        <Select value={String(recipientPageSize)} onValueChange={handleRecipientPageSizeChange}>
+                          <SelectTrigger className="h-8 w-[120px]">
+                            <SelectValue placeholder="Per page" />
+                          </SelectTrigger>
+                          <SelectContent>
+                            {pageSizeOptions.map((size) => (
+                              <SelectItem key={size} value={String(size)}>
+                                {size} / page
+                              </SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+                        <span className="text-slate-500">
+                          Showing {pageStart}-{pageEnd} of {recipientTotal.toLocaleString()}
+                        </span>
+                      </div>
+                      <Pagination className="w-auto justify-end">
+                        <PaginationContent>
+                          <PaginationItem>
+                            <PaginationPrevious
+                              href="#"
+                              onClick={(event) => {
+                                event.preventDefault();
+                                handleRecipientPageChange(recipientPage - 1);
+                              }}
+                              className={recipientPage === 1 ? "pointer-events-none opacity-50" : ""}
+                            />
+                          </PaginationItem>
+                          {paginationItems.map((item, index) =>
+                            item === "ellipsis" ? (
+                              <PaginationItem key={`ellipsis-${index}`}>
+                                <PaginationEllipsis />
+                              </PaginationItem>
+                            ) : (
+                              <PaginationItem key={item}>
+                                <PaginationLink
+                                  href="#"
+                                  isActive={item === recipientPage}
+                                  onClick={(event) => {
+                                    event.preventDefault();
+                                    handleRecipientPageChange(item);
+                                  }}
+                                >
+                                  {item}
+                                </PaginationLink>
+                              </PaginationItem>
+                            )
+                          )}
+                          <PaginationItem>
+                            <PaginationNext
+                              href="#"
+                              onClick={(event) => {
+                                event.preventDefault();
+                                handleRecipientPageChange(recipientPage + 1);
+                              }}
+                              className={recipientPage === totalPages ? "pointer-events-none opacity-50" : ""}
+                            />
+                          </PaginationItem>
+                        </PaginationContent>
+                      </Pagination>
+                    </div>
+                  </div>
                 </div>
               </CardContent>
             </Card>
           </TabsContent>
-
           {/* SEQUENCE TAB */}
           <TabsContent value="sequence">
-            <Card className="border-none shadow-sm">
+            <Card className="border border-[var(--shell-border)] bg-[var(--shell-surface-strong)]/95 shadow-[0_12px_30px_rgba(15,23,42,0.08)]">
               <CardHeader>
-                <CardTitle>Campaign Sequence</CardTitle>
-                <CardDescription>Visual timeline of your email steps</CardDescription>
+                <CardTitle className="text-base font-semibold text-[var(--shell-ink)]">Campaign Sequence</CardTitle>
+                <CardDescription className="text-sm text-[var(--shell-muted)]">Visual timeline of your email steps</CardDescription>
               </CardHeader>
               <CardContent>
                 <div className="relative pl-8 space-y-8 before:absolute before:left-3.5 before:top-2 before:h-full before:w-0.5 before:bg-gray-200">
@@ -1044,7 +1379,7 @@ const CampaignTracker = () => {
                     <div className="absolute -left-[29px] top-0 h-8 w-8 rounded-full bg-blue-600 text-white flex items-center justify-center font-bold text-sm ring-4 ring-white">
                       1
                     </div>
-                    <Card className="border shadow-sm">
+                    <Card className="border border-[var(--shell-border)] bg-white/95 shadow-sm">
                       <CardHeader className="pb-2">
                         <div className="flex justify-between">
                           <CardTitle className="text-base">Initial Email</CardTitle>
@@ -1072,7 +1407,7 @@ const CampaignTracker = () => {
                         <span>Wait {step.delay_days} days, {step.delay_hours} hours</span>
                       </div>
 
-                      <Card className="border shadow-sm">
+                      <Card className="border border-[var(--shell-border)] bg-white/95 shadow-sm">
                         <CardHeader className="pb-2">
                           <div className="flex justify-between">
                             <CardTitle className="text-base">Follow-up {index + 1}</CardTitle>
@@ -1099,7 +1434,7 @@ const CampaignTracker = () => {
 
       {/* Recipient Details Dialog */}
       <Dialog open={!!selectedRecipient} onOpenChange={(open) => !open && setSelectedRecipient(null)}>
-        <DialogContent className="max-w-2xl">
+      <DialogContent className="max-w-2xl border border-[var(--shell-border)] bg-white/95">
           <DialogHeader>
             <DialogTitle>Recipient Details</DialogTitle>
             <DialogDescription>
@@ -1189,3 +1524,7 @@ const CampaignTracker = () => {
 };
 
 export default CampaignTracker;
+
+
+
+

@@ -4,21 +4,25 @@ import { supabase } from '@/integrations/supabase/client';
 import DashboardLayout from '@/components/Layout/DashboardLayout';
 import CampaignList from '@/components/CampaignList';
 import CampaignBuilder from '@/components/CampaignBuilder';
+import { useAuth } from '@/providers/AuthProvider';
 
 const Campaigns = () => {
-  const [user, setUser] = useState<any>(null);
+  const { user, loading } = useAuth();
   const [emailConfigs, setEmailConfigs] = useState<any[]>([]);
   const [showBuilder, setShowBuilder] = useState(false);
   const navigate = useNavigate();
 
   useEffect(() => {
-    supabase.auth.getSession().then(({ data: { session } }) => {
-      if (session) {
-        setUser(session.user);
-        fetchEmailConfigs(session.user.id);
-      }
-    });
-  }, []);
+    if (!loading && !user) {
+      navigate('/auth');
+    }
+  }, [loading, user, navigate]);
+
+  useEffect(() => {
+    if (user) {
+      fetchEmailConfigs(user.id);
+    }
+  }, [user]);
 
   const fetchEmailConfigs = async (userId: string) => {
     try {
@@ -48,12 +52,16 @@ const Campaigns = () => {
     setShowBuilder(false);
   };
 
-  if (!user) {
+  if (loading) {
     return (
       <div className="flex items-center justify-center min-h-screen">
         <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600"></div>
       </div>
     );
+  }
+
+  if (!user) {
+    return null;
   }
 
   return (
@@ -64,9 +72,16 @@ const Campaigns = () => {
           navigate('/dashboard');
         } else if (tab === 'inbox') {
           navigate('/inbox');
-        } else if (tab === 'automations' || tab === 'contacts' || tab === 'segments' || 
-                   tab === 'templates' || tab === 'connect' || tab === 'settings') {
-          navigate('/dashboard');
+        } else if (tab === 'automations') {
+          navigate('/automations');
+        } else if (
+          tab === 'contacts' ||
+          tab === 'segments' ||
+          tab === 'templates' ||
+          tab === 'connect' ||
+          tab === 'settings'
+        ) {
+          navigate(`/dashboard?tab=${tab}`);
         } else {
           navigate(`/${tab}`);
         }

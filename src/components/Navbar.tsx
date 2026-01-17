@@ -16,24 +16,30 @@ const Navbar = () => {
   return (
     <motion.nav
       className={`fixed top-0 left-0 right-0 z-50 transition-all duration-300 ${
-        isScrolled ? 'bg-[#020617]/80 backdrop-blur-md border-b border-slate-800 py-4' : 'bg-transparent py-6'
+        isScrolled
+          ? 'bg-[rgba(7,26,28,0.9)] backdrop-blur-md border-b border-[color:var(--lp-border)] shadow-[0_20px_40px_var(--lp-shadow)] py-4'
+          : 'bg-transparent py-6'
       }`}
     >
       <div className="container mx-auto px-4 flex justify-between items-center">
         <Link to="/">
-          <Logo />
+          <Logo
+            textClassName="text-2xl text-[color:var(--lp-ink-strong)] font-display"
+            accentClassName="text-[color:var(--lp-accent-2)]"
+          />
         </Link>
 
         {/* Desktop Menu */}
         <div className="hidden md:flex items-center gap-8">
-          <a href="#features" className="text-slate-300 hover:text-white transition-colors text-sm font-medium">Features</a>
-          <a href="#pricing" className="text-slate-300 hover:text-white transition-colors text-sm font-medium">Pricing</a>
-          <a href="#testimonials" className="text-slate-300 hover:text-white transition-colors text-sm font-medium">Testimonials</a>
-          <Link to="/profile" className="text-slate-300 hover:text-white transition-colors text-sm font-medium">Profile</Link>
-          <Link to="/auth" className="text-white font-medium hover:text-indigo-400 transition-colors">Sign In</Link>
+          <a href="#solutions" className="text-[color:var(--lp-muted)] hover:text-[color:var(--lp-ink-strong)] transition-colors text-sm font-medium">Solutions</a>
+          <a href="#platform" className="text-[color:var(--lp-muted)] hover:text-[color:var(--lp-ink-strong)] transition-colors text-sm font-medium">Platform</a>
+          <a href="#integrations" className="text-[color:var(--lp-muted)] hover:text-[color:var(--lp-ink-strong)] transition-colors text-sm font-medium">Integrations</a>
+          <a href="#features" className="text-[color:var(--lp-muted)] hover:text-[color:var(--lp-ink-strong)] transition-colors text-sm font-medium">Features</a>
+          <a href="#stories" className="text-[color:var(--lp-muted)] hover:text-[color:var(--lp-ink-strong)] transition-colors text-sm font-medium">Stories</a>
+          <Link to="/auth" className="text-[color:var(--lp-ink-strong)] font-medium hover:text-[color:var(--lp-accent-2)] transition-colors">Sign In</Link>
           <Link 
             to="/auth" 
-            className="bg-white text-slate-900 px-5 py-2.5 rounded-full font-semibold hover:bg-indigo-50 transition-colors text-sm"
+            className="bg-[color:var(--lp-accent)] text-[color:var(--lp-bg-strong)] px-5 py-2.5 rounded-full font-semibold hover:brightness-110 transition-all text-sm shadow-[0_12px_30px_rgba(255,92,59,0.25)]"
           >
             Get Started
           </Link>
@@ -53,13 +59,15 @@ const Navbar = () => {
         <motion.div 
           initial={{ opacity: 0, y: -20 }}
           animate={{ opacity: 1, y: 0 }}
-          className="absolute top-full left-0 right-0 bg-[#020617] border-b border-slate-800 p-4 md:hidden flex flex-col gap-4 shadow-xl"
+          className="absolute top-full left-0 right-0 bg-[color:var(--lp-bg)] border-b border-[color:var(--lp-border)] p-4 md:hidden flex flex-col gap-4 shadow-xl"
         >
-          <a href="#features" className="text-slate-300 hover:text-white py-2">Features</a>
-          <a href="#pricing" className="text-slate-300 hover:text-white py-2">Pricing</a>
-          <Link to="/profile" className="text-slate-300 hover:text-white py-2">Profile</Link>
-          <Link to="/auth" className="text-slate-300 hover:text-white py-2">Sign In</Link>
-          <Link to="/auth" className="bg-indigo-600 text-white py-3 rounded-lg text-center font-semibold">Get Started</Link>
+          <a href="#solutions" className="text-[color:var(--lp-muted)] hover:text-[color:var(--lp-ink-strong)] py-2">Solutions</a>
+          <a href="#platform" className="text-[color:var(--lp-muted)] hover:text-[color:var(--lp-ink-strong)] py-2">Platform</a>
+          <a href="#integrations" className="text-[color:var(--lp-muted)] hover:text-[color:var(--lp-ink-strong)] py-2">Integrations</a>
+          <a href="#features" className="text-[color:var(--lp-muted)] hover:text-[color:var(--lp-ink-strong)] py-2">Features</a>
+          <a href="#stories" className="text-[color:var(--lp-muted)] hover:text-[color:var(--lp-ink-strong)] py-2">Stories</a>
+          <Link to="/auth" className="text-[color:var(--lp-ink-strong)] hover:text-[color:var(--lp-accent-2)] py-2">Sign In</Link>
+          <Link to="/auth" className="bg-[color:var(--lp-accent)] text-[color:var(--lp-bg-strong)] py-3 rounded-lg text-center font-semibold shadow-[0_10px_24px_rgba(255,92,59,0.25)]">Get Started</Link>
         </motion.div>
       )}
     </motion.nav>

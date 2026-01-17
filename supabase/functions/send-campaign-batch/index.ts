@@ -68,6 +68,15 @@ const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 
 const generateUniqueId = () => crypto.randomUUID();
 
+const STEP0_DAILY_QUOTA_RATIO = 0.5;
+
+const getDailyQuotaForStep = (dailyLimit: number, step: number) => {
+  if (dailyLimit <= 0) return 0;
+  const step0Limit = Math.max(1, Math.floor(dailyLimit * STEP0_DAILY_QUOTA_RATIO));
+  const followupLimit = Math.max(0, dailyLimit - step0Limit);
+  return step === 0 ? step0Limit : followupLimit;
+};
+
 const getErrorMessage = (error: unknown) => {
   if (error instanceof Error) {
     return error.message;
@@ -532,6 +541,18 @@ const processBatch = async (campaignId: string, batchSize = 3, step = 0, emailCo
         console.error(`Error fetching config limits: ${configError.message}`);
       } else if (configData) {
         const dailyLimit = configData.daily_limit || 100;
+        const stepLimit = getDailyQuotaForStep(dailyLimit, step);
+        const stepLabel = step === 0 ? 'step-0' : 'follow-ups';
+
+        if (stepLimit <= 0) {
+          console.log(`Daily limit of ${dailyLimit} provides no ${stepLabel} capacity for config ${emailConfigId}. Skipping batch.`);
+          return { 
+            success: true, 
+            message: 'Daily limit reached',
+            emailsSent: 0,
+            hasMore: true
+          };
+        }
         
         // Count emails sent today from this config
         const today = new Date();
@@ -539,7 +560,7 @@ const processBatch = async (campaignId: string, batchSize = 3, step = 0, emailCo
         const tomorrow = new Date(today);
         tomorrow.setDate(tomorrow.getDate() + 1);
         
-        const { count: sentToday, error: countError } = await supabase
+        let countQuery = supabase
           .from('recipients')
           .select('id', { count: 'exact', head: true })
           .eq('assigned_email_config_id', emailConfigId)
@@ -547,12 +568,20 @@ const processBatch = async (campaignId: string, batchSize = 3, step = 0, emailCo
           .gte('last_email_sent_at', today.toISOString())
           .lt('last_email_sent_at', tomorrow.toISOString());
 
+        if (step === 0) {
+          countQuery = countQuery.or('current_step.eq.0,current_step.is.null');
+        } else {
+          countQuery = countQuery.gte('current_step', 1);
+        }
+
+        const { count: sentToday, error: countError } = await countQuery;
+
         if (countError) {
           console.error(`Error counting sent emails: ${countError.message}`);
         } else {
-          const remainingCapacity = dailyLimit - (sentToday || 0);
+          const remainingCapacity = stepLimit - (sentToday || 0);
           if (remainingCapacity <= 0) {
-            console.log(`Daily limit of ${dailyLimit} reached for config ${emailConfigId}. Skipping batch.`);
+            console.log(`Daily limit of ${stepLimit} reached for ${stepLabel} on config ${emailConfigId}. Skipping batch.`);
             return { 
               success: true, 
               message: 'Daily limit reached',
@@ -562,7 +591,7 @@ const processBatch = async (campaignId: string, batchSize = 3, step = 0, emailCo
           }
           
           effectiveBatchSize = Math.min(effectiveBatchSize, remainingCapacity);
-          console.log(`Config ${emailConfigId}: sent ${sentToday} today, limit ${dailyLimit}, remaining ${remainingCapacity}, will send ${effectiveBatchSize}`);
+          console.log(`Config ${emailConfigId}: ${stepLabel} sent ${sentToday} today, limit ${stepLimit}, remaining ${remainingCapacity}, will send ${effectiveBatchSize}`);
         }
       }
     }
@@ -706,19 +735,35 @@ const processBatch = async (campaignId: string, batchSize = 3, step = 0, emailCo
           .maybeSingle();
         
         const dailyLimit = limitData?.daily_limit || 100;
+        const stepLimit = getDailyQuotaForStep(dailyLimit, step);
+        const stepLabel = step === 0 ? 'step-0' : 'follow-ups';
+
+        if (stepLimit <= 0) {
+          console.log(`Daily limit of ${dailyLimit} provides no ${stepLabel} capacity for config ${configIdToUse}. Skipping.`);
+          await supabase.from('recipients').update({ status: step === 0 ? 'pending' : 'sent' }).eq('id', recipient.id);
+          continue;
+        }
 
         const todayStart = new Date();
         todayStart.setHours(0,0,0,0);
         
-        const { count: sentToday } = await supabase
+        let sentQuery = supabase
           .from('recipients')
           .select('id', { count: 'exact', head: true })
           .eq('assigned_email_config_id', configIdToUse)
           .eq('status', 'sent')
           .gte('last_email_sent_at', todayStart.toISOString());
 
-        if (sentToday !== null && sentToday >= dailyLimit) {
-          console.log(`Daily limit reached for config ${configIdToUse} (${sentToday}/${dailyLimit}). Skipping.`);
+        if (step === 0) {
+          sentQuery = sentQuery.or('current_step.eq.0,current_step.is.null');
+        } else {
+          sentQuery = sentQuery.gte('current_step', 1);
+        }
+
+        const { count: sentToday } = await sentQuery;
+
+        if (sentToday !== null && sentToday >= stepLimit) {
+          console.log(`Daily ${stepLabel} limit reached for config ${configIdToUse} (${sentToday}/${stepLimit}). Skipping.`);
           // Revert status
           await supabase.from('recipients').update({ status: step === 0 ? 'pending' : 'sent' }).eq('id', recipient.id);
           continue;

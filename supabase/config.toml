@@ -15,5 +15,8 @@ verify_jwt = false
 [functions.check-email-replies]
 verify_jwt = false
 
+[functions.book-demo]
+verify_jwt = false
+
 [db]
 major_version = 15

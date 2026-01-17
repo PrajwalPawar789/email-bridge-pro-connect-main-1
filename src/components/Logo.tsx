@@ -4,6 +4,7 @@ interface LogoProps {
   className?: string;
   iconClassName?: string;
   textClassName?: string;
+  accentClassName?: string;
   showText?: boolean;
 }
 
@@ -11,6 +12,7 @@ const Logo: React.FC<LogoProps> = ({
   className = "",
   iconClassName = "w-8 h-8",
   textClassName = "text-2xl text-white",
+  accentClassName = "text-emerald-400",
   showText = true
 }) => {
   const rawId = useId();
@@ -71,7 +73,7 @@ const Logo: React.FC<LogoProps> = ({
       {showText && (
         <span className={`font-semibold tracking-wide ${textClassName}`}>
           Email
-          <span className="ml-1 text-emerald-400">
+          <span className={`ml-1 ${accentClassName}`}>
             Bridge
           </span>
         </span>

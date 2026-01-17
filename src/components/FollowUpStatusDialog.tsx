@@ -1,9 +1,10 @@
-import React from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Badge } from '@/components/ui/badge';
-import { format, addMinutes, addHours, addDays } from 'date-fns';
+import { format, addHours, addDays } from 'date-fns';
 import { ScrollArea } from '@/components/ui/scroll-area';
+import { supabase } from '@/integrations/supabase/client';
 
 interface FollowUpStatusDialogProps {
   open: boolean;
@@ -15,8 +16,54 @@ const FollowUpStatusDialog = ({ open, onOpenChange, campaign }: FollowUpStatusDi
   if (!campaign) return null;
 
   const followups = campaign.campaign_followups || [];
-  const recipients = campaign.recipients || [];
+  const [recipients, setRecipients] = useState<any[]>(campaign.recipients || []);
+  const [loadingRecipients, setLoadingRecipients] = useState(false);
   const totalSteps = 1 + followups.length; // Step 0 + followups
+  const totalRecipients = Math.max(campaign.total_recipients || 0, recipients.length);
+
+  useEffect(() => {
+    if (!open || !campaign?.id) return;
+
+    setRecipients(campaign.recipients || []);
+    let cancelled = false;
+
+    const loadRecipients = async () => {
+      setLoadingRecipients(true);
+      try {
+        const pageSize = 1000;
+        let from = 0;
+        let all: any[] = [];
+
+        while (true) {
+          const { data, error } = await supabase
+            .from('recipients')
+            .select('id, email, name, status, current_step, last_email_sent_at, replied, bounced')
+            .eq('campaign_id', campaign.id)
+            .order('id', { ascending: true })
+            .range(from, from + pageSize - 1);
+
+          if (error) throw error;
+          if (!data || data.length === 0) break;
+
+          all = all.concat(data);
+          if (data.length < pageSize) break;
+          from += pageSize;
+        }
+
+        if (!cancelled) setRecipients(all);
+      } catch (error) {
+        console.error('Error loading follow-up recipients:', error);
+      } finally {
+        if (!cancelled) setLoadingRecipients(false);
+      }
+    };
+
+    loadRecipients();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [open, campaign?.id]);
 
   // Helper to get delay for a specific step
   const getDelayForStep = (stepNumber: number) => {
@@ -26,68 +73,65 @@ const FollowUpStatusDialog = ({ open, onOpenChange, campaign }: FollowUpStatusDi
   };
 
   // Calculate status for each recipient
-  const recipientStatuses = recipients.map((recipient: any) => {
-    const currentStep = typeof recipient.current_step === 'number' ? recipient.current_step : -1;
-    const lastSent = recipient.last_email_sent_at ? new Date(recipient.last_email_sent_at) : null;
-    
-    let status = 'Unknown';
-    let nextSendTime = null;
-    let nextStep = -1;
-
-    if (recipient.bounced) {
-      status = 'Bounced';
-    } else if (recipient.replied) {
-      status = 'Replied (Stopped)';
-    } else if (recipient.status === 'failed') {
-      status = 'Failed';
-    } else if (currentStep === -1 || (currentStep === 0 && recipient.status === 'pending')) {
-      status = 'Pending Initial';
-      nextStep = 0;
-    } else if (currentStep >= totalSteps - 1) {
-      status = 'Completed';
-    } else {
-      // Waiting for next step
-      nextStep = currentStep + 1;
-      const delay = getDelayForStep(nextStep);
+  const recipientStatuses = useMemo(() => {
+    const mapped = recipients.map((recipient: any) => {
+      const currentStep = typeof recipient.current_step === 'number' ? recipient.current_step : -1;
+      const lastSent = recipient.last_email_sent_at ? new Date(recipient.last_email_sent_at) : null;
       
-      if (lastSent) {
-        let scheduledTime = lastSent;
-        if (delay.days > 0) scheduledTime = addDays(scheduledTime, delay.days);
-        if (delay.hours > 0) scheduledTime = addHours(scheduledTime, delay.hours);
-        // If delay is 0 (e.g. minutes only which might not be in DB or just immediate), handle gracefully
-        // Assuming delay_hours handles minutes as fractional or we only support hours/days in DB schema shown
-        // The schema has delay_days and delay_hours.
-        
-        // Note: The backend might support minutes but schema says delay_hours. 
-        // If the user sees "1 min" in UI, maybe I missed a column or it's stored as fractional hours?
-        // Let's assume standard date math.
-        
-        nextSendTime = scheduledTime;
-        
-        if (new Date() > scheduledTime) {
-          status = 'Ready / Overdue';
-        } else {
-          status = 'Waiting';
-        }
+      let status = 'Unknown';
+      let nextSendTime = null;
+      let nextStep = -1;
+
+      if (recipient.bounced) {
+        status = 'Bounced';
+      } else if (recipient.replied) {
+        status = 'Replied (Stopped)';
+      } else if (recipient.status === 'failed') {
+        status = 'Failed';
+      } else if (currentStep === -1 || (currentStep === 0 && recipient.status === 'pending')) {
+        status = 'Pending Initial';
+        nextStep = 0;
+      } else if (currentStep >= totalSteps - 1) {
+        status = 'Completed';
       } else {
-        status = 'Error (No Last Sent)';
+        // Waiting for next step
+        nextStep = currentStep + 1;
+        const delay = getDelayForStep(nextStep);
+        
+        if (lastSent) {
+          let scheduledTime = lastSent;
+          if (delay.days > 0) scheduledTime = addDays(scheduledTime, delay.days);
+          if (delay.hours > 0) scheduledTime = addHours(scheduledTime, delay.hours);
+          
+          nextSendTime = scheduledTime;
+          
+          if (new Date() > scheduledTime) {
+            status = 'Ready / Overdue';
+          } else {
+            status = 'Waiting';
+          }
+        } else {
+          status = 'Error (No Last Sent)';
+        }
       }
-    }
 
-    return {
-      ...recipient,
-      computedStatus: status,
-      nextSendTime,
-      nextStep
-    };
-  });
+      return {
+        ...recipient,
+        computedStatus: status,
+        nextSendTime,
+        nextStep
+      };
+    });
 
-  // Sort: Ready/Waiting first, then others
-  recipientStatuses.sort((a: any, b: any) => {
-    if (a.computedStatus === 'Ready / Overdue' && b.computedStatus !== 'Ready / Overdue') return -1;
-    if (b.computedStatus === 'Ready / Overdue' && a.computedStatus !== 'Ready / Overdue') return 1;
-    return 0;
-  });
+    // Sort: Ready/Waiting first, then others
+    mapped.sort((a: any, b: any) => {
+      if (a.computedStatus === 'Ready / Overdue' && b.computedStatus !== 'Ready / Overdue') return -1;
+      if (b.computedStatus === 'Ready / Overdue' && a.computedStatus !== 'Ready / Overdue') return 1;
+      return 0;
+    });
+
+    return mapped;
+  }, [recipients, followups, totalSteps]);
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -99,7 +143,12 @@ const FollowUpStatusDialog = ({ open, onOpenChange, campaign }: FollowUpStatusDi
         <div className="grid grid-cols-3 gap-4 py-4">
             <div className="bg-blue-50 p-3 rounded">
                 <div className="text-sm text-blue-800 font-medium">Total Recipients</div>
-                <div className="text-2xl font-bold text-blue-900">{recipients.length}</div>
+                <div className="text-2xl font-bold text-blue-900">{totalRecipients}</div>
+                {totalRecipients > recipients.length && (
+                  <div className="text-xs text-blue-700">
+                    {loadingRecipients ? 'Loading recipients...' : `Loaded ${recipients.length} so far`}
+                  </div>
+                )}
             </div>
             <div className="bg-yellow-50 p-3 rounded">
                 <div className="text-sm text-yellow-800 font-medium">Active (Waiting)</div>

@@ -7,6 +7,7 @@ import { Label } from '@/components/ui/label';
 import { toast } from '@/hooks/use-toast';
 import DashboardLayout from '@/components/Layout/DashboardLayout';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import { useAuth } from '@/providers/AuthProvider';
 
 const Profile = () => {
   const [loading, setLoading] = useState(false);
@@ -24,29 +25,47 @@ const Profile = () => {
   const [xUrl, setXUrl] = useState('');
   const [avatarUrl, setAvatarUrl] = useState<string | null>(null);
   const [avatarFile, setAvatarFile] = useState<File | null>(null);
-  const [user, setUser] = useState<any>(null);
+  const { user, loading: authLoading } = useAuth();
   const [activeTab, setActiveTab] = useState('settings');
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const navigate = useNavigate();
 
+  const handleTabChange = (tab: string) => {
+    if (tab === 'home') {
+      navigate('/dashboard');
+    } else if (tab === 'campaigns') {
+      navigate('/campaigns');
+    } else if (tab === 'inbox') {
+      navigate('/inbox');
+    } else if (tab === 'automations') {
+      navigate('/automations');
+    } else if (
+      tab === 'contacts' ||
+      tab === 'segments' ||
+      tab === 'templates' ||
+      tab === 'connect' ||
+      tab === 'settings'
+    ) {
+      navigate(`/dashboard?tab=${tab}`);
+    } else {
+      navigate(`/${tab}`);
+    }
+  };
+
   useEffect(() => {
     let mounted = true;
     const loadUser = async () => {
+      if (authLoading) return;
+      if (!user) {
+        navigate('/auth');
+        return;
+      }
+
       setLoading(true);
       try {
-        const { data } = await supabase.auth.getSession();
-        const sessionUser = data.session?.user;
-        if (!sessionUser) {
-          navigate('/auth');
-          return;
-        }
-        if (mounted) {
-          setUser(sessionUser);
-        }
-
         // Also fetch the up-to-date user object
         const { data: userData } = await supabase.auth.getUser();
-        const u = userData.user;
+        const u = userData.user ?? user;
         if (!u) return;
         if (mounted) {
           setEmail(u.email ?? '');
@@ -71,16 +90,8 @@ const Profile = () => {
     };
 
     loadUser();
-    const { data: { subscription } } = supabase.auth.onAuthStateChange((event, session) => {
-      if (!session) {
-        navigate('/auth');
-      } else {
-        setUser(session.user);
-      }
-    });
-
-    return () => { subscription?.unsubscribe?.(); mounted = false };
-  }, [navigate]);
+    return () => { mounted = false };
+  }, [navigate, user, authLoading]);
 
   const handleUpdate = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -148,7 +159,7 @@ const Profile = () => {
     toast({ title: 'Logged out', description: 'You have been logged out.' });
   };
 
-  if (!user) {
+  if (authLoading) {
     return (
       <div className="min-h-screen flex items-center justify-center">
         <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600"></div>
@@ -156,8 +167,12 @@ const Profile = () => {
     );
   }
 
+  if (!user) {
+    return null;
+  }
+
   return (
-    <DashboardLayout activeTab={activeTab} onTabChange={(t) => setActiveTab(t)} user={user} onLogout={handleLogout}>
+    <DashboardLayout activeTab={activeTab} onTabChange={handleTabChange} user={user} onLogout={handleLogout}>
       <div className="grid grid-cols-12 gap-6">
         {/* Left - personal information */}
         <div className="col-span-12 lg:col-span-8">

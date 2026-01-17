@@ -11,7 +11,9 @@ import Profile from "./pages/Profile";
 import Campaigns from "./pages/Campaigns";
 import CampaignTracker from "./pages/CampaignTracker";
 import Inbox from "./pages/Inbox";
+import Automations from "./pages/Automations";
 import NotFound from "./pages/NotFound";
+import { AuthProvider } from "./providers/AuthProvider";
 
 const queryClient = new QueryClient();
 
@@ -20,19 +22,22 @@ const App = () => (
     <TooltipProvider>
       <Toaster />
       <Sonner />
-      <BrowserRouter>
-        <Routes>
-          <Route path="/" element={<LandingPage />} />
-          <Route path="/auth" element={<Auth />} />
-          <Route path="/dashboard" element={<Dashboard />} />
-          <Route path="/profile" element={<Profile />} />
-          <Route path="/campaigns" element={<Campaigns />} />
-          <Route path="/inbox" element={<Inbox />} />
-          <Route path="/campaign/:id" element={<CampaignTracker />} />
-          {/* ADD ALL CUSTOM ROUTES ABOVE THE CATCH-ALL "*" ROUTE */}
-          <Route path="*" element={<NotFound />} />
-        </Routes>
-      </BrowserRouter>
+      <AuthProvider>
+        <BrowserRouter>
+          <Routes>
+            <Route path="/" element={<LandingPage />} />
+            <Route path="/auth" element={<Auth />} />
+            <Route path="/dashboard" element={<Dashboard />} />
+            <Route path="/profile" element={<Profile />} />
+            <Route path="/campaigns" element={<Campaigns />} />
+            <Route path="/inbox" element={<Inbox />} />
+            <Route path="/automations" element={<Automations />} />
+            <Route path="/campaign/:id" element={<CampaignTracker />} />
+            {/* ADD ALL CUSTOM ROUTES ABOVE THE CATCH-ALL "*" ROUTE */}
+            <Route path="*" element={<NotFound />} />
+          </Routes>
+        </BrowserRouter>
+      </AuthProvider>
     </TooltipProvider>
   </QueryClientProvider>
 );

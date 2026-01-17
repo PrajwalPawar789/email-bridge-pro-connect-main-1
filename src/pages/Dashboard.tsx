@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import { supabase } from '@/integrations/supabase/client';
-import { useNavigate } from 'react-router-dom';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Plus } from 'lucide-react';
@@ -13,38 +13,56 @@ import ProspectListManager from '@/components/ProspectListManager';
 import EmailAnalyticsDashboard from '@/components/EmailAnalyticsDashboard';
 import { toast } from '@/hooks/use-toast';
 import DashboardLayout from '@/components/Layout/DashboardLayout';
+import { useAuth } from '@/providers/AuthProvider';
+
+const normalizeTab = (tab: string) => {
+  if (tab === 'analytics') return 'home';
+  if (tab === 'prospect-lists') return 'contacts';
+  if (tab === 'settings') return 'config';
+  return tab;
+};
 
 const Dashboard = () => {
-  const [user, setUser] = useState<any>(null);
+  const { user, loading } = useAuth();
   const [emailConfigs, setEmailConfigs] = useState([]);
-  const [activeTab, setActiveTab] = useState('home');
+  const [searchParams, setSearchParams] = useSearchParams();
+  const getInitialTab = () => {
+    const tabParam = searchParams.get('tab');
+    if (tabParam === 'config') return 'settings';
+    return tabParam || 'home';
+  };
+  const [activeTab, setActiveTab] = useState(getInitialTab);
+  const normalizedActiveTab = normalizeTab(activeTab);
+  const [mountedTabs, setMountedTabs] = useState<string[]>(() => [normalizedActiveTab]);
   const navigate = useNavigate();
 
   useEffect(() => {
-    // Check authentication
-    supabase.auth.getSession().then(({ data: { session } }) => {
-      if (!session) {
-        navigate('/auth');
-      } else {
-        setUser(session.user);
-        fetchEmailConfigs();
-      }
-    });
+    if (!loading && !user) {
+      navigate('/auth');
+    }
+  }, [loading, user, navigate]);
 
-    // Listen for auth changes
-    const { data: { subscription } } = supabase.auth.onAuthStateChange((event, session) => {
-      if (!session) {
-        navigate('/auth');
-      } else {
-        setUser(session.user);
-      }
-    });
+  useEffect(() => {
+    if (user) {
+      fetchEmailConfigs();
+    }
+  }, [user]);
 
-    return () => subscription.unsubscribe();
-  }, [navigate]);
+  useEffect(() => {
+    setMountedTabs((prev) => (
+      prev.includes(normalizedActiveTab) ? prev : [...prev, normalizedActiveTab]
+    ));
+  }, [normalizedActiveTab]);
+
+  useEffect(() => {
+    const tabParam = searchParams.get('tab');
+    const nextTab = tabParam === 'config' ? 'settings' : (tabParam || 'home');
+    if (nextTab !== activeTab) {
+      setActiveTab(nextTab);
+    }
+  }, [searchParams, activeTab]);
 
   const fetchEmailConfigs = async () => {
-    const { data: { user } } = await supabase.auth.getUser();
     if (!user) return;
 
     const { data, error } = await supabase
@@ -76,10 +94,20 @@ const Dashboard = () => {
       return;
     }
 
+    if (tab === 'automations') {
+      navigate('/automations');
+      return;
+    }
+
     setActiveTab(tab);
+    if (tab === 'home') {
+      setSearchParams({});
+    } else {
+      setSearchParams({ tab });
+    }
   };
 
-  if (!user) {
+  if (loading) {
     return (
       <div className="min-h-screen flex items-center justify-center">
         <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600"></div>
@@ -87,22 +115,24 @@ const Dashboard = () => {
     );
   }
 
-  const renderContent = () => {
-    switch (activeTab) {
-      case 'home':
-      case 'analytics': return <EmailAnalyticsDashboard />;
-      case 'builder': return <CampaignBuilder emailConfigs={emailConfigs} />;
-      case 'templates': return <TemplateManager />;
-      case 'mailbox': return <Mailbox emailConfigs={emailConfigs} />;
-      case 'config': return <EmailConfig onConfigAdded={fetchEmailConfigs} />;
-      case 'contacts':
-      case 'prospect-lists': return <ProspectListManager />;
-      case 'settings': return <EmailConfig onConfigAdded={fetchEmailConfigs} />;
-      case 'automations': return <div className="p-8 text-center text-gray-500">Automations feature coming soon</div>;
-      case 'segments': return <div className="p-8 text-center text-gray-500">Segments feature coming soon</div>;
-      case 'connect': return <div className="p-8 text-center text-gray-500">Connect site feature coming soon</div>;
-      default: return <EmailAnalyticsDashboard />;
-    }
+  if (!user) {
+    return null;
+  }
+
+  const comingSoon = (label: string) => (
+    <div className="p-8 text-center text-gray-500">{label} feature coming soon</div>
+  );
+
+  const tabContents: Record<string, React.ReactNode> = {
+    home: <EmailAnalyticsDashboard />,
+    builder: <CampaignBuilder emailConfigs={emailConfigs} />,
+    templates: <TemplateManager />,
+    mailbox: <Mailbox emailConfigs={emailConfigs} />,
+    config: <EmailConfig onConfigAdded={fetchEmailConfigs} />,
+    contacts: <ProspectListManager />,
+    automations: comingSoon('Automations'),
+    segments: comingSoon('Segments'),
+    connect: comingSoon('Connect site')
   };
 
   return (
@@ -113,22 +143,52 @@ const Dashboard = () => {
       onLogout={handleLogout}
     >
       {emailConfigs.length === 0 && activeTab !== 'config' && activeTab !== 'settings' ? (
-        <Card className="max-w-2xl mx-auto mt-8">
-          <CardHeader>
+        <Card className="max-w-3xl mx-auto mt-8">
+          <CardHeader className="space-y-2">
             <CardTitle>Welcome to EmailBridge Pro!</CardTitle>
-          </CardHeader>
-          <CardContent>
-            <p className="text-gray-600 mb-4">
-              Get started by configuring your first email account.
+            <p className="text-sm text-gray-600">
+              Connect your first inbox to start sending campaigns and tracking replies.
             </p>
-            <Button onClick={() => setActiveTab('config')}>
-              <Plus className="h-4 w-4 mr-2" />
-              Add Email Configuration
-            </Button>
+          </CardHeader>
+          <CardContent className="space-y-6">
+            <div className="grid gap-6 md:grid-cols-2">
+              <div className="space-y-3">
+                <h3 className="text-sm font-semibold text-gray-900">Quick start</h3>
+                <ol className="list-decimal list-inside text-sm text-gray-600 space-y-1">
+                  <li>Add an email account (SMTP + IMAP).</li>
+                  <li>Build a campaign or template.</li>
+                  <li>Monitor replies in Inbox and Analytics.</li>
+                </ol>
+                <p className="text-xs text-gray-500">
+                  You can add more inboxes later from Email Configuration.
+                </p>
+              </div>
+              <div className="rounded-lg border bg-gray-50 p-4">
+                <h3 className="text-sm font-semibold text-gray-900 mb-2">Have this ready</h3>
+                <ul className="text-sm text-gray-600 space-y-1">
+                  <li>Email address and password.</li>
+                  <li>SMTP host and port (we prefill common providers).</li>
+                  <li>IMAP host and port for replies.</li>
+                </ul>
+                <p className="text-xs text-gray-500 mt-3">
+                  Gmail users: you'll need an App Password instead of your normal password.
+                </p>
+              </div>
+            </div>
+            <div className="flex flex-col sm:flex-row gap-3">
+              <Button onClick={() => handleTabChange('settings')} className="sm:w-auto">
+                <Plus className="h-4 w-4 mr-2" />
+                Add Email Configuration
+              </Button>
+            </div>
           </CardContent>
         </Card>
       ) : (
-        renderContent()
+        mountedTabs.map((tabKey) => (
+          <section key={tabKey} hidden={tabKey !== normalizedActiveTab}>
+            {tabContents[tabKey] ?? tabContents.home}
+          </section>
+        ))
       )}
     </DashboardLayout>
   );

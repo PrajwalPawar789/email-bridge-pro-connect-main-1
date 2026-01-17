@@ -17,9 +17,22 @@ import {
 } from "@/components/ui/pagination";
 import { toast } from "@/hooks/use-toast";
 import { 
-  Plus, FileUp, Search, Users, MoreVertical, 
-  Trash2, ArrowLeft, Loader2, Download, UserPlus,
-  FileSpreadsheet, Mail, Building, Phone
+  Plus,
+  FileUp,
+  Search,
+  Users,
+  Trash2,
+  ArrowLeft,
+  Loader2,
+  Download,
+  UserPlus,
+  FileSpreadsheet,
+  Mail,
+  Building,
+  Sparkles,
+  ListChecks,
+  BarChart3,
+  TrendingUp
 } from "lucide-react";
 import {
   Dialog,
@@ -38,7 +51,6 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { Badge } from "@/components/ui/badge";
-import { ScrollArea } from "@/components/ui/scroll-area";
 import { Separator } from "@/components/ui/separator";
 import * as XLSX from "xlsx";
 
@@ -72,7 +84,17 @@ const ProspectListManager: React.FC = () => {
   const [currentPage, setCurrentPage] = useState(1);
   const [pageSize, setPageSize] = useState(100);
   const [totalProspects, setTotalProspects] = useState(0);
+  const [listPage, setListPage] = useState(1);
+  const [listPageSize, setListPageSize] = useState(6);
+  const [listSort, setListSort] = useState("recent");
   const pageSizeOptions = [100, 500, 1000];
+  const listPageSizeOptions = [6, 9, 12];
+  const listSortOptions = [
+    { value: "recent", label: "Newest first" },
+    { value: "name", label: "Name A-Z" },
+    { value: "size", label: "Most prospects" },
+    { value: "size-asc", label: "Smallest first" },
+  ];
 
   // Dialog States
   const [isCreateListOpen, setIsCreateListOpen] = useState(false);
@@ -174,6 +196,35 @@ const ProspectListManager: React.FC = () => {
     if (!Number.isFinite(nextSize)) return;
     setPageSize(nextSize);
     setCurrentPage(1);
+  };
+
+  const handleListPageChange = (page: number) => {
+    const totalPages = Math.max(1, Math.ceil(filteredLists.length / listPageSize));
+    if (page < 1 || page > totalPages || page === listPage) return;
+    setListPage(page);
+  };
+
+  const handleListPageSizeChange = (value: string) => {
+    const nextSize = Number(value);
+    if (!Number.isFinite(nextSize)) return;
+    setListPageSize(nextSize);
+    setListPage(1);
+  };
+
+  const handleListSortChange = (value: string) => {
+    setListSort(value);
+    setListPage(1);
+  };
+
+  const handleTemplateDownload = () => {
+    const header = "name,email,company,phone,country,industry,sender_name,sender_email\n";
+    const blob = new Blob([header], { type: "text/csv;charset=utf-8;" });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = "prospects-template.csv";
+    link.click();
+    URL.revokeObjectURL(url);
   };
 
   const handleCreateList = async () => {
@@ -618,9 +669,28 @@ const ProspectListManager: React.FC = () => {
     return items;
   };
 
-  const filteredLists = lists.filter(l => 
-    l.name.toLowerCase().includes(searchQuery.toLowerCase())
-  );
+  const normalizedListQuery = searchQuery.trim().toLowerCase();
+  const sortedLists = [...lists].sort((a, b) => {
+    if (listSort === "name") {
+      return (a.name || "").localeCompare(b.name || "");
+    }
+    if (listSort === "size") {
+      return (b.count || 0) - (a.count || 0);
+    }
+    if (listSort === "size-asc") {
+      return (a.count || 0) - (b.count || 0);
+    }
+
+    const aDate = new Date(a.created_at || 0).getTime();
+    const bDate = new Date(b.created_at || 0).getTime();
+    return bDate - aDate;
+  });
+  const filteredLists = sortedLists.filter((list) => {
+    if (!normalizedListQuery) return true;
+    const name = list.name?.toLowerCase() || "";
+    const description = list.description?.toLowerCase() || "";
+    return name.includes(normalizedListQuery) || description.includes(normalizedListQuery);
+  });
 
   const filteredProspects = prospects.filter(p => 
     p.name.toLowerCase().includes(prospectSearchQuery.toLowerCase()) ||
@@ -630,65 +700,216 @@ const ProspectListManager: React.FC = () => {
     (p.industry && p.industry.toLowerCase().includes(prospectSearchQuery.toLowerCase()))
   );
 
+  const listTotalProspects = lists.reduce((sum, list) => sum + (list.count || 0), 0);
+  const averageListSize = lists.length ? Math.round(listTotalProspects / lists.length) : 0;
+  const largestList = lists.reduce<EmailList | null>((largest, list) => {
+    if (!largest) return list;
+    return (list.count || 0) > (largest.count || 0) ? list : largest;
+  }, null);
+  const listSummaryCards = [
+    {
+      label: "Total lists",
+      value: lists.length.toLocaleString(),
+      helper: `${filteredLists.length.toLocaleString()} visible`,
+      icon: ListChecks,
+      tone: "bg-emerald-100/80 text-emerald-700",
+    },
+    {
+      label: "Total prospects",
+      value: listTotalProspects.toLocaleString(),
+      helper: "Across all lists",
+      icon: Users,
+      tone: "bg-sky-100/80 text-sky-700",
+    },
+    {
+      label: "Average list size",
+      value: averageListSize.toLocaleString(),
+      helper: "Prospects per list",
+      icon: BarChart3,
+      tone: "bg-amber-100/80 text-amber-700",
+    },
+    {
+      label: "Largest list",
+      value: largestList ? (largestList.count || 0).toLocaleString() : "N/A",
+      helper: largestList?.name || "No lists yet",
+      icon: TrendingUp,
+      tone: "bg-teal-100/80 text-teal-700",
+    },
+  ];
+
+  const listTotalPages = Math.max(1, Math.ceil(filteredLists.length / listPageSize));
+  const listPageStart = filteredLists.length === 0 ? 0 : (listPage - 1) * listPageSize + 1;
+  const listPageEnd = Math.min(listPage * listPageSize, filteredLists.length);
+  const listPaginationItems = getPaginationItems(listPage, listTotalPages);
+  const pagedLists = filteredLists.slice((listPage - 1) * listPageSize, listPage * listPageSize);
+
   const totalPages = Math.max(1, Math.ceil(totalProspects / pageSize));
   const pageStart = totalProspects === 0 ? 0 : (currentPage - 1) * pageSize + 1;
   const pageEnd = Math.min(currentPage * pageSize, totalProspects);
   const paginationItems = getPaginationItems(currentPage, totalPages);
 
+  useEffect(() => {
+    const total = Math.max(1, Math.ceil(filteredLists.length / listPageSize));
+    if (listPage > total) {
+      setListPage(total);
+    }
+  }, [filteredLists.length, listPage, listPageSize]);
+
+  useEffect(() => {
+    setListPage(1);
+  }, [searchQuery, listSort, listPageSize]);
+
+  const Shell = ({ children }: { children: React.ReactNode }) => (
+    <div className="relative -my-8 min-h-[calc(100vh-4rem)] bg-[var(--shell-bg)] text-[var(--shell-ink)]">
+      <style>{`
+        @keyframes list-rise {
+          from { opacity: 0; transform: translateY(14px); }
+          to { opacity: 1; transform: translateY(0); }
+        }
+        @keyframes list-float {
+          0%, 100% { transform: translateY(0); }
+          50% { transform: translateY(-12px); }
+        }
+        .list-rise { animation: list-rise 0.6s ease-out both; }
+        .list-float { animation: list-float 10s ease-in-out infinite; }
+        @media (prefers-reduced-motion: reduce) {
+          .list-rise, .list-float { animation: none; }
+        }
+      `}</style>
+      <div className="pointer-events-none absolute inset-0">
+        <div className="absolute -right-24 -top-24 h-72 w-72 rounded-full bg-emerald-200/40 blur-3xl list-float"></div>
+        <div className="absolute -left-24 top-1/3 h-72 w-72 rounded-full bg-amber-200/35 blur-3xl list-float" style={{ animationDelay: "1.2s" }}></div>
+        <div className="absolute bottom-0 right-1/3 h-56 w-56 rounded-full bg-sky-200/30 blur-3xl list-float" style={{ animationDelay: "2.2s" }}></div>
+      </div>
+      <div className="relative mx-auto w-full max-w-7xl space-y-6 px-5 py-6 lg:px-8 lg:py-8">
+        {children}
+      </div>
+    </div>
+  );
+
   if (selectedList) {
     // --- DETAIL VIEW ---
     return (
-      <div className="space-y-6 animate-in fade-in duration-300">
-        {/* Header */}
-        <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
-          <div className="flex items-center gap-4">
-            <Button variant="ghost" size="sm" onClick={() => setSelectedList(null)}>
-              <ArrowLeft className="h-4 w-4 mr-2" /> Back
-            </Button>
-            <div>
-              <h2 className="text-2xl font-bold tracking-tight flex items-center gap-2">
-                {selectedList.name}
-                <Badge variant="secondary" className="ml-2 text-sm font-normal">
-                  {totalProspects} Prospects
-                </Badge>
-              </h2>
-              <p className="text-gray-500 text-sm">{selectedList.description || "No description provided."}</p>
+      <Shell>
+        <section className="list-rise relative overflow-hidden rounded-[28px] border border-[var(--shell-border)] bg-[var(--shell-surface-strong)] p-6 shadow-[0_18px_40px_rgba(15,23,42,0.12)]">
+          <div className="space-y-4">
+            <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+              <div className="flex items-start gap-4">
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => setSelectedList(null)}
+                  className="h-9 rounded-full border border-[var(--shell-border)] bg-white/80 px-4 text-xs font-semibold text-[var(--shell-ink)]"
+                >
+                  <ArrowLeft className="h-4 w-4 mr-2" /> Back
+                </Button>
+                <div className="space-y-2">
+                  <div className="flex flex-wrap items-center gap-3 text-[11px] font-semibold uppercase tracking-[0.24em] text-[var(--shell-muted)]">
+                    <span className="flex items-center gap-2">
+                      <span className="h-2 w-2 rounded-full bg-emerald-500 shadow-[0_0_10px_rgba(16,185,129,0.6)]"></span>
+                      List workspace
+                    </span>
+                    <Badge
+                      variant="outline"
+                      className="h-6 rounded-full border-[var(--shell-border)] bg-white/70 px-3 text-[10px] font-semibold text-[var(--shell-ink)]"
+                    >
+                      {totalProspects} prospects
+                    </Badge>
+                    <span className="text-[10px] font-medium tracking-[0.16em] text-[var(--shell-muted)]">
+                      Created {new Date(selectedList.created_at).toLocaleDateString()}
+                    </span>
+                  </div>
+                  <h2 className="text-3xl font-semibold text-[var(--shell-ink)]" style={{ fontFamily: "var(--shell-font-display)" }}>
+                    {selectedList.name}
+                  </h2>
+                  <p className="text-sm text-[var(--shell-muted)]">
+                    {selectedList.description || "No description provided."}
+                  </p>
+                </div>
+              </div>
+              <div className="flex flex-wrap gap-2">
+                <DropdownMenu>
+                  <DropdownMenuTrigger asChild>
+                    <Button className="h-10 rounded-full bg-emerald-600 px-5 text-xs font-semibold hover:bg-emerald-700">
+                      <Plus className="h-4 w-4 mr-2" /> Add Prospects
+                    </Button>
+                  </DropdownMenuTrigger>
+                  <DropdownMenuContent align="end">
+                    <DropdownMenuLabel>Add Options</DropdownMenuLabel>
+                    <DropdownMenuSeparator />
+                    <DropdownMenuItem onClick={() => setIsAddProspectOpen(true)}>
+                      <UserPlus className="h-4 w-4 mr-2" /> Manually Add
+                    </DropdownMenuItem>
+                    <DropdownMenuItem onClick={() => setIsImportOpen(true)}>
+                      <FileSpreadsheet className="h-4 w-4 mr-2" /> Import from CSV/Excel
+                    </DropdownMenuItem>
+                  </DropdownMenuContent>
+                </DropdownMenu>
+                <Button
+                  variant="outline"
+                  size="icon"
+                  onClick={() => handleDeleteList(selectedList.id)}
+                  className="h-10 w-10 rounded-full border-rose-200 text-rose-600 hover:bg-rose-50"
+                >
+                  <Trash2 className="h-4 w-4" />
+                </Button>
+              </div>
+            </div>
+
+            <div className="grid gap-3 md:grid-cols-3">
+              <div className="rounded-2xl border border-[var(--shell-border)] bg-white/80 p-4">
+                <div className="flex items-center justify-between">
+                  <p className="text-[11px] font-semibold uppercase tracking-[0.2em] text-[var(--shell-muted)]">
+                    Required fields
+                  </p>
+                  <Mail className="h-4 w-4 text-[var(--shell-muted)]" />
+                </div>
+                <p className="mt-2 text-sm font-semibold text-[var(--shell-ink)]">Name + Email</p>
+                <p className="text-xs text-[var(--shell-muted)]">Every prospect needs these to send.</p>
+              </div>
+              <div className="rounded-2xl border border-[var(--shell-border)] bg-white/80 p-4">
+                <div className="flex items-center justify-between">
+                  <p className="text-[11px] font-semibold uppercase tracking-[0.2em] text-[var(--shell-muted)]">
+                    Optional context
+                  </p>
+                  <Building className="h-4 w-4 text-[var(--shell-muted)]" />
+                </div>
+                <p className="mt-2 text-sm font-semibold text-[var(--shell-ink)]">
+                  Company, phone, country, industry, sender overrides
+                </p>
+                <p className="text-xs text-[var(--shell-muted)]">Add depth for personalization and filtering.</p>
+              </div>
+              <div className="rounded-2xl border border-[var(--shell-border)] bg-white/80 p-4">
+                <div className="flex items-center justify-between">
+                  <p className="text-[11px] font-semibold uppercase tracking-[0.2em] text-[var(--shell-muted)]">
+                    Searchable fields
+                  </p>
+                  <Search className="h-4 w-4 text-[var(--shell-muted)]" />
+                </div>
+                <p className="mt-2 text-sm font-semibold text-[var(--shell-ink)]">
+                  Name, email, company, country, industry
+                </p>
+                <p className="text-xs text-[var(--shell-muted)]">Use search to narrow the current page.</p>
+              </div>
             </div>
           </div>
-          <div className="flex gap-2">
-            <DropdownMenu>
-              <DropdownMenuTrigger asChild>
-                <Button className="bg-blue-600 hover:bg-blue-700">
-                  <Plus className="h-4 w-4 mr-2" /> Add Prospects
-                </Button>
-              </DropdownMenuTrigger>
-              <DropdownMenuContent align="end">
-                <DropdownMenuLabel>Add Options</DropdownMenuLabel>
-                <DropdownMenuSeparator />
-                <DropdownMenuItem onClick={() => setIsAddProspectOpen(true)}>
-                  <UserPlus className="h-4 w-4 mr-2" /> Manually Add
-                </DropdownMenuItem>
-                <DropdownMenuItem onClick={() => setIsImportOpen(true)}>
-                  <FileSpreadsheet className="h-4 w-4 mr-2" /> Import from CSV/Excel
-                </DropdownMenuItem>
-              </DropdownMenuContent>
-            </DropdownMenu>
-            <Button variant="outline" size="icon" onClick={() => handleDeleteList(selectedList.id)}>
-              <Trash2 className="h-4 w-4 text-red-500" />
-            </Button>
-          </div>
-        </div>
+        </section>
 
         {/* Search & Table */}
-        <Card>
-          <CardHeader className="pb-3">
-            <div className="flex items-center justify-between">
-              <CardTitle className="text-base font-medium">Prospects</CardTitle>
-              <div className="relative w-64">
-                <Search className="absolute left-2 top-2.5 h-4 w-4 text-gray-400" />
+        <Card className="overflow-hidden rounded-[24px] border-[var(--shell-border)] bg-[var(--shell-surface-strong)] shadow-[0_16px_32px_rgba(15,23,42,0.1)]">
+          <CardHeader className="space-y-3 pb-4">
+            <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+              <div>
+                <CardTitle className="text-lg font-semibold text-[var(--shell-ink)]">Prospects</CardTitle>
+                <CardDescription className="text-xs text-[var(--shell-muted)]">
+                  Search within the current page of results by name, email, company, country, or industry.
+                </CardDescription>
+              </div>
+              <div className="relative w-full md:w-72">
+                <Search className="absolute left-3 top-3 h-4 w-4 text-[var(--shell-muted)]" />
                 <Input
                   placeholder="Search prospects..."
-                  className="pl-8"
+                  className="h-10 rounded-full border-[var(--shell-border)] bg-white/90 pl-10"
                   value={prospectSearchQuery}
                   onChange={(e) => setProspectSearchQuery(e.target.value)}
                 />
@@ -696,7 +917,7 @@ const ProspectListManager: React.FC = () => {
             </div>
           </CardHeader>
           <CardContent className="p-0">
-            <div className="rounded-md border-t">
+            <div className="rounded-md border-t border-[var(--shell-border)]">
               <div className="relative max-h-[60vh] w-full overflow-auto">
                 <table className="w-full min-w-[1280px] caption-bottom text-sm text-left">
                   <thead className="bg-white/95">
@@ -722,7 +943,7 @@ const ProspectListManager: React.FC = () => {
                       filteredProspects.map((p) => (
                         <tr key={p.id} className="group transition-colors hover:bg-slate-50/80">
                           <td className="px-4 py-3 align-middle font-medium text-slate-800">{p.name}</td>
-                          <td className="px-4 py-3 align-middle text-blue-600 whitespace-nowrap truncate max-w-[240px]" title={p.email}>
+                          <td className="px-4 py-3 align-middle text-emerald-700 whitespace-nowrap truncate max-w-[240px]" title={p.email}>
                             {p.email}
                           </td>
                           <td className="px-4 py-3 align-middle text-slate-600">{p.company || '-'}</td>
@@ -971,77 +1192,335 @@ const ProspectListManager: React.FC = () => {
             </div>
           </DialogContent>
         </Dialog>
-      </div>
+      </Shell>
     );
   }
 
   // --- LIST GRID VIEW ---
   return (
-    <div className="space-y-6 animate-in fade-in duration-300">
-      <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
-        <div>
-          <h2 className="text-2xl font-bold tracking-tight">Prospect Lists</h2>
-          <p className="text-gray-500">Manage your email lists and contacts.</p>
-        </div>
-        <Button onClick={() => setIsCreateListOpen(true)} className="bg-blue-600 hover:bg-blue-700">
-          <Plus className="h-4 w-4 mr-2" />
-          Create New List
-        </Button>
-      </div>
-
-      <div className="flex items-center space-x-2 bg-white p-2 rounded-md border shadow-sm max-w-md">
-        <Search className="h-4 w-4 text-gray-400 ml-2" />
-        <Input 
-          placeholder="Search lists..." 
-          className="border-none shadow-none focus-visible:ring-0"
-          value={searchQuery}
-          onChange={(e) => setSearchQuery(e.target.value)}
-        />
-      </div>
-
-      {filteredLists.length === 0 ? (
-        <div className="text-center py-16 bg-gray-50 rounded-lg border-2 border-dashed">
-          <Users className="h-12 w-12 mx-auto text-gray-300 mb-4" />
-          <h3 className="text-lg font-medium text-gray-900">No lists found</h3>
-          <p className="text-gray-500 mb-6">Create your first prospect list to get started.</p>
-          <Button variant="outline" onClick={() => setIsCreateListOpen(true)}>
-            Create List
-          </Button>
-        </div>
-      ) : (
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-          {filteredLists.map((list) => (
-            <Card 
-              key={list.id} 
-              className="group hover:shadow-md transition-all duration-200 cursor-pointer border-l-4 border-l-transparent hover:border-l-blue-600"
-              onClick={() => {
-                setSelectedList(list);
-                setCurrentPage(1);
-                setTotalProspects(list.count || 0);
-                setProspectSearchQuery("");
-              }}
-            >
-              <CardHeader className="pb-2">
-                <div className="flex justify-between items-start">
-                  <CardTitle className="text-lg font-semibold line-clamp-1">{list.name}</CardTitle>
-                  <Badge variant="secondary" className="text-xs">
-                    {list.count || 0} Prospects
-                  </Badge>
+    <Shell>
+      <section className="list-rise relative overflow-hidden rounded-[28px] border border-[var(--shell-border)] bg-[var(--shell-surface-strong)] p-6 shadow-[0_18px_40px_rgba(15,23,42,0.12)]">
+        <div className="grid gap-6 lg:grid-cols-[1.4fr_1fr]">
+          <div className="space-y-4">
+            <div className="flex flex-wrap items-center gap-3 text-[11px] font-semibold uppercase tracking-[0.24em] text-[var(--shell-muted)]">
+              <span className="flex items-center gap-2">
+                <Sparkles className="h-3 w-3" />
+                Prospect workspace
+              </span>
+              <Badge
+                variant="outline"
+                className="h-6 rounded-full border-[var(--shell-border)] bg-white/70 px-3 text-[10px] font-semibold text-[var(--shell-ink)]"
+              >
+                {filteredLists.length.toLocaleString()} lists
+              </Badge>
+            </div>
+            <h2 className="text-3xl font-semibold text-[var(--shell-ink)] md:text-4xl" style={{ fontFamily: "var(--shell-font-display)" }}>
+              Prospect Lists
+            </h2>
+            <p className="max-w-xl text-sm text-[var(--shell-muted)]">
+              Organize contacts into focused lists, import CSVs, and keep every prospect campaign-ready.
+            </p>
+            <div className="flex flex-wrap gap-2">
+              <Button
+                onClick={() => setIsCreateListOpen(true)}
+                className="h-10 rounded-full bg-emerald-600 px-5 text-xs font-semibold hover:bg-emerald-700"
+              >
+                <Plus className="h-4 w-4 mr-2" />
+                Create New List
+              </Button>
+              <Button
+                variant="outline"
+                onClick={handleTemplateDownload}
+                className="h-10 rounded-full border-[var(--shell-border)] bg-white/80 text-xs font-semibold text-[var(--shell-ink)]"
+              >
+                <Download className="h-4 w-4 mr-2" />
+                Download CSV template
+              </Button>
+            </div>
+          </div>
+          <div className="grid gap-3 sm:grid-cols-2">
+            {listSummaryCards.map((card) => {
+              const Icon = card.icon;
+              return (
+                <div
+                  key={card.label}
+                  className="rounded-2xl border border-[var(--shell-border)] bg-white/80 p-4"
+                >
+                  <div className="flex items-center justify-between">
+                    <p className="text-[11px] font-semibold uppercase tracking-[0.2em] text-[var(--shell-muted)]">
+                      {card.label}
+                    </p>
+                    <div className={`rounded-xl p-2 ${card.tone}`}>
+                      <Icon className="h-4 w-4" />
+                    </div>
+                  </div>
+                  <p className="mt-2 text-lg font-semibold text-[var(--shell-ink)]">{card.value}</p>
+                  <p className="text-xs text-[var(--shell-muted)]">{card.helper}</p>
                 </div>
-                <CardDescription className="line-clamp-2 h-10">
-                  {list.description || "No description"}
-                </CardDescription>
-              </CardHeader>
-              <CardFooter className="pt-4 text-xs text-gray-400 flex justify-between items-center border-t bg-gray-50/50">
-                <span>Created {new Date(list.created_at).toLocaleDateString()}</span>
-                <Button variant="ghost" size="sm" className="h-6 text-blue-600 hover:text-blue-700 p-0">
-                  View Details <ArrowLeft className="h-3 w-3 ml-1 rotate-180" />
-                </Button>
-              </CardFooter>
-            </Card>
-          ))}
+              );
+            })}
+          </div>
         </div>
-      )}
+      </section>
+
+      <section className="grid gap-6 lg:grid-cols-[1.7fr_0.8fr]">
+        <div className="space-y-4">
+          <Card className="rounded-[24px] border-[var(--shell-border)] bg-[var(--shell-surface-strong)] shadow-[0_12px_24px_rgba(15,23,42,0.08)]">
+            <CardHeader className="space-y-3 pb-4">
+              <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+                <div>
+                  <CardTitle className="text-lg font-semibold text-[var(--shell-ink)]">Your lists</CardTitle>
+                  <CardDescription className="text-xs text-[var(--shell-muted)]">
+                    Select a list to manage prospects and imports.
+                  </CardDescription>
+                </div>
+                <Badge
+                  variant="outline"
+                  className="h-6 rounded-full border-[var(--shell-border)] bg-white/70 px-3 text-[10px] font-semibold text-[var(--shell-ink)]"
+                >
+                  {filteredLists.length.toLocaleString()} lists
+                </Badge>
+              </div>
+            </CardHeader>
+            <CardContent className="pt-0">
+              <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+                <div className="relative w-full md:max-w-sm">
+                  <Search className="absolute left-3 top-3 h-4 w-4 text-[var(--shell-muted)]" />
+                  <Input
+                    placeholder="Search lists by name or description..."
+                    className="h-10 rounded-full border-[var(--shell-border)] bg-white/90 pl-10"
+                    value={searchQuery}
+                    onChange={(e) => setSearchQuery(e.target.value)}
+                  />
+                </div>
+                <div className="flex flex-wrap items-center gap-3">
+                  <Select value={listSort} onValueChange={handleListSortChange}>
+                    <SelectTrigger className="h-9 w-[180px]">
+                      <SelectValue placeholder="Sort by" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {listSortOptions.map((option) => (
+                        <SelectItem key={option.value} value={option.value}>
+                          {option.label}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+              </div>
+            </CardContent>
+          </Card>
+
+          {filteredLists.length === 0 ? (
+            <div className="rounded-[24px] border-2 border-dashed border-[var(--shell-border)] bg-white/80 p-10 text-center shadow-[0_10px_20px_rgba(15,23,42,0.06)]">
+              <Users className="h-10 w-10 mx-auto text-emerald-500/70 mb-4" />
+              <h3 className="text-lg font-semibold text-[var(--shell-ink)]">Start your first list</h3>
+              <p className="text-sm text-[var(--shell-muted)] mb-5">
+                Create a list, import a CSV, and start building campaigns from clean data.
+              </p>
+              <div className="flex flex-wrap justify-center gap-2">
+                <Button
+                  onClick={() => setIsCreateListOpen(true)}
+                  className="h-9 rounded-full bg-emerald-600 px-4 text-xs font-semibold hover:bg-emerald-700"
+                >
+                  <Plus className="h-4 w-4 mr-2" />
+                  Create List
+                </Button>
+                <Button
+                  variant="outline"
+                  onClick={handleTemplateDownload}
+                  className="h-9 rounded-full border-[var(--shell-border)] bg-white/80 text-xs font-semibold text-[var(--shell-ink)]"
+                >
+                  <Download className="h-4 w-4 mr-2" />
+                  CSV template
+                </Button>
+              </div>
+            </div>
+          ) : (
+            <div className="grid gap-5 md:grid-cols-2 xl:grid-cols-3">
+              {pagedLists.map((list) => (
+                <Card
+                  key={list.id}
+                  className="group relative overflow-hidden rounded-[22px] border border-[var(--shell-border)] bg-white/90 shadow-[0_10px_20px_rgba(15,23,42,0.08)] transition-all duration-200 hover:-translate-y-1 hover:shadow-[0_16px_30px_rgba(15,23,42,0.12)]"
+                  onClick={() => {
+                    setSelectedList(list);
+                    setCurrentPage(1);
+                    setTotalProspects(list.count || 0);
+                    setProspectSearchQuery("");
+                  }}
+                >
+                  <CardHeader className="space-y-3 pb-4">
+                    <div className="flex items-start justify-between gap-3">
+                      <CardTitle className="text-lg font-semibold text-[var(--shell-ink)] line-clamp-1">
+                        {list.name}
+                      </CardTitle>
+                      <Badge
+                        variant="outline"
+                        className="h-6 rounded-full border-[var(--shell-border)] bg-white/90 text-[10px] font-semibold text-[var(--shell-ink)]"
+                      >
+                        {list.count || 0} prospects
+                      </Badge>
+                    </div>
+                    <CardDescription className="text-sm text-[var(--shell-muted)] line-clamp-2">
+                      {list.description || "No description yet."}
+                    </CardDescription>
+                    <div className="flex flex-wrap items-center gap-3 text-xs text-[var(--shell-muted)]">
+                      <span className="flex items-center gap-2">
+                        <Mail className="h-3.5 w-3.5 text-emerald-600" />
+                        {list.count || 0} contacts
+                      </span>
+                      <span className="flex items-center gap-2">
+                        <span className="h-1.5 w-1.5 rounded-full bg-amber-400"></span>
+                        Created {new Date(list.created_at).toLocaleDateString()}
+                      </span>
+                    </div>
+                  </CardHeader>
+                  <CardFooter className="pt-4 text-xs text-[var(--shell-muted)] flex justify-between items-center border-t border-[var(--shell-border)] bg-white/70">
+                    <span className="uppercase tracking-[0.2em] text-[10px] text-[var(--shell-muted)]">Open list</span>
+                    <Button variant="ghost" size="sm" className="h-6 text-emerald-700 hover:text-emerald-800 p-0">
+                      View Details <ArrowLeft className="h-3 w-3 ml-1 rotate-180" />
+                    </Button>
+                  </CardFooter>
+                </Card>
+              ))}
+            </div>
+          )}
+
+          {filteredLists.length > 0 && (
+            <div className="rounded-2xl border border-[var(--shell-border)] bg-[var(--shell-surface-strong)] px-4 py-3 shadow-[0_10px_22px_rgba(15,23,42,0.08)]">
+              <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+                <div className="flex flex-wrap items-center gap-3 text-xs text-[var(--shell-muted)]">
+                  <span className="font-semibold uppercase tracking-wide text-[var(--shell-muted)]">Lists per page</span>
+                  <Select value={String(listPageSize)} onValueChange={handleListPageSizeChange}>
+                    <SelectTrigger className="h-8 w-[120px]">
+                      <SelectValue placeholder="Per page" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {listPageSizeOptions.map((size) => (
+                        <SelectItem key={size} value={String(size)}>
+                          {size} / page
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                  <span className="text-[var(--shell-muted)]">
+                    Showing {listPageStart}-{listPageEnd} of {filteredLists.length}
+                  </span>
+                </div>
+                <Pagination className="w-auto justify-end">
+                  <PaginationContent>
+                    <PaginationItem>
+                      <PaginationPrevious
+                        href="#"
+                        onClick={(event) => {
+                          event.preventDefault();
+                          handleListPageChange(listPage - 1);
+                        }}
+                        className={listPage === 1 ? "pointer-events-none opacity-50" : ""}
+                      />
+                    </PaginationItem>
+                    {listPaginationItems.map((item, index) =>
+                      item === "ellipsis" ? (
+                        <PaginationItem key={`list-ellipsis-${index}`}>
+                          <PaginationEllipsis />
+                        </PaginationItem>
+                      ) : (
+                        <PaginationItem key={`list-${item}`}>
+                          <PaginationLink
+                            href="#"
+                            isActive={item === listPage}
+                            onClick={(event) => {
+                              event.preventDefault();
+                              handleListPageChange(item);
+                            }}
+                          >
+                            {item}
+                          </PaginationLink>
+                        </PaginationItem>
+                      )
+                    )}
+                    <PaginationItem>
+                      <PaginationNext
+                        href="#"
+                        onClick={(event) => {
+                          event.preventDefault();
+                          handleListPageChange(listPage + 1);
+                        }}
+                        className={listPage === listTotalPages ? "pointer-events-none opacity-50" : ""}
+                      />
+                    </PaginationItem>
+                  </PaginationContent>
+                </Pagination>
+              </div>
+            </div>
+          )}
+        </div>
+
+        <aside className="space-y-4">
+          <div className="rounded-[24px] border border-[var(--shell-border)] bg-[var(--shell-surface-strong)] p-5 shadow-[0_12px_24px_rgba(15,23,42,0.08)]">
+            <div className="flex items-center gap-2 text-[11px] font-semibold uppercase tracking-[0.24em] text-[var(--shell-muted)]">
+              <Sparkles className="h-3 w-3" />
+              On this page
+            </div>
+            <h3 className="mt-2 text-lg font-semibold text-[var(--shell-ink)]" style={{ fontFamily: "var(--shell-font-display)" }}>
+              Prospect list hub
+            </h3>
+            <p className="text-sm text-[var(--shell-muted)]">
+              Build lists, import contacts, and keep them campaign-ready.
+            </p>
+            <div className="mt-4 space-y-4">
+              <div className="flex items-start gap-3">
+                <div className="rounded-xl bg-emerald-100/80 p-2 text-emerald-700">
+                  <ListChecks className="h-4 w-4" />
+                </div>
+                <div>
+                  <p className="text-sm font-semibold text-[var(--shell-ink)]">Organize lists</p>
+                  <p className="text-xs text-[var(--shell-muted)]">
+                    Name lists, add descriptions, and track prospect counts.
+                  </p>
+                </div>
+              </div>
+              <div className="flex items-start gap-3">
+                <div className="rounded-xl bg-sky-100/80 p-2 text-sky-700">
+                  <FileSpreadsheet className="h-4 w-4" />
+                </div>
+                <div>
+                  <p className="text-sm font-semibold text-[var(--shell-ink)]">Import data</p>
+                  <p className="text-xs text-[var(--shell-muted)]">
+                    Upload CSV or Excel files and map columns automatically.
+                  </p>
+                </div>
+              </div>
+              <div className="flex items-start gap-3">
+                <div className="rounded-xl bg-amber-100/80 p-2 text-amber-700">
+                  <UserPlus className="h-4 w-4" />
+                </div>
+                <div>
+                  <p className="text-sm font-semibold text-[var(--shell-ink)]">Manual add + overrides</p>
+                  <p className="text-xs text-[var(--shell-muted)]">
+                    Add single prospects and override sender details when needed.
+                  </p>
+                </div>
+              </div>
+              <div className="flex items-start gap-3">
+                <div className="rounded-xl bg-teal-100/80 p-2 text-teal-700">
+                  <Search className="h-4 w-4" />
+                </div>
+                <div>
+                  <p className="text-sm font-semibold text-[var(--shell-ink)]">Search + pagination</p>
+                  <p className="text-xs text-[var(--shell-muted)]">
+                    Filter lists quickly and browse using pages when your library grows.
+                  </p>
+                </div>
+              </div>
+            </div>
+            <div className="mt-4 rounded-2xl border border-amber-200 bg-amber-50/80 p-3 text-xs text-amber-700">
+              <p className="font-semibold">Pagination tip</p>
+              <p>Use list pages to keep navigation fast as your list count grows.</p>
+            </div>
+          </div>
+        </aside>
+      </section>
 
       {/* Create List Dialog */}
       <Dialog open={isCreateListOpen} onOpenChange={setIsCreateListOpen}>
@@ -1074,7 +1553,7 @@ const ProspectListManager: React.FC = () => {
           </DialogFooter>
         </DialogContent>
       </Dialog>
-    </div>
+    </Shell>
   );
 };
 

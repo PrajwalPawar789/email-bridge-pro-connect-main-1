@@ -697,7 +697,7 @@ const EmailAnalyticsDashboard = () => {
 
   return (
     <div
-      className="relative -m-8 min-h-[calc(100vh-4rem)] bg-[var(--dash-bg)] text-[var(--dash-ink)]"
+      className="relative -my-8 min-h-[calc(100vh-4rem)] bg-[var(--dash-bg)] text-[var(--dash-ink)]"
       style={dashboardStyles}
     >
       <style>{`
@@ -822,7 +822,7 @@ const EmailAnalyticsDashboard = () => {
       </section>
 
       {/* Key Performance Indicators */}
-      <section className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+      {/* <section className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
         {rateStats.map((stat, i) => {
           const status = getPerformanceStatus(stat.rate, stat.benchmark);
           const trend = stat.rate - stat.prevRate;
@@ -883,7 +883,7 @@ const EmailAnalyticsDashboard = () => {
             </Card>
           );
         })}
-      </section>
+      </section> */}
 
 
 

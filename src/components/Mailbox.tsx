@@ -1,17 +1,23 @@
 
 import React, { useState, useEffect, useCallback } from 'react';
 import { supabase } from '@/integrations/supabase/client';
-import { Card, CardContent } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Input } from '@/components/ui/input';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { Separator } from '@/components/ui/separator';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select';
 import { 
   Mail, RefreshCw, Trash2, Inbox, Search, 
-  MoreVertical, Reply, Forward, Star, Archive,
-  AlertCircle, CheckCircle2, User
+  MoreVertical, Reply, Forward, Archive,
+  CheckCircle2
 } from 'lucide-react';
 import {
   ResizableHandle,
@@ -61,6 +67,7 @@ const Mailbox: React.FC<MailboxProps> = ({ emailConfigs }) => {
   const [selectedEmailId, setSelectedEmailId] = useState<string | null>(null);
   const [syncing, setSyncing] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
+  const [activeFilter, setActiveFilter] = useState<'all' | 'unread'>('all');
   const [syncStats, setSyncStats] = useState<SyncStats | null>(null);
   const [lastSyncedAt, setLastSyncedAt] = useState<string | null>(null);
 
@@ -196,15 +203,32 @@ const Mailbox: React.FC<MailboxProps> = ({ emailConfigs }) => {
     }
   };
 
-  // Filter emails
-  const filteredEmails = emails.filter(email => 
-    (email.subject?.toLowerCase() || '').includes(searchQuery.toLowerCase()) ||
-    (email.from_email?.toLowerCase() || '').includes(searchQuery.toLowerCase()) ||
-    (email.body?.toLowerCase() || '').includes(searchQuery.toLowerCase())
-  );
+  const normalizedQuery = searchQuery.trim().toLowerCase();
+  const totalCount = emails.length;
+  const unreadCount = emails.filter((email) => !email.read).length;
+  const hasSearch = normalizedQuery.length > 0;
 
-  const selectedEmail = emails.find(e => e.id === selectedEmailId);
-  const currentConfig = emailConfigs.find(c => c.id === selectedConfig);
+  const filteredEmails = emails.filter((email) => {
+    if (activeFilter === 'unread' && email.read && email.id !== selectedEmailId) {
+      return false;
+    }
+
+    if (!normalizedQuery) {
+      return true;
+    }
+
+    return (
+      (email.subject?.toLowerCase() || '').includes(normalizedQuery) ||
+      (email.from_email?.toLowerCase() || '').includes(normalizedQuery) ||
+      (email.body?.toLowerCase() || '').includes(normalizedQuery)
+    );
+  });
+
+  const selectedEmail = emails.find((email) => email.id === selectedEmailId);
+  const currentConfig = emailConfigs.find((config) => config.id === selectedConfig);
+  const lastSyncLabel = lastSyncedAt
+    ? formatDistanceToNow(new Date(lastSyncedAt), { addSuffix: true })
+    : null;
 
   if (emailConfigs.length === 0) {
     return (
@@ -221,44 +245,68 @@ const Mailbox: React.FC<MailboxProps> = ({ emailConfigs }) => {
   return (
     <div className="h-[calc(100vh-140px)] flex flex-col bg-white rounded-lg border shadow-sm overflow-hidden">
       {/* Top Toolbar */}
-      <div className="flex items-center justify-between p-4 border-b bg-gray-50/50">
-        <div className="flex items-center gap-4">
-          <div className="flex items-center gap-2">
+      <div className="flex flex-wrap items-center justify-between gap-4 p-4 border-b bg-gray-50/50">
+        <div className="flex flex-wrap items-center gap-4">
+          <div className="flex items-center gap-3">
             <div className="bg-blue-100 p-2 rounded-full">
               <Inbox className="h-5 w-5 text-blue-600" />
             </div>
             <div>
-              <h2 className="text-lg font-semibold leading-none">Inbox</h2>
+              <div className="flex flex-wrap items-center gap-2">
+                <h2 className="text-lg font-semibold leading-none">Inbox</h2>
+                <Badge variant="secondary" className="bg-blue-50 text-blue-700 border border-blue-100 hover:bg-blue-50">
+                  Unread {unreadCount}
+                </Badge>
+                <Badge variant="outline" className="text-gray-600">
+                  Total {totalCount}
+                </Badge>
+              </div>
               <p className="text-xs text-gray-500 mt-1">
                 {currentConfig?.smtp_username}
               </p>
             </div>
           </div>
-          
-          <Separator orientation="vertical" className="h-8" />
-          
+
+          <Separator orientation="vertical" className="h-10" />
+
           <div className="flex items-center gap-2">
-            <select 
-              value={selectedConfig} 
-              onChange={(e) => setSelectedConfig(e.target.value)}
-              className="h-9 w-[200px] rounded-md border border-input bg-white px-3 py-1 text-sm shadow-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
-            >
-              {emailConfigs.map((config) => (
-                <option key={config.id} value={config.id}>
-                  {config.smtp_username}
-                </option>
-              ))}
-            </select>
+            <Select value={selectedConfig} onValueChange={setSelectedConfig}>
+              <SelectTrigger className="h-9 w-[220px] bg-white">
+                <SelectValue placeholder="Select mailbox" />
+              </SelectTrigger>
+              <SelectContent>
+                {emailConfigs.map((config) => (
+                  <SelectItem key={config.id} value={config.id}>
+                    {config.smtp_username}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
           </div>
         </div>
 
-        <div className="flex items-center gap-2">
-          {syncStats && (
-            <span className="text-xs text-green-600 flex items-center gap-1 mr-2 bg-green-50 px-2 py-1 rounded-full">
-              <CheckCircle2 className="h-3 w-3" />
-              Synced {formatDistanceToNow(new Date(lastSyncedAt!), { addSuffix: true })}
-            </span>
-          )}
+        <div className="flex items-center gap-3">
+          <div className="hidden sm:flex flex-col items-end text-xs text-gray-500">
+            <span className="font-medium text-gray-600">Mailbox sync</span>
+            {syncing ? (
+              <span className="flex items-center gap-1 text-blue-600">
+                <RefreshCw className="h-3 w-3 animate-spin" />
+                Syncing now...
+              </span>
+            ) : lastSyncLabel ? (
+              <span className="flex items-center gap-1 text-emerald-700">
+                <CheckCircle2 className="h-3 w-3" />
+                Synced {lastSyncLabel}
+              </span>
+            ) : (
+              <span>Not synced yet</span>
+            )}
+            {syncStats && !syncing && (
+              <span className="text-gray-400">
+                {syncStats.inserted} new emails added
+              </span>
+            )}
+          </div>
           <Button 
             variant="outline" 
             size="sm" 
@@ -278,15 +326,46 @@ const Mailbox: React.FC<MailboxProps> = ({ emailConfigs }) => {
         {/* Left Panel: Email List */}
         <ResizablePanel defaultSize={35} minSize={25} maxSize={45}>
           <div className="h-full flex flex-col">
-            <div className="p-4 border-b">
+            <div className="p-4 border-b bg-white">
               <div className="relative">
                 <Search className="absolute left-2 top-2.5 h-4 w-4 text-gray-400" />
                 <Input 
-                  placeholder="Search mail..." 
+                  placeholder="Search sender, subject, or content" 
                   className="pl-8 bg-gray-50 border-gray-200" 
                   value={searchQuery}
                   onChange={(e) => setSearchQuery(e.target.value)}
                 />
+              </div>
+              <div className="mt-3 flex flex-wrap items-center justify-between gap-2">
+                <div className="inline-flex items-center rounded-full border border-gray-200 bg-white p-1">
+                  <Button
+                    variant={activeFilter === 'all' ? 'secondary' : 'ghost'}
+                    size="sm"
+                    className="h-7 rounded-full px-3 text-xs"
+                    onClick={() => setActiveFilter('all')}
+                    aria-pressed={activeFilter === 'all'}
+                  >
+                    All
+                    <span className="ml-2 rounded-full bg-gray-100 px-2 py-0.5 text-[10px] font-semibold text-gray-600">
+                      {totalCount}
+                    </span>
+                  </Button>
+                  <Button
+                    variant={activeFilter === 'unread' ? 'secondary' : 'ghost'}
+                    size="sm"
+                    className="h-7 rounded-full px-3 text-xs"
+                    onClick={() => setActiveFilter('unread')}
+                    aria-pressed={activeFilter === 'unread'}
+                  >
+                    Unread
+                    <span className="ml-2 rounded-full bg-blue-50 px-2 py-0.5 text-[10px] font-semibold text-blue-700">
+                      {unreadCount}
+                    </span>
+                  </Button>
+                </div>
+                <span className="text-xs text-gray-500">
+                  Showing {filteredEmails.length} of {totalCount}
+                </span>
               </div>
             </div>
             
@@ -297,45 +376,112 @@ const Mailbox: React.FC<MailboxProps> = ({ emailConfigs }) => {
                   <p className="text-sm">Loading emails...</p>
                 </div>
               ) : filteredEmails.length === 0 ? (
-                <div className="flex flex-col items-center justify-center py-12 text-gray-400">
-                  <Inbox className="h-12 w-12 mb-2 opacity-20" />
-                  <p className="text-sm">No emails found</p>
+                <div className="flex flex-col items-center justify-center py-12 text-center text-gray-400 px-6">
+                  {emails.length === 0 ? (
+                    <>
+                      <Inbox className="h-12 w-12 mb-2 opacity-20" />
+                      <p className="text-sm font-medium text-gray-600">No messages yet</p>
+                      <p className="text-xs text-gray-500 mt-1">
+                        Sync your mailbox to pull in replies.
+                      </p>
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={syncEmails}
+                        disabled={syncing}
+                        className="mt-4"
+                      >
+                        <RefreshCw className={`h-4 w-4 mr-2 ${syncing ? 'animate-spin' : ''}`} />
+                        {syncing ? 'Syncing...' : 'Sync mailbox'}
+                      </Button>
+                    </>
+                  ) : hasSearch ? (
+                    <>
+                      <Search className="h-10 w-10 mb-2 text-gray-300" />
+                      <p className="text-sm font-medium text-gray-600">
+                        No results for "{searchQuery}"
+                      </p>
+                      <p className="text-xs text-gray-500 mt-1">
+                        Try a different keyword or clear the search.
+                      </p>
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        onClick={() => setSearchQuery('')}
+                        className="mt-3"
+                      >
+                        Clear search
+                      </Button>
+                    </>
+                  ) : activeFilter === 'unread' ? (
+                    <>
+                      <CheckCircle2 className="h-10 w-10 mb-2 text-gray-300" />
+                      <p className="text-sm font-medium text-gray-600">No unread emails</p>
+                      <p className="text-xs text-gray-500 mt-1">
+                        You are all caught up.
+                      </p>
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        onClick={() => setActiveFilter('all')}
+                        className="mt-3"
+                      >
+                        Show all
+                      </Button>
+                    </>
+                  ) : (
+                    <>
+                      <Inbox className="h-12 w-12 mb-2 opacity-20" />
+                      <p className="text-sm">No emails found</p>
+                    </>
+                  )}
                 </div>
               ) : (
                 <div className="flex flex-col">
-                  {filteredEmails.map((email) => (
-                    <div
-                      key={email.id}
-                      onClick={() => handleEmailClick(email)}
-                      className={`
-                        flex flex-col gap-1 p-4 border-b cursor-pointer transition-colors hover:bg-gray-50
-                        ${selectedEmailId === email.id ? 'bg-blue-50/60 border-l-4 border-l-blue-600' : 'border-l-4 border-l-transparent'}
-                        ${!email.read ? 'bg-gray-50' : ''}
-                      `}
-                    >
-                      <div className="flex items-center justify-between mb-1">
-                        <div className="flex items-center gap-2 overflow-hidden">
-                          {!email.read && (
-                            <div className="h-2 w-2 rounded-full bg-blue-600 flex-shrink-0" />
-                          )}
-                          <span className={`text-sm truncate ${!email.read ? 'font-bold text-gray-900' : 'font-medium text-gray-700'}`}>
-                            {email.from_email}
-                          </span>
+                  {filteredEmails.map((email) => {
+                    const isSelected = selectedEmailId === email.id;
+                    const isUnread = !email.read;
+                    return (
+                      <div
+                        key={email.id}
+                        onClick={() => handleEmailClick(email)}
+                        className={`
+                          group flex gap-3 p-4 border-b cursor-pointer transition-colors hover:bg-gray-50
+                          ${isSelected ? 'bg-blue-50/60 border-l-4 border-l-blue-600' : 'border-l-4 border-l-transparent'}
+                          ${isUnread && !isSelected ? 'bg-gray-50' : ''}
+                        `}
+                      >
+                        <Avatar className="h-9 w-9 flex-shrink-0">
+                          <AvatarFallback className={`text-xs font-semibold ${isUnread ? 'bg-blue-100 text-blue-700' : 'bg-gray-100 text-gray-600'}`}>
+                            {(email.from_email || '?').charAt(0).toUpperCase()}
+                          </AvatarFallback>
+                        </Avatar>
+                        <div className="min-w-0 flex-1 space-y-1">
+                          <div className="flex items-center justify-between gap-3">
+                            <div className="flex min-w-0 items-center gap-2">
+                              {isUnread && (
+                                <div className="h-2 w-2 rounded-full bg-blue-600 flex-shrink-0" />
+                              )}
+                              <span className={`truncate text-sm ${isUnread ? 'font-semibold text-gray-900' : 'font-medium text-gray-700'}`}>
+                                {email.from_email}
+                              </span>
+                            </div>
+                            <span className="text-[11px] text-gray-400 flex-shrink-0">
+                              {formatDistanceToNow(new Date(email.date), { addSuffix: false })}
+                            </span>
+                          </div>
+
+                          <h4 className={`text-sm truncate ${isUnread ? 'font-semibold text-gray-900' : 'text-gray-600'}`}>
+                            {email.subject || '(No Subject)'}
+                          </h4>
+
+                          <p className="text-xs text-gray-500 line-clamp-2">
+                            {email.body ? email.body.substring(0, 140) : 'No content preview available'}
+                          </p>
                         </div>
-                        <span className="text-xs text-gray-400 flex-shrink-0">
-                          {formatDistanceToNow(new Date(email.date), { addSuffix: false })}
-                        </span>
                       </div>
-                      
-                      <h4 className={`text-sm truncate ${!email.read ? 'font-semibold text-gray-900' : 'text-gray-600'}`}>
-                        {email.subject || '(No Subject)'}
-                      </h4>
-                      
-                      <p className="text-xs text-gray-500 line-clamp-2">
-                        {email.body ? email.body.substring(0, 120) : 'No content preview available'}
-                      </p>
-                    </div>
-                  ))}
+                    );
+                  })}
                 </div>
               )}
             </ScrollArea>
@@ -350,16 +496,35 @@ const Mailbox: React.FC<MailboxProps> = ({ emailConfigs }) => {
             <div className="h-full flex flex-col bg-white">
               {/* Email Header */}
               <div className="p-6 border-b">
-                <div className="flex items-start justify-between mb-4">
-                  <h1 className="text-xl font-bold text-gray-900 leading-tight">
-                    {selectedEmail.subject || '(No Subject)'}
-                  </h1>
-                  <div className="flex items-center gap-2">
-                    <Button variant="ghost" size="icon" title="Reply">
-                      <Reply className="h-4 w-4 text-gray-500" />
+                <div className="flex flex-wrap items-start justify-between gap-4 mb-4">
+                  <div className="space-y-2">
+                    <h1 className="text-xl font-bold text-gray-900 leading-tight">
+                      {selectedEmail.subject || '(No Subject)'}
+                    </h1>
+                    <div className="flex flex-wrap items-center gap-2">
+                      {selectedEmail.folder && (
+                        <Badge
+                          variant="outline"
+                          className="text-[10px] uppercase tracking-wide text-gray-500 border-gray-200"
+                        >
+                          {selectedEmail.folder}
+                        </Badge>
+                      )}
+                      {!selectedEmail.read && (
+                        <Badge variant="secondary" className="text-[10px] bg-blue-100 text-blue-700 border border-blue-200 hover:bg-blue-100">
+                          Unread
+                        </Badge>
+                      )}
+                    </div>
+                  </div>
+                  <div className="flex flex-wrap items-center gap-2">
+                    <Button variant="outline" size="sm" className="h-8">
+                      <Reply className="h-4 w-4" />
+                      Reply
                     </Button>
-                    <Button variant="ghost" size="icon" title="Forward">
-                      <Forward className="h-4 w-4 text-gray-500" />
+                    <Button variant="outline" size="sm" className="h-8">
+                      <Forward className="h-4 w-4" />
+                      Forward
                     </Button>
                     <DropdownMenu>
                       <DropdownMenuTrigger asChild>
@@ -406,7 +571,7 @@ const Mailbox: React.FC<MailboxProps> = ({ emailConfigs }) => {
               <ScrollArea className="flex-1 p-6">
                 <div className="prose max-w-none text-sm text-gray-800">
                   {/* Simple text rendering for now, could be dangerouslySetInnerHTML if sanitized */}
-                  <div className="whitespace-pre-wrap font-sans">
+                  <div className="whitespace-pre-wrap font-sans leading-relaxed">
                     {selectedEmail.body}
                   </div>
                 </div>

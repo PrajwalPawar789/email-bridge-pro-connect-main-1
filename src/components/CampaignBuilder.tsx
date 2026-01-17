@@ -1111,7 +1111,7 @@ const CampaignBuilder: React.FC<CampaignBuilderProps> = ({ emailConfigs }) => {
 
   return (
     <div
-      className="relative -m-8 min-h-[calc(100vh-4rem)] bg-[var(--builder-bg)] text-[var(--builder-ink)]"
+      className="relative -my-8 min-h-[calc(100vh-4rem)] bg-[var(--builder-bg)] text-[var(--builder-ink)]"
       style={builderStyles}
     >
       <style>{`

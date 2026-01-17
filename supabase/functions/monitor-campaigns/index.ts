@@ -39,7 +39,7 @@ const monitorCampaigns = async () => {
     const campaignIds = activeCampaigns.map(c => c.id);
     const { data: followups, error: followupError } = await supabase
       .from('campaign_followups')
-      .select('campaign_id, step_number')
+      .select('campaign_id, step_number, delay_days, delay_hours')
       .in('campaign_id', campaignIds);
 
     if (followupError) {
@@ -60,6 +60,44 @@ const monitorCampaigns = async () => {
     
     const results = [];
     const now = new Date().getTime();
+
+    const hasDueFollowups = async (campaignId: string, emailConfigId: string | null, campaignFollowups: any[]) => {
+      if (!campaignFollowups.length) return false;
+
+      for (const step of campaignFollowups) {
+        const delayDays = step.delay_days || 0;
+        const delayHours = step.delay_hours || 0;
+        const cutoffDate = new Date();
+
+        cutoffDate.setDate(cutoffDate.getDate() - delayDays);
+        cutoffDate.setHours(cutoffDate.getHours() - delayHours);
+
+        let dueQuery = supabase
+          .from('recipients')
+          .select('id', { count: 'exact', head: true })
+          .eq('campaign_id', campaignId)
+          .eq('current_step', step.step_number - 1)
+          .eq('status', 'sent')
+          .or('replied.is.null,replied.eq.false')
+          .lt('last_email_sent_at', cutoffDate.toISOString());
+
+        if (emailConfigId) {
+          dueQuery = dueQuery.or(`assigned_email_config_id.eq.${emailConfigId},assigned_email_config_id.is.null`);
+        }
+
+        const { count, error } = await dueQuery;
+        if (error) {
+          console.warn(`Error checking due followups for campaign ${campaignId}:`, error.message);
+          continue;
+        }
+
+        if ((count || 0) > 0) {
+          return true;
+        }
+      }
+
+      return false;
+    };
 
     // 3. Check which campaigns are ready for the next batch
     for (const campaign of activeCampaigns) {
@@ -154,6 +192,14 @@ const monitorCampaigns = async () => {
           console.log(`Campaign ${campaign.name} has ${campaignConfigs.length} senders configured. Checking each...`);
           
           const promises = campaignConfigs.map(async (config) => {
+            const campaignFollowups = followups?.filter(f => f.campaign_id === campaign.id) || [];
+            const followupsDue = await hasDueFollowups(campaign.id, config.email_config_id, campaignFollowups);
+
+            if (followupsDue) {
+              console.log(`Skipping Step 0 for ${campaign.name} (Sender: ${config.email_config_id}) due to overdue follow-ups.`);
+              return;
+            }
+
             const lastSent = config.last_sent_at ? new Date(config.last_sent_at).getTime() : 0;
             const timeSinceLastBatch = now - lastSent;
 
@@ -189,6 +235,14 @@ const monitorCampaigns = async () => {
           const lastSent = campaign.last_batch_sent_at ? new Date(campaign.last_batch_sent_at).getTime() : 0;
           const timeSinceLastBatch = now - lastSent;
           
+          const campaignFollowups = followups?.filter(f => f.campaign_id === campaign.id) || [];
+          const followupsDue = await hasDueFollowups(campaign.id, null, campaignFollowups);
+
+          if (followupsDue) {
+            console.log(`Skipping Step 0 for ${campaign.name} due to overdue follow-ups.`);
+            continue;
+          }
+
           if (lastSent === 0 || timeSinceLastBatch >= delayMs) {
             console.log(`Triggering Step 0 batch for: ${campaign.name} (Single Sender)`);
             
@@ -214,7 +268,6 @@ const monitorCampaigns = async () => {
         }
       }
 
-    }
     }
     
     return { 
