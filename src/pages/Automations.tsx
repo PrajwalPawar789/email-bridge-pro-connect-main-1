@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+﻿import React, { useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { supabase } from '@/integrations/supabase/client';
 import DashboardLayout from '@/components/Layout/DashboardLayout';
@@ -35,7 +35,7 @@ import {
 } from 'lucide-react';
 import { useAuth } from '@/providers/AuthProvider';
 
-const SONAR_API_KEY = 'REDACTED_PERPLEXITY_KEY';
+const SONAR_API_KEY = '';
 const SONAR_ENDPOINT = 'https://api.perplexity.ai/chat/completions';
 const DEFAULT_SONAR_PROXY_URL = 'http://localhost:8787/sonar';
 const SONAR_PROXY_URL = import.meta.env.VITE_SONAR_PROXY_URL || DEFAULT_SONAR_PROXY_URL;
