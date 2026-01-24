@@ -53,6 +53,9 @@ const CampaignTracker = () => {
   const [analyticsLoading, setAnalyticsLoading] = useState(false);
   const analyticsCacheRef = useRef<{ id?: string; total?: number }>({});
   const pageSizeOptions = [100, 500, 1000];
+  const trimmedSearchTerm = searchTerm.trim();
+  const normalizedSearchTerm = trimmedSearchTerm.toLowerCase();
+  const hasRecipientFilters = trimmedSearchTerm.length > 0 || statusFilter !== 'all';
 
   useEffect(() => {
     if (!authLoading && !user) {
@@ -145,17 +148,16 @@ const CampaignTracker = () => {
   }, [activeTab, id]);
 
   useEffect(() => {
-    const totalPages = Math.max(1, Math.ceil(recipientTotal / recipientPageSize));
-    if (recipientPage > totalPages) {
-      setRecipientPage(totalPages);
-    }
-  }, [recipientPage, recipientPageSize, recipientTotal]);
-
-  useEffect(() => {
     if (activeTab === 'overview' || activeTab === 'analytics') {
       fetchAnalyticsRecipients();
     }
   }, [activeTab, id, recipientTotal]);
+
+  useEffect(() => {
+    if (activeTab === 'recipients' && hasRecipientFilters) {
+      fetchAnalyticsRecipients();
+    }
+  }, [activeTab, hasRecipientFilters, id, recipientTotal]);
 
   const fetchReplies = async () => {
     if (!id) return;
@@ -327,7 +329,7 @@ const CampaignTracker = () => {
     setAnalyticsLoading(true);
     try {
       const analyticsData = await fetchAllRecipients(
-        'id, email, name, status, opened_at, clicked_at, replied, bounced, bounced_at, updated_at, last_email_sent_at, current_step',
+        'id, email, name, status, opened_at, clicked_at, replied, bounced, bounced_at, updated_at, last_email_sent_at, current_step, email_configs(smtp_username)',
         total
       );
       setAnalyticsRecipients(analyticsData);
@@ -418,10 +420,17 @@ const CampaignTracker = () => {
     return scheduledTime;
   };
 
-  const filteredRecipients = recipients.filter(r => {
-    const matchesSearch = r.email.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      (r.name && r.name.toLowerCase().includes(searchTerm.toLowerCase()));
-    
+  const filterSource = hasRecipientFilters && analyticsRecipients.length > 0
+    ? analyticsRecipients
+    : recipients;
+
+  const filteredRecipients = filterSource.filter(r => {
+    const email = (r.email || '').toLowerCase();
+    const name = typeof r.name === 'string' ? r.name.toLowerCase() : '';
+    const matchesSearch = !normalizedSearchTerm
+      || email.includes(normalizedSearchTerm)
+      || name.includes(normalizedSearchTerm);
+
     if (!matchesSearch) return false;
 
     if (statusFilter === 'all') return true;
@@ -432,16 +441,26 @@ const CampaignTracker = () => {
     if (statusFilter === 'processing') return r.status === 'processing';
     if (statusFilter === 'queued') return r.status === 'pending';
     if (statusFilter === 'sent') return r.status === 'sent';
-    
+
     return true;
   });
 
-  const totalPages = Math.max(1, Math.ceil(recipientTotal / recipientPageSize));
-  const pageStart = recipientTotal === 0 ? 0 : (recipientPage - 1) * recipientPageSize + 1;
-  const pageEnd = Math.min(recipientPage * recipientPageSize, recipientTotal);
+  const filteredTotal = hasRecipientFilters ? filteredRecipients.length : recipientTotal;
+  const totalPages = Math.max(1, Math.ceil(filteredTotal / recipientPageSize));
+  const pageStart = filteredTotal === 0 ? 0 : (recipientPage - 1) * recipientPageSize + 1;
+  const pageEnd = Math.min(recipientPage * recipientPageSize, filteredTotal);
   const paginationItems = getPaginationItems(recipientPage, totalPages);
+  const pagedRecipients = hasRecipientFilters
+    ? filteredRecipients.slice((recipientPage - 1) * recipientPageSize, recipientPage * recipientPageSize)
+    : filteredRecipients;
   const analyticsIsPartial = recipientTotal > (analyticsRecipients.length || recipients.length);
   const analyticsSampleSize = analyticsRecipients.length || recipients.length;
+
+  useEffect(() => {
+    if (recipientPage > totalPages) {
+      setRecipientPage(totalPages);
+    }
+  }, [recipientPage, totalPages]);
 
   const handleRecipientPageChange = (page: number) => {
     if (page < 1 || page > totalPages || page === recipientPage) return;
@@ -881,7 +900,16 @@ const CampaignTracker = () => {
                                 <Legend />
                                 <Area type="monotone" dataKey="opens" stroke="#22c55e" fillOpacity={1} fill="url(#colorOpens)" name="Opens" />
                                 <Area type="monotone" dataKey="clicks" stroke="#8b5cf6" fillOpacity={1} fill="url(#colorClicks)" name="Clicks" />
-                                <Area type="monotone" dataKey="replies" stroke="#eab308" fill="none" name="Replies" />
+                                <Area
+                                  type="monotone"
+                                  dataKey="replies"
+                                  stroke="#eab308"
+                                  strokeWidth={2}
+                                  fill="none"
+                                  name="Replies"
+                                  dot={{ r: 3 }}
+                                  activeDot={{ r: 4 }}
+                                />
                             </AreaChart>
                         </ResponsiveContainer>
                     </CardContent>
@@ -1225,7 +1253,7 @@ const CampaignTracker = () => {
                             </td>
                           </tr>
                         ) : (
-                          filteredRecipients.map((recipient) => {
+                          pagedRecipients.map((recipient) => {
                             const nextSend = calculateNextSendTime(recipient);
                             return (
                               <tr
@@ -1312,7 +1340,7 @@ const CampaignTracker = () => {
                           </SelectContent>
                         </Select>
                         <span className="text-slate-500">
-                          Showing {pageStart}-{pageEnd} of {recipientTotal.toLocaleString()}
+                          Showing {pageStart}-{pageEnd} of {filteredTotal.toLocaleString()}
                         </span>
                       </div>
                       <Pagination className="w-auto justify-end">

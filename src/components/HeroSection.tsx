@@ -114,7 +114,7 @@ const HeroSection = () => {
             
             {/* Main Dashboard Image */}
             <img 
-              src="/platform/screencapture-localhost-8080-dashboard-2025-12-08-00_27_19.png" 
+              src="/platform/analytics dashboard.png" 
               alt="EmailBridge Pro Dashboard" 
               className="w-full h-auto object-cover"
             />

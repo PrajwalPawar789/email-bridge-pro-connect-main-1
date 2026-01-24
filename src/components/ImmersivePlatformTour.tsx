@@ -6,28 +6,28 @@ const features = [
     id: "dashboard",
     title: "Command Center",
     description: "Get a bird's-eye view of your entire email operation. Track open rates, click-throughs, and domain health in real-time.",
-    image: "/platform/screencapture-localhost-8080-dashboard-2025-12-08-00_27_19.png",
+    image: "/platform/analytics dashboard.png",
     color: "from-indigo-500/20 to-blue-500/20"
   },
   {
     id: "campaigns",
     title: "Campaign Management",
     description: "Manage multiple campaigns with ease. Monitor status, sent counts, and performance metrics at a glance.",
-    image: "/platform/screencapture-localhost-8080-dashboard-2025-12-08-00_28_57.png",
+    image: "/platform/campaign tracker.png",
     color: "from-purple-500/20 to-pink-500/20"
   },
   {
     id: "editor",
     title: "Visual Email Builder",
     description: "Craft beautiful, responsive emails with our intuitive editor. Personalize content dynamically for higher engagement.",
-    image: "/platform/screencapture-localhost-8080-dashboard-2025-12-08-00_30_03.png",
+    image: "/platform/create campaign.png",
     color: "from-emerald-500/20 to-teal-500/20"
   },
   {
     id: "templates",
     title: "Template Library",
     description: "Save time with reusable templates. Organize your designs and ensure brand consistency across all your communications.",
-    image: "/platform/screencapture-localhost-8080-dashboard-2025-12-08-00_31_52.png",
+    image: "/platform/template creation.png",
     color: "from-orange-500/20 to-amber-500/20"
   }
 ];

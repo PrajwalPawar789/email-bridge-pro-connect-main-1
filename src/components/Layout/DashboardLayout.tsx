@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import Sidebar from './Sidebar';
 import Header from './Header';
 import { cn } from '@/lib/utils';
@@ -11,6 +11,8 @@ interface DashboardLayoutProps {
   onLogout: () => void;
 }
 
+const SIDEBAR_COLLAPSE_STORAGE_KEY = 'dashboard:sidebar-collapsed';
+
 const DashboardLayout = ({ 
   children, 
   activeTab, 
@@ -18,7 +20,26 @@ const DashboardLayout = ({
   user, 
   onLogout 
 }: DashboardLayoutProps) => {
-  const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(false);
+  const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(() => {
+    if (typeof window === 'undefined') return false;
+    try {
+      return window.localStorage.getItem(SIDEBAR_COLLAPSE_STORAGE_KEY) === 'true';
+    } catch {
+      return false;
+    }
+  });
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    try {
+      window.localStorage.setItem(
+        SIDEBAR_COLLAPSE_STORAGE_KEY,
+        String(isSidebarCollapsed)
+      );
+    } catch {
+      // Ignore storage failures (e.g. privacy mode).
+    }
+  }, [isSidebarCollapsed]);
   const layoutStyles = {
     ['--shell-bg' as any]:
       'radial-gradient(circle at 12% 15%, rgba(16, 185, 129, 0.12), transparent 55%), radial-gradient(circle at 88% 10%, rgba(245, 158, 11, 0.14), transparent 50%), linear-gradient(180deg, #f6f4ef 0%, #f1f5f4 55%, #ffffff 100%)',
@@ -43,7 +64,7 @@ const DashboardLayout = ({
         activeTab={activeTab} 
         onTabChange={onTabChange} 
         isCollapsed={isSidebarCollapsed}
-        toggleSidebar={() => setIsSidebarCollapsed(!isSidebarCollapsed)}
+        toggleSidebar={() => setIsSidebarCollapsed((prev) => !prev)}
       />
       <div className={cn(
         "fixed top-0 right-0 z-20 transition-all duration-300",

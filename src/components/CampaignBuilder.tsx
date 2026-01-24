@@ -1,4 +1,5 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { supabase } from '@/integrations/supabase/client';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -56,6 +57,7 @@ const builderStyles = {
 } as React.CSSProperties;
 
 const CampaignBuilder: React.FC<CampaignBuilderProps> = ({ emailConfigs }) => {
+  const navigate = useNavigate();
   const [currentStep, setCurrentStep] = useState(1);
   const [form, setForm] = useState({
     name: '',
@@ -76,6 +78,7 @@ const CampaignBuilder: React.FC<CampaignBuilderProps> = ({ emailConfigs }) => {
   const [listCount, setListCount] = useState(0);
   const [audienceType, setAudienceType] = useState<'list' | 'manual'>('list');
   const [scheduledAt, setScheduledAt] = useState<string>('');
+  const contentBodyRef = useRef<HTMLTextAreaElement | null>(null);
   const totalRecipients = audienceType === 'list'
     ? listCount
     : recipients.split('\n').filter((line) => line.trim()).length;
@@ -174,6 +177,13 @@ const CampaignBuilder: React.FC<CampaignBuilderProps> = ({ emailConfigs }) => {
       }));
     }
     setSelectedTemplate(templateId);
+    requestAnimationFrame(() => {
+      const textarea = contentBodyRef.current;
+      if (!textarea) return;
+      textarea.scrollTop = 0;
+      textarea.focus();
+      textarea.setSelectionRange(0, 0);
+    });
   };
 
   const addFollowupStep = () => {
@@ -540,7 +550,13 @@ const CampaignBuilder: React.FC<CampaignBuilderProps> = ({ emailConfigs }) => {
               <p className="text-sm text-amber-700">You need at least one email account to send campaigns.</p>
             </div>
           </div>
-          <Button variant="outline" className="bg-white/80 text-amber-700 hover:bg-amber-100 border-amber-200">Connect</Button>
+          <Button
+            variant="outline"
+            className="bg-white/80 text-amber-700 hover:bg-amber-100 border-amber-200"
+            onClick={() => navigate('/dashboard?tab=settings')}
+          >
+            Add sender account
+          </Button>
         </div>
       )}
 
@@ -729,9 +745,29 @@ const CampaignBuilder: React.FC<CampaignBuilderProps> = ({ emailConfigs }) => {
             </TabsList>
             
             <TabsContent value="list" className="space-y-4 mt-0">
+              {allLists.length === 0 && (
+                <div className="rounded-2xl border border-amber-200/70 bg-amber-50/80 p-4 flex items-center justify-between">
+                  <div className="flex items-center gap-3">
+                    <div className="bg-white/80 p-2 rounded-full border border-amber-200">
+                      <Users className="h-5 w-5 text-amber-700" />
+                    </div>
+                    <div>
+                      <h4 className="font-semibold text-amber-900">Add a prospect list</h4>
+                      <p className="text-sm text-amber-700">Create or import prospects to target in this campaign.</p>
+                    </div>
+                  </div>
+                  <Button
+                    variant="outline"
+                    className="bg-white/80 text-amber-700 hover:bg-amber-100 border-amber-200"
+                    onClick={() => navigate('/dashboard?tab=contacts')}
+                  >
+                    Add prospect list
+                  </Button>
+                </div>
+              )}
               <div className="bg-white/80 border border-[var(--builder-border)] rounded-2xl p-6 space-y-4">
                 <Label className="text-base font-semibold text-[var(--builder-ink)]">Select a Prospect List</Label>
-                <Select value={selectedListId} onValueChange={setSelectedListId}>
+                <Select value={selectedListId} onValueChange={setSelectedListId} disabled={allLists.length === 0}>
                   <SelectTrigger className="h-12 bg-white/90 border-[var(--builder-border)]">
                     <SelectValue placeholder="Choose a list..." />
                   </SelectTrigger>
@@ -802,15 +838,35 @@ const CampaignBuilder: React.FC<CampaignBuilderProps> = ({ emailConfigs }) => {
 
   const renderContentStep = () => (
     <div className="space-y-4 animate-in fade-in slide-in-from-right-4 duration-500 h-full flex flex-col">
+      {templates.length === 0 && (
+        <div className="rounded-2xl border border-amber-200/70 bg-amber-50/80 p-4 flex items-center justify-between">
+          <div className="flex items-center gap-3">
+            <div className="bg-white/80 p-2 rounded-full border border-amber-200">
+              <Mail className="h-5 w-5 text-amber-700" />
+            </div>
+            <div>
+              <h4 className="font-semibold text-amber-900">Add an email template</h4>
+              <p className="text-sm text-amber-700">Create a reusable template to load into this campaign.</p>
+            </div>
+          </div>
+          <Button
+            variant="outline"
+            className="bg-white/80 text-amber-700 hover:bg-amber-100 border-amber-200"
+            onClick={() => navigate('/dashboard?tab=templates')}
+          >
+            Add template
+          </Button>
+        </div>
+      )}
       <div className="flex justify-between items-center mb-2 shrink-0">
         <div className="flex items-center gap-2">
-            <Select value={selectedTemplate} onValueChange={handleTemplateSelect}>
-                <SelectTrigger className="w-[200px] h-9 text-xs bg-white/80 border-[var(--builder-border)] text-[var(--builder-ink)]">
+            <Select value={selectedTemplate} onValueChange={handleTemplateSelect} disabled={templates.length === 0}>
+                <SelectTrigger className="w-[200px] h-9 text-xs bg-white/80 border-[var(--builder-border)] text-[var(--builder-ink)] cursor-pointer">
                     <SelectValue placeholder="Load Template..." />
                 </SelectTrigger>
                 <SelectContent>
                     {templates.map((template) => (
-                    <SelectItem key={template.id} value={template.id}>
+                    <SelectItem key={template.id} value={template.id} className="cursor-pointer">
                         {template.name}
                     </SelectItem>
                     ))}
@@ -879,7 +935,7 @@ const CampaignBuilder: React.FC<CampaignBuilderProps> = ({ emailConfigs }) => {
 
       <div className="flex-1 min-h-0">
         {/* Editor */}
-        <div className="flex flex-col h-full border border-[var(--builder-border)] rounded-2xl overflow-hidden bg-white/90 shadow-[0_12px_24px_rgba(15,23,42,0.06)]">
+        <div className="flex flex-col h-full min-h-[420px] md:min-h-[520px] border border-[var(--builder-border)] rounded-2xl overflow-hidden bg-white/90 shadow-[0_12px_24px_rgba(15,23,42,0.06)]">
             <div className="p-3 border-b border-[var(--builder-border)] bg-white/70 shrink-0">
                 <Input
                   placeholder="Subject Line"
@@ -894,6 +950,7 @@ const CampaignBuilder: React.FC<CampaignBuilderProps> = ({ emailConfigs }) => {
                   className="h-full w-full resize-none border-0 p-4 focus-visible:ring-0 font-mono text-sm leading-relaxed text-[var(--builder-ink)]"
                   value={form.content}
                   onChange={(e) => setForm({ ...form, content: e.target.value })}
+                  ref={contentBodyRef}
                 />
             </div>
         </div>

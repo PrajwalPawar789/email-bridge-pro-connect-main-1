@@ -1,9 +1,10 @@
-﻿import React, { useState } from 'react';
+import React, { useState } from 'react';
 import { motion } from 'framer-motion';
 import { Link } from 'react-router-dom';
-import { BarChart, Check, Globe, Send, Settings, Shield, Users, Zap } from 'lucide-react';
+import { Check, Globe } from 'lucide-react';
 import Navbar from '../components/Navbar';
 import Logo from '../components/Logo';
+import AIWorkflowShowcase from '../components/AIWorkflowShowcase';
 import { supabase } from '@/integrations/supabase/client';
 
 const stats = [
@@ -35,7 +36,7 @@ const platformBlocks = [
     description:
       'Track inbox health, engagement trends, and pipeline impact without jumping between tools.',
     bullets: ['Live engagement heatmaps', 'Sender-level deliverability scoring', 'Audience quality checks'],
-    image: '/platform/screencapture-localhost-8080-dashboard-2025-12-08-00_27_19.png'
+    image: '/platform/campaign tracker.png'
   },
   {
     tag: 'Campaign Studio',
@@ -43,7 +44,7 @@ const platformBlocks = [
     description:
       'Balance volume, timing, and personalization across teams while staying compliant.',
     bullets: ['Smart send windows', 'Sequence-level QA', 'Follow-up automation'],
-    image: '/platform/screencapture-localhost-8080-dashboard-2025-12-08-00_28_57.png'
+    image: '/platform/create campaign.png'
   },
   {
     tag: 'Template Library',
@@ -51,7 +52,15 @@ const platformBlocks = [
     description:
       'Build templates once, then reuse across segments with dynamic tokens and approvals.',
     bullets: ['Role-based approvals', 'Reusable blocks', 'Performance-tested variants'],
-    image: '/platform/screencapture-localhost-8080-dashboard-2025-12-08-00_31_52.png'
+    image: '/platform/template creation.png'
+  },
+  {
+    tag: 'Prospect Lists',
+    title: 'Build clean segments before every send.',
+    description:
+      'Organize prospects by persona, region, and intent so campaigns launch with the right audience.',
+    bullets: ['Persona-based filters', 'List health indicators', 'CRM + CSV imports'],
+    image: '/platform/prospect list.png'
   }
 ];
 
@@ -71,39 +80,6 @@ const apiFeatures = [
   'Event webhooks for opens, clicks, replies, and bounces',
   'Custom fields + segmentation sync from your data warehouse',
   'Bulk import/export with rate-limit controls'
-];
-
-const featureServices = [
-  {
-    title: 'Deliverability Guardrails',
-    description: 'Warmup, throttling, and inbox health scoring built into every send.',
-    icon: Shield
-  },
-  {
-    title: 'Smart Sequencing',
-    description: 'Multi-step cadences with automatic send windows and reply handling.',
-    icon: Zap
-  },
-  {
-    title: 'Personalization Engine',
-    description: 'Merge variables, conditional content, and enriched company insights.',
-    icon: Send
-  },
-  {
-    title: 'Team Workflows',
-    description: 'Role-based access, approvals, and audit history for every send.',
-    icon: Users
-  },
-  {
-    title: 'Performance Analytics',
-    description: 'Track outcomes, replies, and pipeline influence with precision.',
-    icon: BarChart
-  },
-  {
-    title: 'Admin Controls',
-    description: 'Configure domains, sender pools, and global policies at scale.',
-    icon: Settings
-  }
 ];
 
 const stories = [
@@ -290,7 +266,7 @@ const LandingPage = () => {
                   <div className="ml-4 text-xs text-[color:var(--lp-muted)]">app.emailbridge.pro</div>
                 </div>
                 <img
-                  src="/platform/screencapture-localhost-8080-dashboard-2025-12-08-00_27_19.png"
+                  src="/platform/analytics dashboard.png"
                   alt="EmailBridge Pro analytics dashboard"
                   className="w-full h-auto object-cover"
                 />
@@ -298,22 +274,22 @@ const LandingPage = () => {
 
               <div className="absolute -right-6 top-20 w-44 rounded-2xl border border-[color:var(--lp-border)] bg-[color:var(--lp-surface-2)] shadow-[0_20px_50px_var(--lp-shadow)] overflow-hidden">
                 <div className="px-4 py-3 text-xs text-[color:var(--lp-muted)] border-b border-[color:var(--lp-border)]">
-                  Template performance
+                  Campaign overview
                 </div>
                 <img
-                  src="/platform/screencapture-localhost-8080-dashboard-2025-12-08-00_30_03.png"
-                  alt="Template editor preview"
+                  src="/platform/campaign.png"
+                  alt="Campaign overview screen"
                   className="w-full h-auto object-cover"
                 />
               </div>
 
               <div className="absolute -left-8 bottom-10 w-52 rounded-2xl border border-[color:var(--lp-border)] bg-[color:var(--lp-surface-2)] shadow-[0_20px_50px_var(--lp-shadow)] overflow-hidden">
                 <div className="px-4 py-3 text-xs text-[color:var(--lp-muted)] border-b border-[color:var(--lp-border)]">
-                  Campaign builder
+                  Inbox management
                 </div>
                 <img
-                  src="/platform/screencapture-localhost-8080-dashboard-2025-12-08-00_28_57.png"
-                  alt="Campaign setup flow"
+                  src="/platform/inbox.png"
+                  alt="Inbox management view"
                   className="w-full h-auto object-cover"
                 />
               </div>
@@ -327,7 +303,7 @@ const LandingPage = () => {
           </div>
         </section>
 
-        <section className="py-10 border-y border-[color:var(--lp-border)]">
+        {/* <section className="py-10 border-y border-[color:var(--lp-border)]">
           <div className="container mx-auto px-4">
             <div className="flex flex-wrap items-center justify-center gap-6 text-sm uppercase tracking-[0.3em] text-[color:var(--lp-muted)]">
               Trusted by growth teams at
@@ -340,7 +316,7 @@ const LandingPage = () => {
               ))}
             </div>
           </div>
-        </section>
+        </section> */}
 
         <section id="solutions" className="py-24 bg-[color:var(--lp-card)] text-[color:var(--lp-card-ink)]">
           <div className="container mx-auto px-4 grid grid-cols-1 lg:grid-cols-[1fr_1fr] gap-12 items-start">
@@ -555,48 +531,7 @@ const LandingPage = () => {
           </div>
         </section>
 
-        <section id="features" className="py-24 bg-[color:var(--lp-bg)]">
-          <div className="container mx-auto px-4">
-            <motion.div
-              initial={{ opacity: 0, y: 24 }}
-              whileInView={{ opacity: 1, y: 0 }}
-              viewport={{ once: true }}
-              transition={{ duration: 0.6 }}
-              className="max-w-3xl"
-            >
-              <p className="text-xs uppercase tracking-[0.4em] text-[color:var(--lp-muted)]">Feature Services</p>
-              <h2 className="mt-4 text-3xl md:text-5xl font-display font-semibold text-[color:var(--lp-ink-strong)]">
-                Every feature is designed to move prospects to pipeline.
-              </h2>
-              <p className="mt-4 text-lg text-[color:var(--lp-muted)]">
-                From inbox health to personalization, every surface is built for conversion, speed, and control.
-              </p>
-            </motion.div>
-
-            <div className="mt-14 grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-              {featureServices.map((service) => (
-                <motion.div
-                  key={service.title}
-                  initial={{ opacity: 0, y: 16 }}
-                  whileInView={{ opacity: 1, y: 0 }}
-                  viewport={{ once: true }}
-                  transition={{ duration: 0.5 }}
-                  className="rounded-3xl border border-[color:var(--lp-border)] bg-[color:var(--lp-surface)] p-7 shadow-[0_20px_60px_var(--lp-shadow)]"
-                >
-                  <div className="h-12 w-12 rounded-2xl bg-[color:var(--lp-bg-strong)] border border-[color:var(--lp-border)] flex items-center justify-center text-[color:var(--lp-accent-2)]">
-                    <service.icon className="h-6 w-6" />
-                  </div>
-                  <h3 className="mt-5 text-xl font-display font-semibold text-[color:var(--lp-ink-strong)]">
-                    {service.title}
-                  </h3>
-                  <p className="mt-3 text-[color:var(--lp-muted)]">
-                    {service.description}
-                  </p>
-                </motion.div>
-              ))}
-            </div>
-          </div>
-        </section>
+        <AIWorkflowShowcase />
 
         <section id="stories" className="py-24 bg-[color:var(--lp-bg-strong)]">
           <div className="container mx-auto px-4">
@@ -638,7 +573,7 @@ const LandingPage = () => {
                     "{story.quote}"
                   </p>
                   <div className="mt-6 text-sm text-[color:var(--lp-muted)]">
-                    {story.company} - {story.role}
+                    {/* {story.company} - {story.role} */}
                   </div>
                 </motion.div>
               ))}
@@ -898,5 +833,6 @@ const LandingPage = () => {
 };
 
 export default LandingPage;
+
 
 

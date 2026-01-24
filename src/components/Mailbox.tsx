@@ -59,6 +59,109 @@ interface SyncStats {
 
 const DEFAULT_MAILBOX_SYNC_URL = 'http://localhost:8787/sync-mailbox';
 const MAILBOX_SYNC_URL = import.meta.env.VITE_MAILBOX_SYNC_URL || DEFAULT_MAILBOX_SYNC_URL;
+const MAX_PREVIEW_LENGTH = 140;
+const MAX_MAILTO_BODY_LENGTH = 2000;
+
+const HTML_TAG_REGEX = /<\s*(html|head|body|div|p|br|table|tbody|tr|td|th|span|img|a|style|meta|link|!doctype)\b/i;
+
+const looksLikeHtml = (value: string) => HTML_TAG_REGEX.test(value);
+
+const extractPlainText = (body: string) => {
+  const withBreaks = body
+    .replace(/\r\n/g, '\n')
+    .replace(/<\s*br\s*\/?>/gi, '\n')
+    .replace(/<\s*\/p\s*>/gi, '\n')
+    .replace(/<\s*\/div\s*>/gi, '\n');
+
+  const stripped = withBreaks.replace(/<[^>]+>/g, ' ');
+  return stripped
+    .replace(/[ \t]+/g, ' ')
+    .replace(/\n\s*\n+/g, '\n\n')
+    .trim();
+};
+
+const buildPreviewText = (body: string | null) => {
+  if (!body) return 'No content preview available';
+  const plain = extractPlainText(body);
+  if (!plain) return 'No content preview available';
+  return plain.replace(/\s+/g, ' ').slice(0, MAX_PREVIEW_LENGTH);
+};
+
+const sanitizeEmailHtml = (html: string) => {
+  if (typeof window === 'undefined') return html;
+
+  const doc = new DOMParser().parseFromString(html, 'text/html');
+  const blockedTags = ['script', 'style', 'iframe', 'object', 'embed', 'link', 'meta', 'base'];
+
+  blockedTags.forEach((tag) => {
+    doc.querySelectorAll(tag).forEach((el) => el.remove());
+  });
+
+  doc.querySelectorAll('*').forEach((el) => {
+    Array.from(el.attributes).forEach((attr) => {
+      const name = attr.name.toLowerCase();
+      const value = attr.value || '';
+
+      if (name.startsWith('on')) {
+        el.removeAttribute(attr.name);
+        return;
+      }
+
+      if ((name === 'href' || name === 'src') && value) {
+        const trimmed = value.trim().toLowerCase();
+        if (trimmed.startsWith('javascript:') || trimmed.startsWith('data:text/html')) {
+          el.removeAttribute(attr.name);
+        }
+      }
+    });
+  });
+
+  doc.querySelectorAll('a').forEach((el) => {
+    el.setAttribute('target', '_blank');
+    el.setAttribute('rel', 'noopener noreferrer');
+  });
+
+  return doc.body.innerHTML;
+};
+
+const buildReplySubject = (subject: string | null) => {
+  const base = subject?.trim() || '(No Subject)';
+  return /^re:/i.test(base) ? base : `Re: ${base}`;
+};
+
+const buildForwardSubject = (subject: string | null) => {
+  const base = subject?.trim() || '(No Subject)';
+  return /^(fwd|fw):/i.test(base) ? base : `Fwd: ${base}`;
+};
+
+const buildMailtoLink = (to: string | null, subject: string, body: string) => {
+  const params = new URLSearchParams();
+  if (subject) params.set('subject', subject);
+  if (body) params.set('body', body);
+  const query = params.toString();
+  const address = to ? encodeURIComponent(to) : '';
+  return `mailto:${address}${query ? `?${query}` : ''}`;
+};
+
+const buildReplyBody = (email: EmailMessage) => {
+  const plain = extractPlainText(email.body || '');
+  const clipped = plain.length > MAX_MAILTO_BODY_LENGTH ? `${plain.slice(0, MAX_MAILTO_BODY_LENGTH)}...` : plain;
+  const quoted = clipped
+    .split(/\r?\n/)
+    .map((line) => `> ${line}`)
+    .join('\n');
+  const dateLabel = new Date(email.date).toLocaleString();
+  return `\n\nOn ${dateLabel}, ${email.from_email} wrote:\n${quoted}`;
+};
+
+const buildForwardBody = (email: EmailMessage) => {
+  const plain = extractPlainText(email.body || '');
+  const clipped = plain.length > MAX_MAILTO_BODY_LENGTH ? `${plain.slice(0, MAX_MAILTO_BODY_LENGTH)}...` : plain;
+  const dateLabel = new Date(email.date).toLocaleString();
+  const subject = email.subject || '(No Subject)';
+  const toEmail = email.to_email || '';
+  return `\n\n---------- Forwarded message ----------\nFrom: ${email.from_email}\nDate: ${dateLabel}\nSubject: ${subject}\nTo: ${toEmail}\n\n${clipped}`;
+};
 
 const Mailbox: React.FC<MailboxProps> = ({ emailConfigs }) => {
   const [emails, setEmails] = useState<EmailMessage[]>([]);
@@ -203,6 +306,22 @@ const Mailbox: React.FC<MailboxProps> = ({ emailConfigs }) => {
     }
   };
 
+  const handleReplyEmail = (email: EmailMessage) => {
+    if (!email.from_email) {
+      toast({ title: "Reply unavailable", description: "Sender address is missing.", variant: "destructive" });
+      return;
+    }
+    const subject = buildReplySubject(email.subject);
+    const body = buildReplyBody(email);
+    window.open(buildMailtoLink(email.from_email, subject, body));
+  };
+
+  const handleForwardEmail = (email: EmailMessage) => {
+    const subject = buildForwardSubject(email.subject);
+    const body = buildForwardBody(email);
+    window.open(buildMailtoLink(null, subject, body));
+  };
+
   const normalizedQuery = searchQuery.trim().toLowerCase();
   const totalCount = emails.length;
   const unreadCount = emails.filter((email) => !email.read).length;
@@ -220,7 +339,7 @@ const Mailbox: React.FC<MailboxProps> = ({ emailConfigs }) => {
     return (
       (email.subject?.toLowerCase() || '').includes(normalizedQuery) ||
       (email.from_email?.toLowerCase() || '').includes(normalizedQuery) ||
-      (email.body?.toLowerCase() || '').includes(normalizedQuery)
+      (email.body ? extractPlainText(email.body).toLowerCase() : '').includes(normalizedQuery)
     );
   });
 
@@ -476,7 +595,7 @@ const Mailbox: React.FC<MailboxProps> = ({ emailConfigs }) => {
                           </h4>
 
                           <p className="text-xs text-gray-500 line-clamp-2">
-                            {email.body ? email.body.substring(0, 140) : 'No content preview available'}
+                            {buildPreviewText(email.body)}
                           </p>
                         </div>
                       </div>
@@ -518,11 +637,11 @@ const Mailbox: React.FC<MailboxProps> = ({ emailConfigs }) => {
                     </div>
                   </div>
                   <div className="flex flex-wrap items-center gap-2">
-                    <Button variant="outline" size="sm" className="h-8">
+                    <Button variant="outline" size="sm" className="h-8" onClick={() => handleReplyEmail(selectedEmail)}>
                       <Reply className="h-4 w-4" />
                       Reply
                     </Button>
-                    <Button variant="outline" size="sm" className="h-8">
+                    <Button variant="outline" size="sm" className="h-8" onClick={() => handleForwardEmail(selectedEmail)}>
                       <Forward className="h-4 w-4" />
                       Forward
                     </Button>
@@ -569,12 +688,16 @@ const Mailbox: React.FC<MailboxProps> = ({ emailConfigs }) => {
 
               {/* Email Body */}
               <ScrollArea className="flex-1 p-6">
-                <div className="prose max-w-none text-sm text-gray-800">
-                  {/* Simple text rendering for now, could be dangerouslySetInnerHTML if sanitized */}
-                  <div className="whitespace-pre-wrap font-sans leading-relaxed">
+                {selectedEmail.body && looksLikeHtml(selectedEmail.body) ? (
+                  <div
+                    className="prose max-w-none text-sm text-gray-800"
+                    dangerouslySetInnerHTML={{ __html: sanitizeEmailHtml(selectedEmail.body) }}
+                  />
+                ) : (
+                  <div className="whitespace-pre-wrap font-sans leading-relaxed text-sm text-gray-800">
                     {selectedEmail.body}
                   </div>
-                </div>
+                )}
               </ScrollArea>
             </div>
           ) : (

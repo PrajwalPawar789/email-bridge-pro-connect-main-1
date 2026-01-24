@@ -1,11 +1,11 @@
-import React, { useState, useEffect } from 'react';
+﻿import React, { useState, useEffect, useRef } from 'react';
 import { supabase } from '@/integrations/supabase/client';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Textarea } from '@/components/ui/textarea';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription, CardFooter } from '@/components/ui/card';
-import { Switch } from '@/components/ui/switch';
+import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from '@/components/ui/accordion';
 import { toast } from '@/hooks/use-toast';
 import { 
   Plus,
@@ -34,6 +34,8 @@ import {
 } from '@/components/ui/dialog';
 import { Badge } from '@/components/ui/badge';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
+import { ResizableHandle, ResizablePanel, ResizablePanelGroup } from '@/components/ui/resizable';
+import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group';
 import {
   Pagination,
   PaginationContent,
@@ -43,7 +45,108 @@ import {
   PaginationNext,
   PaginationPrevious,
 } from '@/components/ui/pagination';
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+
+const TEMPLATE_INDUSTRIES = [
+  { value: 'all', label: 'All industries' },
+  { value: 'saas', label: 'SaaS' },
+  { value: 'ecommerce', label: 'Ecommerce' },
+  { value: 'real_estate', label: 'Real estate' },
+  { value: 'healthcare', label: 'Healthcare' },
+  { value: 'finance', label: 'Finance' },
+  { value: 'education', label: 'Education' },
+  { value: 'agency', label: 'Agency' },
+  { value: 'recruiting', label: 'Recruiting' },
+  { value: 'nonprofit', label: 'Nonprofit' },
+  { value: 'manufacturing', label: 'Manufacturing' },
+  { value: 'hospitality', label: 'Hospitality' },
+  { value: 'other', label: 'Other' },
+];
+
+const TEMPLATE_GOALS = [
+  { value: 'cold_outreach', label: 'Cold outreach' },
+  { value: 'follow_up', label: 'Follow up' },
+  { value: 'newsletter', label: 'Newsletter' },
+  { value: 'product_update', label: 'Product update' },
+  { value: 'event_invite', label: 'Event invite' },
+  { value: 'reengagement', label: 'Re-engagement' },
+  { value: 'partnership', label: 'Partnership' },
+  { value: 'support', label: 'Support update' },
+];
+
+const TEMPLATE_TONES = [
+  { value: 'professional', label: 'Professional' },
+  { value: 'friendly', label: 'Friendly' },
+  { value: 'direct', label: 'Direct' },
+  { value: 'warm', label: 'Warm' },
+  { value: 'bold', label: 'Bold' },
+];
+
+const TEMPLATE_LENGTHS = [
+  { value: 'short', label: 'Short' },
+  { value: 'standard', label: 'Standard' },
+  { value: 'detailed', label: 'Detailed' },
+];
+
+const TEMPLATE_CTAS = [
+  { value: 'reply', label: 'Reply to this email' },
+  { value: 'book_call', label: 'Book a call' },
+  { value: 'visit_link', label: 'Visit a link' },
+  { value: 'download', label: 'Download resource' },
+  { value: 'rsvp', label: 'RSVP to event' },
+  { value: 'start_trial', label: 'Start a trial' },
+];
+
+const TEMPLATE_COMPANY_SIZES = [
+  { value: 'any', label: 'Any size' },
+  { value: '1-10', label: '1-10' },
+  { value: '11-50', label: '11-50' },
+  { value: '51-200', label: '51-200' },
+  { value: '201-1000', label: '201-1000' },
+  { value: '1000+', label: '1000+' },
+];
+
+const escapeHtml = (value: string) =>
+  value
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+
+const renderPlainTextPreviewHtml = (value: string) => {
+  if (!value) return '';
+  const escaped = escapeHtml(value);
+  const withBold = escaped.replace(/\*\*([\s\S]+?)\*\*/g, '<strong>$1</strong>');
+  return withBold.replace(/\n/g, '<br />');
+};
+
+const TemplateShell = ({ children }: { children: React.ReactNode }) => (
+  <div className="relative -my-8 min-h-[calc(100vh-4rem)] bg-[var(--shell-bg)] text-[var(--shell-ink)]">
+    <style>{`
+      @keyframes template-rise {
+        from { opacity: 0; transform: translateY(14px); }
+        to { opacity: 1; transform: translateY(0); }
+      }
+      @keyframes template-float {
+        0%, 100% { transform: translateY(0); }
+        50% { transform: translateY(-12px); }
+      }
+      .template-rise { animation: template-rise 0.6s ease-out both; }
+      .template-float { animation: template-float 10s ease-in-out infinite; }
+      @media (prefers-reduced-motion: reduce) {
+        .template-rise, .template-float { animation: none; }
+      }
+    `}</style>
+    <div className="pointer-events-none absolute inset-0">
+      <div className="absolute -right-24 -top-24 h-72 w-72 rounded-full bg-emerald-200/40 blur-3xl template-float"></div>
+      <div className="absolute -left-24 top-1/3 h-72 w-72 rounded-full bg-amber-200/35 blur-3xl template-float" style={{ animationDelay: "1.2s" }}></div>
+      <div className="absolute bottom-0 right-1/3 h-56 w-56 rounded-full bg-sky-200/30 blur-3xl template-float" style={{ animationDelay: "2.2s" }}></div>
+    </div>
+    <div className="relative mx-auto w-full max-w-7xl space-y-6 px-5 py-6 lg:px-8 lg:py-8">
+      {children}
+    </div>
+  </div>
+);
 
 const TemplateManager = () => {
   const [templates, setTemplates] = useState<any[]>([]);
@@ -62,6 +165,20 @@ const TemplateManager = () => {
   const [templatePage, setTemplatePage] = useState(1);
   const [templatePageSize, setTemplatePageSize] = useState(6);
   const [templateSort, setTemplateSort] = useState('recent');
+  const contentRef = useRef<HTMLTextAreaElement | null>(null);
+  const [templateProfile, setTemplateProfile] = useState({
+    industry: '',
+    audienceRole: '',
+    companySize: 'any',
+    region: '',
+    language: 'English',
+    goal: 'cold_outreach',
+    tone: 'professional',
+    length: 'standard',
+    cta: 'reply',
+    ctaText: '',
+    ctaLink: '',
+  });
   const templatePageSizeOptions = [6, 9, 12];
   const templateSortOptions = [
     { value: 'recent', label: 'Newest first' },
@@ -195,17 +312,87 @@ const TemplateManager = () => {
     setEditingTemplate(null);
   };
 
-  const insertVariable = (variable: string) => {
+  const insertAtCursor = (value: string) => {
+    const textarea = contentRef.current;
+    if (!textarea) {
+      setForm(prev => ({ ...prev, content: `${prev.content}${value}` }));
+      return;
+    }
+
+    const start = textarea.selectionStart ?? 0;
+    const end = textarea.selectionEnd ?? 0;
+    const base = textarea.value || '';
+    const before = base.slice(0, start);
+    const after = base.slice(end);
+
     setForm(prev => ({
       ...prev,
-      content: prev.content + variable
+      content: `${before}${value}${after}`,
     }));
+
+    requestAnimationFrame(() => {
+      textarea.focus();
+      const nextPos = start + value.length;
+      textarea.setSelectionRange(nextPos, nextPos);
+    });
+  };
+
+  const insertVariable = (variable: string) => {
+    insertAtCursor(variable);
     toast({
       title: "Variable Added",
       description: `${variable} added to content.`,
       duration: 1500,
     });
   };
+
+  const applyBold = () => {
+    const textarea = contentRef.current;
+    if (!textarea) return;
+
+    const start = textarea.selectionStart ?? 0;
+    const end = textarea.selectionEnd ?? 0;
+    const isCollapsed = start === end;
+    const useHtml = form.is_html;
+    const openTag = useHtml ? '<strong>' : '**';
+    const closeTag = useHtml ? '</strong>' : '**';
+
+    setForm(prev => {
+      const base = prev.content || '';
+      const before = base.slice(0, start);
+      const selected = base.slice(start, end);
+      const after = base.slice(end);
+      return {
+        ...prev,
+        content: `${before}${openTag}${selected}${closeTag}${after}`,
+      };
+    });
+
+    if (!useHtml) {
+      toast({
+        title: "Bold added",
+        description: "Plain text uses **bold** markers.",
+        duration: 1500,
+      });
+    }
+
+    requestAnimationFrame(() => {
+      textarea.focus();
+      const cursorStart = start + openTag.length;
+      const cursorEnd = isCollapsed ? cursorStart : cursorStart + (end - start);
+      textarea.setSelectionRange(cursorStart, cursorEnd);
+    });
+  };
+
+  const selectedGoal = TEMPLATE_GOALS.find((item) => item.value === templateProfile.goal) ?? TEMPLATE_GOALS[0];
+  const selectedTone = TEMPLATE_TONES.find((item) => item.value === templateProfile.tone) ?? TEMPLATE_TONES[0];
+  const selectedLength = TEMPLATE_LENGTHS.find((item) => item.value === templateProfile.length) ?? TEMPLATE_LENGTHS[0];
+  const selectedCta = TEMPLATE_CTAS.find((item) => item.value === templateProfile.cta) ?? TEMPLATE_CTAS[0];
+  const selectedCompanySize = TEMPLATE_COMPANY_SIZES.find((item) => item.value === templateProfile.companySize) ?? TEMPLATE_COMPANY_SIZES[0];
+  const industryLabel = templateProfile.industry.trim() || 'All industries';
+  const roleLabel = templateProfile.audienceRole.trim() || 'your audience';
+  const regionLabel = templateProfile.region.trim() || 'any region';
+  const languageLabel = templateProfile.language.trim() || 'English';
 
   const getPaginationItems = (page: number, total: number) => {
     if (total <= 7) {
@@ -332,36 +519,8 @@ const TemplateManager = () => {
   }, [searchQuery, templateSort, templatePageSize]);
 
   // --- RENDER HELPERS ---
-  const Shell = ({ children }: { children: React.ReactNode }) => (
-    <div className="relative -my-8 min-h-[calc(100vh-4rem)] bg-[var(--shell-bg)] text-[var(--shell-ink)]">
-      <style>{`
-        @keyframes template-rise {
-          from { opacity: 0; transform: translateY(14px); }
-          to { opacity: 1; transform: translateY(0); }
-        }
-        @keyframes template-float {
-          0%, 100% { transform: translateY(0); }
-          50% { transform: translateY(-12px); }
-        }
-        .template-rise { animation: template-rise 0.6s ease-out both; }
-        .template-float { animation: template-float 10s ease-in-out infinite; }
-        @media (prefers-reduced-motion: reduce) {
-          .template-rise, .template-float { animation: none; }
-        }
-      `}</style>
-      <div className="pointer-events-none absolute inset-0">
-        <div className="absolute -right-24 -top-24 h-72 w-72 rounded-full bg-emerald-200/40 blur-3xl template-float"></div>
-        <div className="absolute -left-24 top-1/3 h-72 w-72 rounded-full bg-amber-200/35 blur-3xl template-float" style={{ animationDelay: "1.2s" }}></div>
-        <div className="absolute bottom-0 right-1/3 h-56 w-56 rounded-full bg-sky-200/30 blur-3xl template-float" style={{ animationDelay: "2.2s" }}></div>
-      </div>
-      <div className="relative mx-auto w-full max-w-7xl space-y-6 px-5 py-6 lg:px-8 lg:py-8">
-        {children}
-      </div>
-    </div>
-  );
-
   const renderListView = () => (
-    <Shell>
+    <TemplateShell>
       <section className="template-rise relative overflow-hidden rounded-[28px] border border-[var(--shell-border)] bg-[var(--shell-surface-strong)] p-6 shadow-[0_18px_40px_rgba(15,23,42,0.12)]">
         <div className="grid gap-6 lg:grid-cols-[1.5fr_1fr]">
           <div className="space-y-4">
@@ -704,11 +863,11 @@ const TemplateManager = () => {
           </div>
         </aside>
       </section>
-    </Shell>
+    </TemplateShell>
   );
 
   const renderEditorView = () => (
-    <Shell>
+    <TemplateShell>
       <section className="template-rise relative overflow-hidden rounded-[28px] border border-[var(--shell-border)] bg-[var(--shell-surface-strong)] p-6 shadow-[0_18px_40px_rgba(15,23,42,0.12)]">
         <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
           <div className="flex items-start gap-4">
@@ -762,164 +921,463 @@ const TemplateManager = () => {
         </div>
       </section>
 
-      <section className="grid gap-6 lg:grid-cols-[1.8fr_0.9fr]">
-        <div className="space-y-4">
-          <Card className="overflow-hidden rounded-[24px] border-[var(--shell-border)] bg-[var(--shell-surface-strong)] shadow-[0_16px_32px_rgba(15,23,42,0.1)]">
-            <CardContent className="p-6 flex flex-col gap-4">
+      <section className="template-rise rounded-[28px] border border-[var(--shell-border)] bg-[var(--shell-surface-strong)] shadow-[0_18px_40px_rgba(15,23,42,0.08)] overflow-hidden">
+        <ResizablePanelGroup direction="horizontal" className="min-h-[72vh]">
+          <ResizablePanel defaultSize={36} minSize={24} maxSize={46}>
+            <div className="h-full p-5 border-r border-[var(--shell-border)] overflow-y-auto">
               <div className="space-y-2">
-                <Label htmlFor="name">Template Name</Label>
-                <Input
-                  id="name"
-                  placeholder="e.g., Cold Outreach - Follow Up 1"
-                  value={form.name}
-                  onChange={(e) => setForm({ ...form, name: e.target.value })}
-                  className="h-10 rounded-full border-[var(--shell-border)] bg-white/90 font-medium"
-                />
+                <div className="flex items-center gap-2 text-[11px] font-semibold uppercase tracking-[0.24em] text-[var(--shell-muted)]">
+                  <Sparkles className="h-3 w-3" />
+                  Template blueprint
+                </div>
+                <h3 className="text-lg font-semibold text-[var(--shell-ink)]" style={{ fontFamily: "var(--shell-font-display)" }}>
+                  Audience, intent, format
+                </h3>
+                <p className="text-sm text-[var(--shell-muted)]">
+                  Set the audience, voice, and CTA, then craft the message.
+                </p>
               </div>
 
-              <div className="space-y-2">
-                <Label htmlFor="subject">Subject Line</Label>
-                <div className="relative">
-                  <Input
-                    id="subject"
-                    placeholder="Quick question for {company}..."
-                    value={form.subject}
-                    onChange={(e) => setForm({ ...form, subject: e.target.value })}
-                    className="h-10 rounded-full border-[var(--shell-border)] bg-white/90 pr-24"
-                  />
-                  <div className="absolute right-3 top-1/2 -translate-y-1/2 text-xs text-[var(--shell-muted)]">
-                    {form.subject.length} chars
-                  </div>
-                </div>
-              </div>
+              <Accordion
+                type="multiple"
+                defaultValue={['basics', 'audience', 'voice', 'cta', 'personalize', 'snippets']}
+                className="mt-4 space-y-3"
+              >
+                <AccordionItem value="basics" className="rounded-2xl border border-[var(--shell-border)] bg-white/90 px-4 border-b-0">
+                  <AccordionTrigger className="text-sm font-semibold text-[var(--shell-ink)] hover:no-underline">
+                    Basics
+                  </AccordionTrigger>
+                  <AccordionContent className="space-y-3">
+                    <div className="space-y-2">
+                      <Label htmlFor="name">Template Name</Label>
+                      <Input
+                        id="name"
+                        placeholder="e.g., Cold Outreach - Follow Up 1"
+                        value={form.name}
+                        onChange={(e) => setForm({ ...form, name: e.target.value })}
+                        className="h-10 rounded-full border-[var(--shell-border)] bg-white/90 font-medium"
+                      />
+                    </div>
+                    <div className="space-y-2">
+                      <Label htmlFor="subject">Subject Line</Label>
+                      <div className="relative">
+                        <Input
+                          id="subject"
+                          placeholder="Quick question for {company}..."
+                          value={form.subject}
+                          onChange={(e) => setForm({ ...form, subject: e.target.value })}
+                          className="h-10 rounded-full border-[var(--shell-border)] bg-white/90 pr-24"
+                        />
+                        <div className="absolute right-3 top-1/2 -translate-y-1/2 text-xs text-[var(--shell-muted)]">
+                          {form.subject.length} chars
+                        </div>
+                      </div>
+                    </div>
+                    <div className="space-y-2">
+                      <Label className="text-xs text-[var(--shell-muted)]">Format</Label>
+                      <ToggleGroup
+                        type="single"
+                        variant="outline"
+                        size="sm"
+                        value={form.is_html ? 'html' : 'text'}
+                        onValueChange={(value) => {
+                          if (!value) return;
+                          setForm((prev) => ({ ...prev, is_html: value === 'html' }));
+                        }}
+                        className="justify-start"
+                      >
+                        <ToggleGroupItem value="text">Plain text</ToggleGroupItem>
+                        <ToggleGroupItem value="html">HTML</ToggleGroupItem>
+                      </ToggleGroup>
+                    </div>
+                  </AccordionContent>
+                </AccordionItem>
 
-              <div className="flex flex-col gap-2">
-                <div className="flex flex-wrap items-center justify-between gap-3">
-                  <Label htmlFor="content">Email Content</Label>
-                  <div className="flex items-center space-x-2">
-                    <Switch
-                      id="html-mode"
-                      checked={form.is_html}
-                      onCheckedChange={(checked) => setForm({ ...form, is_html: checked })}
-                    />
-                    <Label htmlFor="html-mode" className="text-xs font-normal text-[var(--shell-muted)]">
-                      {form.is_html ? 'HTML Mode' : 'Plain Text'}
-                    </Label>
-                  </div>
-                </div>
-                <Tabs defaultValue="edit" className="flex flex-col">
-                  <TabsList className="w-full justify-start border-b border-[var(--shell-border)] rounded-none bg-transparent p-0 h-auto">
-                    <TabsTrigger value="edit" className="rounded-none border-b-2 border-transparent data-[state=active]:border-emerald-600 data-[state=active]:bg-transparent">
-                      Editor
-                    </TabsTrigger>
-                    <TabsTrigger value="preview" className="rounded-none border-b-2 border-transparent data-[state=active]:border-emerald-600 data-[state=active]:bg-transparent">
-                      Preview
-                    </TabsTrigger>
-                  </TabsList>
-                  <TabsContent value="edit" className="mt-4">
+                <AccordionItem value="audience" className="rounded-2xl border border-[var(--shell-border)] bg-white/90 px-4 border-b-0">
+                  <AccordionTrigger className="text-sm font-semibold text-[var(--shell-ink)] hover:no-underline">
+                    Audience
+                  </AccordionTrigger>
+                  <AccordionContent className="space-y-3">
+                    <div className="space-y-2">
+                      <Label className="text-xs text-[var(--shell-muted)]">Industry</Label>
+                      <Input
+                        placeholder="e.g., SaaS, Real Estate"
+                        value={templateProfile.industry}
+                        onChange={(e) => setTemplateProfile(prev => ({ ...prev, industry: e.target.value }))}
+                        className="h-9 rounded-full border-[var(--shell-border)] bg-white/90"
+                      />
+                      <div className="flex flex-wrap gap-2">
+                        {TEMPLATE_INDUSTRIES.filter((option) => option.value !== 'all').map((option) => (
+                          <Button
+                            key={option.value}
+                            type="button"
+                            variant="outline"
+                            size="sm"
+                            className="h-7 rounded-full border-[var(--shell-border)] bg-white/80 text-[10px] font-semibold text-[var(--shell-ink)]"
+                            onClick={() => setTemplateProfile(prev => ({ ...prev, industry: option.label }))}
+                          >
+                            {option.label}
+                          </Button>
+                        ))}
+                      </div>
+                    </div>
+                    <div className="space-y-2">
+                      <Label className="text-xs text-[var(--shell-muted)]">Audience role</Label>
+                      <Input
+                        placeholder="e.g., VP Sales, Founder, Marketing Lead"
+                        value={templateProfile.audienceRole}
+                        onChange={(e) => setTemplateProfile(prev => ({ ...prev, audienceRole: e.target.value }))}
+                        className="h-9 rounded-full border-[var(--shell-border)] bg-white/90"
+                      />
+                    </div>
+                    <div className="grid grid-cols-2 gap-3">
+                      <div className="space-y-2">
+                        <Label className="text-xs text-[var(--shell-muted)]">Company size</Label>
+                        <Select
+                          value={templateProfile.companySize}
+                          onValueChange={(value) => setTemplateProfile(prev => ({ ...prev, companySize: value }))}
+                        >
+                          <SelectTrigger className="h-9">
+                            <SelectValue placeholder="Size" />
+                          </SelectTrigger>
+                          <SelectContent>
+                            {TEMPLATE_COMPANY_SIZES.map((option) => (
+                              <SelectItem key={option.value} value={option.value}>
+                                {option.label}
+                              </SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+                      </div>
+                      <div className="space-y-2">
+                        <Label className="text-xs text-[var(--shell-muted)]">Region</Label>
+                        <Input
+                          placeholder="e.g., North America"
+                          value={templateProfile.region}
+                          onChange={(e) => setTemplateProfile(prev => ({ ...prev, region: e.target.value }))}
+                          className="h-9 rounded-full border-[var(--shell-border)] bg-white/90"
+                        />
+                      </div>
+                    </div>
+                    <div className="space-y-2">
+                      <Label className="text-xs text-[var(--shell-muted)]">Language</Label>
+                      <Input
+                        placeholder="e.g., English"
+                        value={templateProfile.language}
+                        onChange={(e) => setTemplateProfile(prev => ({ ...prev, language: e.target.value }))}
+                        className="h-9 rounded-full border-[var(--shell-border)] bg-white/90"
+                      />
+                    </div>
+                  </AccordionContent>
+                </AccordionItem>
+
+                <AccordionItem value="voice" className="rounded-2xl border border-[var(--shell-border)] bg-white/90 px-4 border-b-0">
+                  <AccordionTrigger className="text-sm font-semibold text-[var(--shell-ink)] hover:no-underline">
+                    Voice and length
+                  </AccordionTrigger>
+                  <AccordionContent className="space-y-3">
+                    <div className="space-y-2">
+                      <Label className="text-xs text-[var(--shell-muted)]">Tone</Label>
+                      <ToggleGroup
+                        type="single"
+                        variant="outline"
+                        size="sm"
+                        value={templateProfile.tone}
+                        onValueChange={(value) => value && setTemplateProfile(prev => ({ ...prev, tone: value }))}
+                        className="flex flex-wrap justify-start"
+                      >
+                        {TEMPLATE_TONES.map((option) => (
+                          <ToggleGroupItem key={option.value} value={option.value}>
+                            {option.label}
+                          </ToggleGroupItem>
+                        ))}
+                      </ToggleGroup>
+                    </div>
+                    <div className="space-y-2">
+                      <Label className="text-xs text-[var(--shell-muted)]">Length</Label>
+                      <ToggleGroup
+                        type="single"
+                        variant="outline"
+                        size="sm"
+                        value={templateProfile.length}
+                        onValueChange={(value) => value && setTemplateProfile(prev => ({ ...prev, length: value }))}
+                        className="flex flex-wrap justify-start"
+                      >
+                        {TEMPLATE_LENGTHS.map((option) => (
+                          <ToggleGroupItem key={option.value} value={option.value}>
+                            {option.label}
+                          </ToggleGroupItem>
+                        ))}
+                      </ToggleGroup>
+                    </div>
+                  </AccordionContent>
+                </AccordionItem>
+
+                <AccordionItem value="cta" className="rounded-2xl border border-[var(--shell-border)] bg-white/90 px-4 border-b-0">
+                  <AccordionTrigger className="text-sm font-semibold text-[var(--shell-ink)] hover:no-underline">
+                    Goal and CTA
+                  </AccordionTrigger>
+                  <AccordionContent className="space-y-3">
+                    <div className="space-y-2">
+                      <Label className="text-xs text-[var(--shell-muted)]">Use case</Label>
+                      <Select
+                        value={templateProfile.goal}
+                        onValueChange={(value) => setTemplateProfile(prev => ({ ...prev, goal: value }))}
+                      >
+                        <SelectTrigger className="h-9">
+                          <SelectValue placeholder="Select goal" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          {TEMPLATE_GOALS.map((option) => (
+                            <SelectItem key={option.value} value={option.value}>
+                              {option.label}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    </div>
+                    <div className="space-y-2">
+                      <Label className="text-xs text-[var(--shell-muted)]">Primary CTA</Label>
+                      <Select
+                        value={templateProfile.cta}
+                        onValueChange={(value) => setTemplateProfile(prev => ({ ...prev, cta: value }))}
+                      >
+                        <SelectTrigger className="h-9">
+                          <SelectValue placeholder="Select CTA" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          {TEMPLATE_CTAS.map((option) => (
+                            <SelectItem key={option.value} value={option.value}>
+                              {option.label}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    </div>
+                    <div className="space-y-2">
+                      <Label className="text-xs text-[var(--shell-muted)]">CTA text</Label>
+                      <Input
+                        placeholder="e.g., Would you be open to a quick call?"
+                        value={templateProfile.ctaText}
+                        onChange={(e) => setTemplateProfile(prev => ({ ...prev, ctaText: e.target.value }))}
+                        className="h-9 rounded-full border-[var(--shell-border)] bg-white/90"
+                      />
+                    </div>
+                    <div className="space-y-2">
+                      <Label className="text-xs text-[var(--shell-muted)]">CTA link (optional)</Label>
+                      <Input
+                        placeholder="https://..."
+                        value={templateProfile.ctaLink}
+                        onChange={(e) => setTemplateProfile(prev => ({ ...prev, ctaLink: e.target.value }))}
+                        className="h-9 rounded-full border-[var(--shell-border)] bg-white/90"
+                      />
+                    </div>
+                  </AccordionContent>
+                </AccordionItem>
+
+                <AccordionItem value="personalize" className="rounded-2xl border border-[var(--shell-border)] bg-white/90 px-4 border-b-0">
+                  <AccordionTrigger className="text-sm font-semibold text-[var(--shell-ink)] hover:no-underline">
+                    Personalize
+                  </AccordionTrigger>
+                  <AccordionContent className="space-y-3">
+                    <div className="flex flex-wrap gap-2">
+                      {[
+                        '{first_name}',
+                        '{last_name}',
+                        '{company}',
+                        '{email}',
+                        '{domain}',
+                        '{name}',
+                      ].map((variable) => (
+                        <Button
+                          key={variable}
+                          type="button"
+                          variant="outline"
+                          size="sm"
+                          className="h-7 rounded-full border-[var(--shell-border)] bg-white/80 text-[10px] font-semibold text-[var(--shell-ink)]"
+                          onClick={() => insertVariable(variable)}
+                        >
+                          {variable}
+                        </Button>
+                      ))}
+                    </div>
+                    <div className="rounded-2xl border border-emerald-200 bg-emerald-50/80 p-3 text-xs text-emerald-700">
+                      <p className="font-semibold">Tip</p>
+                      <p>Use {'{first_name}'} in your subject line for higher opens.</p>
+                    </div>
+                  </AccordionContent>
+                </AccordionItem>
+
+                <AccordionItem value="snippets" className="rounded-2xl border border-[var(--shell-border)] bg-white/90 px-4 border-b-0">
+                  <AccordionTrigger className="text-sm font-semibold text-[var(--shell-ink)] hover:no-underline">
+                    Quick snippets
+                  </AccordionTrigger>
+                  <AccordionContent className="space-y-3">
+                    <div className="grid grid-cols-2 gap-2">
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="sm"
+                        className="h-8 rounded-full border-[var(--shell-border)] bg-white/80 text-xs font-semibold text-[var(--shell-ink)]"
+                        onClick={() => insertAtCursor('Hi {first_name},\\n\\n')}
+                      >
+                        Greeting
+                      </Button>
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="sm"
+                        className="h-8 rounded-full border-[var(--shell-border)] bg-white/80 text-xs font-semibold text-[var(--shell-ink)]"
+                        onClick={() => insertAtCursor('I noticed {company} is ...\\n\\n')}
+                      >
+                        Observation
+                      </Button>
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="sm"
+                        className="h-8 rounded-full border-[var(--shell-border)] bg-white/80 text-xs font-semibold text-[var(--shell-ink)]"
+                        onClick={() => insertAtCursor('We helped {company} achieve ...\\n\\n')}
+                      >
+                        Proof
+                      </Button>
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="sm"
+                        className="h-8 rounded-full border-[var(--shell-border)] bg-white/80 text-xs font-semibold text-[var(--shell-ink)]"
+                        onClick={() => {
+                          const ctaText = templateProfile.ctaText.trim() || selectedCta.label;
+                          const link = templateProfile.ctaLink.trim();
+                          const snippet = form.is_html && link
+                            ? `<a href="${link}">${ctaText}</a>\\n\\n`
+                            : link
+                              ? `${ctaText}: ${link}\\n\\n`
+                              : `${ctaText}\\n\\n`;
+                          insertAtCursor(snippet);
+                        }}
+                      >
+                        CTA
+                      </Button>
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="sm"
+                        className="h-8 rounded-full border-[var(--shell-border)] bg-white/80 text-xs font-semibold text-[var(--shell-ink)]"
+                        onClick={() => insertAtCursor('\\nBest,\\n{name}\\n{company}\\n')}
+                      >
+                        Signature
+                      </Button>
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="sm"
+                        className="h-8 rounded-full border-[var(--shell-border)] bg-white/80 text-xs font-semibold text-[var(--shell-ink)]"
+                        onClick={() => insertAtCursor('\\nIf this is not relevant, reply and I will stop reaching out.')}
+                      >
+                        Unsubscribe
+                      </Button>
+                    </div>
+                  </AccordionContent>
+                </AccordionItem>
+              </Accordion>
+
+              <div className="mt-4 rounded-2xl border border-emerald-200 bg-emerald-50/80 p-3 text-xs text-emerald-700">
+                <p className="font-semibold">Guidance</p>
+                <p>Audience: {industryLabel} | {roleLabel} | {selectedCompanySize.label} | {regionLabel}</p>
+                <p>Goal: {selectedGoal.label} | Tone: {selectedTone.label} | Length: {selectedLength.label}</p>
+                <p>Primary CTA: {selectedCta.label} | Language: {languageLabel}</p>
+              </div>
+            </div>
+          </ResizablePanel>
+
+          <ResizableHandle withHandle />
+
+          <ResizablePanel defaultSize={64} minSize={54}>
+            <div className="h-full p-5">
+              <ResizablePanelGroup direction="vertical" className="h-full min-h-[70vh]">
+                <ResizablePanel defaultSize={60} minSize={45}>
+                  <div className="h-full rounded-2xl border border-[var(--shell-border)] bg-white/90 shadow-[0_12px_24px_rgba(15,23,42,0.06)] flex flex-col">
+                    <div className="flex flex-wrap items-center justify-between gap-3 p-4 border-b border-[var(--shell-border)] bg-white/80">
+                      <div>
+                        <p className="text-[11px] font-semibold uppercase tracking-[0.2em] text-[var(--shell-muted)]">Compose</p>
+                        <p className="text-sm text-[var(--shell-muted)]">Write the message body below.</p>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <Button
+                          type="button"
+                          variant="outline"
+                          size="sm"
+                          className="h-8 px-3 text-xs border-[var(--shell-border)] bg-white/90 text-[var(--shell-ink)]"
+                          onClick={applyBold}
+                        >
+                          <span className="font-semibold">B</span>
+                        </Button>
+                        <span className="text-xs text-[var(--shell-muted)]">
+                          Plain text uses **bold**.
+                        </span>
+                      </div>
+                    </div>
                     <Textarea
                       id="content"
                       placeholder={form.is_html ? "<html><body>...</body></html>" : "Hi {first_name},..."}
-                      className="min-h-[320px] font-mono text-sm resize-none p-4 rounded-2xl border-[var(--shell-border)] bg-white/90"
+                      className="flex-1 min-h-[360px] font-mono text-sm resize-none border-0 p-4 focus-visible:ring-0 text-[var(--shell-ink)]"
                       value={form.content}
                       onChange={(e) => setForm({ ...form, content: e.target.value })}
+                      ref={contentRef}
                     />
-                  </TabsContent>
-                  <TabsContent value="preview" className="mt-4 border border-[var(--shell-border)] rounded-2xl bg-white/80 p-4 overflow-auto min-h-[320px]">
-                    {form.is_html ? (
-                      <div dangerouslySetInnerHTML={{ __html: form.content }} className="prose max-w-none" />
-                    ) : (
-                      <div className="whitespace-pre-wrap font-sans text-sm">{form.content}</div>
-                    )}
-                  </TabsContent>
-                </Tabs>
-              </div>
-            </CardContent>
-          </Card>
-        </div>
-
-        <div className="space-y-4">
-          <Card className="rounded-[24px] border border-[var(--shell-border)] bg-[var(--shell-surface-strong)] p-5 shadow-[0_12px_24px_rgba(15,23,42,0.08)]">
-            <div className="flex items-center gap-2 text-[11px] font-semibold uppercase tracking-[0.24em] text-[var(--shell-muted)]">
-              <ListChecks className="h-3 w-3" />
-              Checklist
-            </div>
-            <h3 className="mt-2 text-lg font-semibold text-[var(--shell-ink)]" style={{ fontFamily: "var(--shell-font-display)" }}>
-              Template readiness
-            </h3>
-            <p className="text-sm text-[var(--shell-muted)]">
-              Make sure each template has a clear subject, body, and personalization.
-            </p>
-            <div className="mt-4 space-y-3 text-xs text-[var(--shell-muted)]">
-              <div className="flex items-start gap-2">
-                <span className="mt-1 h-2 w-2 rounded-full bg-emerald-500"></span>
-                Name the template for quick reuse.
-              </div>
-              <div className="flex items-start gap-2">
-                <span className="mt-1 h-2 w-2 rounded-full bg-emerald-500"></span>
-                Keep subject lines short and specific.
-              </div>
-              <div className="flex items-start gap-2">
-                <span className="mt-1 h-2 w-2 rounded-full bg-emerald-500"></span>
-                Add variables to personalize outreach.
-              </div>
-              <div className="flex items-start gap-2">
-                <span className="mt-1 h-2 w-2 rounded-full bg-emerald-500"></span>
-                Preview before you save.
-              </div>
-            </div>
-          </Card>
-
-          <Card className="rounded-[24px] border border-[var(--shell-border)] bg-white/90 shadow-[0_12px_24px_rgba(15,23,42,0.08)]">
-            <CardHeader className="pb-3">
-              <CardTitle className="text-sm font-medium flex items-center gap-2">
-                <LayoutTemplate className="h-4 w-4" />
-                Personalization Variables
-              </CardTitle>
-              <CardDescription className="text-xs">
-                Click to insert into content
-              </CardDescription>
-            </CardHeader>
-            <CardContent className="flex-1">
-              <div className="space-y-2">
-                {[
-                  { key: '{first_name}', label: 'First Name', desc: 'John' },
-                  { key: '{last_name}', label: 'Last Name', desc: 'Doe' },
-                  { key: '{company}', label: 'Company', desc: 'Acme Inc' },
-                  { key: '{email}', label: 'Email', desc: 'john@example.com' },
-                  { key: '{domain}', label: 'Website', desc: 'example.com' },
-                  { key: '{name}', label: 'Full Name', desc: 'John Doe' },
-                ].map((variable) => (
-                  <div
-                    key={variable.key}
-                    className="group flex items-center justify-between rounded-2xl border border-[var(--shell-border)] bg-white/80 p-3 hover:border-emerald-300 hover:shadow-sm cursor-pointer transition-all"
-                    onClick={() => insertVariable(variable.key)}
-                  >
-                    <div>
-                      <div className="font-mono text-xs font-bold text-emerald-700 bg-emerald-50 px-1.5 py-0.5 rounded inline-block mb-1">
-                        {variable.key}
-                      </div>
-                      <div className="text-xs text-[var(--shell-muted)]">{variable.label}</div>
-                    </div>
-                    <Plus className="h-4 w-4 text-gray-300 group-hover:text-emerald-500" />
                   </div>
-                ))}
-              </div>
+                </ResizablePanel>
 
-              <div className="mt-6 p-4 bg-emerald-50 rounded-2xl border border-emerald-100">
-                <h4 className="text-xs font-semibold text-emerald-800 mb-2 flex items-center gap-1">
-                  <Info className="h-3 w-3" />
-                  Pro Tip
-                </h4>
-                <p className="text-xs text-emerald-700 leading-relaxed">
-                  Use <strong>{'{first_name}'}</strong> in your subject line to increase open rates by up to 20%.
-                </p>
-              </div>
-            </CardContent>
-          </Card>
-        </div>
+                <ResizableHandle withHandle />
+
+                <ResizablePanel defaultSize={40} minSize={25}>
+                  <div className="h-full rounded-2xl border border-[var(--shell-border)] bg-white/80 shadow-[0_12px_24px_rgba(15,23,42,0.06)] flex flex-col">
+                    <div className="flex items-center justify-between p-4 border-b border-[var(--shell-border)] bg-white/80">
+                      <div>
+                        <p className="text-[11px] font-semibold uppercase tracking-[0.2em] text-[var(--shell-muted)]">Preview</p>
+                        <p className="text-sm text-[var(--shell-muted)]">{form.is_html ? 'HTML output' : 'Plain text output'}</p>
+                      </div>
+                      <Badge variant="outline" className="text-[10px] border-[var(--shell-border)] bg-white/90 text-[var(--shell-ink)]">
+                        {form.is_html ? 'HTML' : 'Text'}
+                      </Badge>
+                    </div>
+                    <div className="flex-1 overflow-auto p-4">
+                      <div className="rounded-2xl border border-[var(--shell-border)] bg-white/95 p-5 shadow-sm">
+                        <div className="border-b border-[var(--shell-border)] pb-3 mb-4 space-y-1">
+                          <p className="text-base font-semibold text-[var(--shell-ink)]">
+                            {form.subject || <span className="text-slate-300">Subject</span>}
+                          </p>
+                          <div className="flex items-center gap-2 text-xs text-[var(--shell-muted)]">
+                            <div className="w-6 h-6 rounded-full bg-slate-200" />
+                            <span>{templateProfile.audienceRole || 'Recipient'}</span>
+                            <span className="text-slate-300">to</span>
+                            <span>You</span>
+                          </div>
+                        </div>
+                        {form.is_html ? (
+                          <div
+                            className="prose prose-sm max-w-none text-slate-800"
+                            dangerouslySetInnerHTML={{ __html: form.content }}
+                          />
+                        ) : form.content ? (
+                          <div
+                            className="prose max-w-none text-sm text-[var(--shell-ink)]"
+                            dangerouslySetInnerHTML={{ __html: renderPlainTextPreviewHtml(form.content) }}
+                          />
+                        ) : (
+                          <div className="text-sm text-[var(--shell-muted)]">Nothing to preview yet.</div>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                </ResizablePanel>
+              </ResizablePanelGroup>
+            </div>
+          </ResizablePanel>
+        </ResizablePanelGroup>
       </section>
-    </Shell>
+    </TemplateShell>
   );
 
   return (
@@ -936,8 +1394,13 @@ const TemplateManager = () => {
           <div className="mt-4 p-4 border rounded-md bg-gray-50 min-h-[200px]">
             {previewContent?.is_html ? (
               <div dangerouslySetInnerHTML={{ __html: previewContent.content }} className="prose max-w-none text-sm" />
+            ) : previewContent?.content ? (
+              <div
+                className="prose max-w-none text-sm"
+                dangerouslySetInnerHTML={{ __html: renderPlainTextPreviewHtml(previewContent.content) }}
+              />
             ) : (
-              <div className="whitespace-pre-wrap text-sm font-sans">{previewContent?.content}</div>
+              <div className="text-sm text-gray-400">No content yet.</div>
             )}
           </div>
         </DialogContent>
@@ -947,3 +1410,5 @@ const TemplateManager = () => {
 };
 
 export default TemplateManager;
+
+

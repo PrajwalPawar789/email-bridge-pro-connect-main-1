@@ -889,7 +889,7 @@ const EmailAnalyticsDashboard = () => {
 
       <section className="grid gap-5 xl:grid-cols-[1.75fr_1fr]">
         {/* Main Chart Section */}
-        <div className="space-y-5">
+        <div className="min-w-0 space-y-5">
           
           {/* Engagement Trends */}
           <Card className="dash-rise border border-[var(--dash-border)] bg-[var(--dash-surface)] shadow-[0_18px_40px_rgba(15,23,42,0.08)]" style={{ animationDelay: '260ms' }}>
@@ -1063,8 +1063,8 @@ const EmailAnalyticsDashboard = () => {
         </div>
 
         {/* Sidebar Section */}
-        <div className="space-y-5">
-          <Card className="dash-rise border border-[var(--dash-border)] bg-[var(--dash-surface)] shadow-[0_16px_36px_rgba(15,23,42,0.08)]" style={{ animationDelay: '260ms' }}>
+        <div className="min-w-0 space-y-5">
+          {/* <Card className="dash-rise border border-[var(--dash-border)] bg-[var(--dash-surface)] shadow-[0_16px_36px_rgba(15,23,42,0.08)]" style={{ animationDelay: '260ms' }}>
             <CardHeader className="pb-2">
               <CardTitle className="flex items-center gap-2 text-base">
                 <Lightbulb className="h-5 w-5 text-amber-500" />
@@ -1090,7 +1090,7 @@ const EmailAnalyticsDashboard = () => {
                 );
               })}
             </CardContent>
-          </Card>
+          </Card> */}
 
           <Card className="dash-rise border border-[var(--dash-border)] bg-[var(--dash-surface)] shadow-[0_16px_36px_rgba(15,23,42,0.08)]" style={{ animationDelay: '320ms' }}>
             <CardHeader className="pb-2">
