@@ -11,7 +11,6 @@ const DEFAULT_SERVICE_ROLE_KEY = 'REDACTED_SUPABASE_SERVICE_ROLE_KEY';
 const DEFAULT_ALLOWED_ORIGINS = 'http://localhost:5173,http://localhost:8081,http://localhost:8080';
 const DEFAULT_MAILBOX_PORT = 8787;
 const DEFAULT_BYPASS_AUTH = 'true';
-const DEFAULT_SONAR_ENDPOINT = 'https://api.perplexity.ai/chat/completions';
 
 const PORT = Number(process.env.MAILBOX_SERVER_PORT || DEFAULT_MAILBOX_PORT);
 const ALLOWED_ORIGINS = (process.env.MAILBOX_ALLOWED_ORIGINS || DEFAULT_ALLOWED_ORIGINS)
@@ -22,8 +21,6 @@ const ALLOWED_ORIGINS = (process.env.MAILBOX_ALLOWED_ORIGINS || DEFAULT_ALLOWED_
 const SUPABASE_URL = process.env.SUPABASE_URL || DEFAULT_SUPABASE_URL;
 const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY || DEFAULT_SERVICE_ROLE_KEY;
 const MAILBOX_BYPASS_AUTH = (process.env.MAILBOX_BYPASS_AUTH || DEFAULT_BYPASS_AUTH).toLowerCase() === 'true';
-const SONAR_API_KEY = process.env.SONAR_API_KEY;
-const SONAR_ENDPOINT = process.env.SONAR_ENDPOINT || DEFAULT_SONAR_ENDPOINT;
 
 const supabaseAdmin = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
 
@@ -247,41 +244,6 @@ const authenticateRequest = async (authHeader) => {
   }
   return data.user;
 };
-
-app.post('/sonar', async (req, res) => {
-  try {
-    const { messages, model, temperature, top_p } = req.body || {};
-
-    if (!Array.isArray(messages) || messages.length === 0) {
-      return res.status(400).json({ error: 'messages is required' });
-    }
-    if (!SONAR_API_KEY) {
-      return res.status(500).json({ error: 'SONAR_API_KEY is not configured' });
-    }
-
-    const payload = {
-      model: model || 'sonar',
-      messages,
-      temperature: typeof temperature === 'number' ? temperature : 0.2,
-      top_p: typeof top_p === 'number' ? top_p : 0.9,
-      stream: false,
-    };
-
-    const response = await axios.post(SONAR_ENDPOINT, payload, {
-      headers: {
-        Authorization: `Bearer ${SONAR_API_KEY}`,
-        'Content-Type': 'application/json',
-        Accept: 'application/json',
-      },
-    });
-
-    res.json(response.data);
-  } catch (error) {
-    const status = error?.response?.status || 500;
-    const detail = error?.response?.data || error?.message || 'Sonar request failed';
-    res.status(status).json({ error: detail });
-  }
-});
 
 app.get('/healthz', (_req, res) => {
   res.json({ status: 'ok', timestamp: new Date().toISOString() });
