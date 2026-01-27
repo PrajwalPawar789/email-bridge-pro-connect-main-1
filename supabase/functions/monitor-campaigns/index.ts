@@ -13,6 +13,15 @@ const supabase = createClient(
   Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? ""
 );
 
+const STEP0_DAILY_QUOTA_RATIO = 0.5;
+
+const getDailyQuotaForStep = (dailyLimit: number, step: number) => {
+  if (dailyLimit <= 0) return 0;
+  const step0Limit = Math.max(1, Math.floor(dailyLimit * STEP0_DAILY_QUOTA_RATIO));
+  const followupLimit = Math.max(0, dailyLimit - step0Limit);
+  return step === 0 ? step0Limit : followupLimit;
+};
+
 // Monitor and process all active campaigns
 const monitorCampaigns = async () => {
   console.log('Checking for campaigns that need a batch sent...');
@@ -22,7 +31,7 @@ const monitorCampaigns = async () => {
     // We include 'sent' because they might have pending follow-ups
     const { data: activeCampaigns, error: fetchError } = await supabase
       .from('campaigns')
-      .select('id, name, status, last_batch_sent_at, send_delay_minutes, scheduled_at')
+      .select('id, name, status, last_batch_sent_at, send_delay_minutes, scheduled_at, email_config_id')
       .in('status', ['sending', 'sent', 'scheduled']);
     
     if (fetchError) {
@@ -49,7 +58,7 @@ const monitorCampaigns = async () => {
     // 2.5 Get email configurations for these campaigns (for multi-sender support)
     const { data: emailConfigs, error: configError } = await supabase
       .from('campaign_email_configurations')
-      .select('campaign_id, email_config_id, last_sent_at')
+      .select('campaign_id, email_config_id, last_sent_at, daily_limit')
       .in('campaign_id', campaignIds);
 
     if (configError) {
@@ -60,38 +69,128 @@ const monitorCampaigns = async () => {
     
     const results = [];
     const now = new Date().getTime();
+    const dueCountCache = new Map<string, number>();
+    const sentTodayCache = new Map<string, number>();
+    const pendingCountCache = new Map<string, number>();
 
-    const hasDueFollowups = async (campaignId: string, emailConfigId: string | null, campaignFollowups: any[]) => {
-      if (!campaignFollowups.length) return false;
+    const getDueRecipientCount = async (campaignId: string, step: number, followup: any, emailConfigId?: string | null) => {
+      const cacheKey = `${campaignId}|${step}|${emailConfigId || 'any'}`;
+      if (dueCountCache.has(cacheKey)) {
+        return dueCountCache.get(cacheKey) || 0;
+      }
 
-      for (const step of campaignFollowups) {
-        const delayDays = step.delay_days || 0;
-        const delayHours = step.delay_hours || 0;
+      let dueQuery = supabase
+        .from('recipients')
+        .select('id', { count: 'exact', head: true })
+        .eq('campaign_id', campaignId)
+        .or('replied.is.null,replied.eq.false');
+
+      if (step === 0) {
+        dueQuery = dueQuery.or('status.is.null,status.eq.pending');
+      } else {
+        const delayDays = followup?.delay_days || 0;
+        const delayHours = followup?.delay_hours || 0;
         const cutoffDate = new Date();
 
         cutoffDate.setDate(cutoffDate.getDate() - delayDays);
         cutoffDate.setHours(cutoffDate.getHours() - delayHours);
 
-        let dueQuery = supabase
-          .from('recipients')
-          .select('id', { count: 'exact', head: true })
-          .eq('campaign_id', campaignId)
-          .eq('current_step', step.step_number - 1)
+        dueQuery = dueQuery
+          .eq('current_step', step - 1)
           .eq('status', 'sent')
-          .or('replied.is.null,replied.eq.false')
           .lt('last_email_sent_at', cutoffDate.toISOString());
+      }
 
-        if (emailConfigId) {
-          dueQuery = dueQuery.or(`assigned_email_config_id.eq.${emailConfigId},assigned_email_config_id.is.null`);
-        }
+      if (emailConfigId) {
+        dueQuery = dueQuery.or(`assigned_email_config_id.eq.${emailConfigId},assigned_email_config_id.is.null`);
+      }
 
-        const { count, error } = await dueQuery;
-        if (error) {
-          console.warn(`Error checking due followups for campaign ${campaignId}:`, error.message);
-          continue;
-        }
+      const { count, error } = await dueQuery;
+      if (error) {
+        console.warn(`Error counting due recipients for campaign ${campaignId} step ${step}:`, error.message);
+        dueCountCache.set(cacheKey, 0);
+        return 0;
+      }
 
-        if ((count || 0) > 0) {
+      const dueCount = count || 0;
+      dueCountCache.set(cacheKey, dueCount);
+      return dueCount;
+    };
+
+    const getSentTodayCount = async (campaignId: string, emailConfigId: string | null, step: number) => {
+      if (!emailConfigId) return 0;
+      const cacheKey = `${campaignId}|${emailConfigId}|${step}|sent`;
+      if (sentTodayCache.has(cacheKey)) {
+        return sentTodayCache.get(cacheKey) || 0;
+      }
+
+      const today = new Date();
+      today.setHours(0, 0, 0, 0);
+      const tomorrow = new Date(today);
+      tomorrow.setDate(tomorrow.getDate() + 1);
+
+      let countQuery = supabase
+        .from('recipients')
+        .select('id', { count: 'exact', head: true })
+        .eq('campaign_id', campaignId)
+        .eq('assigned_email_config_id', emailConfigId)
+        .gte('last_email_sent_at', today.toISOString())
+        .lt('last_email_sent_at', tomorrow.toISOString());
+
+      if (step === 0) {
+        countQuery = countQuery.or('current_step.eq.0,current_step.is.null');
+      } else {
+        countQuery = countQuery.gte('current_step', 1);
+      }
+
+      const { count, error } = await countQuery;
+      if (error) {
+        console.warn(`Error counting sent recipients for ${campaignId} config ${emailConfigId}:`, error.message);
+        sentTodayCache.set(cacheKey, 0);
+        return 0;
+      }
+
+      const sentToday = count || 0;
+      sentTodayCache.set(cacheKey, sentToday);
+      return sentToday;
+    };
+
+    const getPendingRecipientCount = async (campaignId: string) => {
+      if (pendingCountCache.has(campaignId)) {
+        return pendingCountCache.get(campaignId) || 0;
+      }
+
+      const { count, error } = await supabase
+        .from('recipients')
+        .select('id', { count: 'exact', head: true })
+        .eq('campaign_id', campaignId)
+        .or('status.is.null,status.eq.pending');
+
+      if (error) {
+        console.warn(`Error counting pending recipients for campaign ${campaignId}:`, error.message);
+        pendingCountCache.set(campaignId, 0);
+        return 0;
+      }
+
+      const pendingCount = count || 0;
+      pendingCountCache.set(campaignId, pendingCount);
+      return pendingCount;
+    };
+
+    const getRemainingCapacity = async (campaignId: string, emailConfigId: string | null, step: number, dailyLimit: number) => {
+      if (!emailConfigId) return Number.POSITIVE_INFINITY;
+      const stepLimit = getDailyQuotaForStep(dailyLimit, step);
+      if (stepLimit <= 0) return 0;
+      const sentToday = await getSentTodayCount(campaignId, emailConfigId, step);
+      return Math.max(0, stepLimit - sentToday);
+    };
+
+    const hasDueFollowups = async (campaignId: string, emailConfigId: string | null, campaignFollowups: any[]) => {
+      if (!campaignFollowups.length) return false;
+
+      for (const step of campaignFollowups) {
+        const dueCount = await getDueRecipientCount(campaignId, step.step_number, step, emailConfigId);
+        if (dueCount > 0) {
           return true;
         }
       }
@@ -136,10 +235,31 @@ const monitorCampaigns = async () => {
           const promises = campaignConfigsForFollowup.map(async (config) => {
             for (const fp of campaignFollowups) {
               try {
+                const dueCount = await getDueRecipientCount(campaign.id, fp.step_number, fp, config.email_config_id);
+                if (dueCount <= 0) {
+                  continue;
+                }
+
+                const remainingCapacity = await getRemainingCapacity(
+                  campaign.id,
+                  config.email_config_id,
+                  fp.step_number,
+                  config.daily_limit || 100
+                );
+
+                if (remainingCapacity <= 0) {
+                  continue;
+                }
+
+                const batchSize = Math.min(10, dueCount, remainingCapacity);
+                if (batchSize <= 0) {
+                  continue;
+                }
+
                 const { data, error } = await supabase.functions.invoke('send-campaign-batch', {
                   body: { 
                     campaignId: campaign.id, 
-                    batchSize: 10, 
+                    batchSize, 
                     step: fp.step_number,
                     emailConfigId: config.email_config_id
                   }
@@ -161,8 +281,29 @@ const monitorCampaigns = async () => {
           // Legacy single sender follow-ups
           for (const fp of campaignFollowups) {
             try {
+              const dueCount = await getDueRecipientCount(campaign.id, fp.step_number, fp, null);
+              if (dueCount <= 0) {
+                continue;
+              }
+
+              const remainingCapacity = await getRemainingCapacity(
+                campaign.id,
+                campaign.email_config_id || null,
+                fp.step_number,
+                100
+              );
+
+              if (remainingCapacity <= 0) {
+                continue;
+              }
+
+              const batchSize = Math.min(10, dueCount, remainingCapacity);
+              if (batchSize <= 0) {
+                continue;
+              }
+
               const { data, error } = await supabase.functions.invoke('send-campaign-batch', {
-                body: { campaignId: campaign.id, batchSize: 10, step: fp.step_number }
+                body: { campaignId: campaign.id, batchSize, step: fp.step_number }
               });
               
               if (error) {
@@ -183,6 +324,18 @@ const monitorCampaigns = async () => {
         // Default delay to 1 minute if not set
         const delayMinutes = campaign.send_delay_minutes || 1;
         const delayMs = delayMinutes * 60 * 1000;
+
+        const pendingCount = await getPendingRecipientCount(campaign.id);
+        if (pendingCount === 0) {
+          await supabase
+            .from('campaigns')
+            .update({ 
+              status: 'sent',
+              updated_at: new Date().toISOString()
+            })
+            .eq('id', campaign.id);
+          continue;
+        }
         
         // Check for multi-sender configs
         const campaignConfigs = emailConfigs?.filter(c => c.campaign_id === campaign.id) || [];
@@ -197,6 +350,22 @@ const monitorCampaigns = async () => {
 
             if (followupsDue) {
               console.log(`Skipping Step 0 for ${campaign.name} (Sender: ${config.email_config_id}) due to overdue follow-ups.`);
+              return;
+            }
+
+            const dueCount = await getDueRecipientCount(campaign.id, 0, null, config.email_config_id);
+            if (dueCount <= 0) {
+              return;
+            }
+
+            const remainingCapacity = await getRemainingCapacity(
+              campaign.id,
+              config.email_config_id,
+              0,
+              config.daily_limit || 100
+            );
+
+            if (remainingCapacity <= 0) {
               return;
             }
 
@@ -240,6 +409,22 @@ const monitorCampaigns = async () => {
 
           if (followupsDue) {
             console.log(`Skipping Step 0 for ${campaign.name} due to overdue follow-ups.`);
+            continue;
+          }
+
+          const dueCount = await getDueRecipientCount(campaign.id, 0, null, null);
+          if (dueCount <= 0) {
+            continue;
+          }
+
+          const remainingCapacity = await getRemainingCapacity(
+            campaign.id,
+            campaign.email_config_id || null,
+            0,
+            100
+          );
+
+          if (remainingCapacity <= 0) {
             continue;
           }
 

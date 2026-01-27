@@ -116,8 +116,72 @@ const escapeHtml = (value: string) =>
 const renderPlainTextPreviewHtml = (value: string) => {
   if (!value) return '';
   const escaped = escapeHtml(value);
-  const withBold = escaped.replace(/\*\*([\s\S]+?)\*\*/g, '<strong>$1</strong>');
-  return withBold.replace(/\n/g, '<br />');
+
+  const formatInline = (text: string) => {
+    const withBold = text.replace(/\*\*([\s\S]+?)\*\*/g, '<strong>$1</strong>');
+    return withBold.replace(/__([\s\S]+?)__/g, '<u>$1</u>');
+  };
+
+  const lines = escaped.split(/\r?\n/);
+  const chunks: string[] = [];
+  const paragraphLines: string[] = [];
+  let activeList: 'ul' | 'ol' | null = null;
+
+  const bulletRegex = /^\s*(?:[-*]|\u2022)\s+(.*)$/;
+  const orderedRegex = /^\s*(\d+)[.)]\s+(.*)$/;
+
+  const closeList = () => {
+    if (!activeList) return;
+    chunks.push(activeList === 'ul' ? '</ul>' : '</ol>');
+    activeList = null;
+  };
+
+  const flushParagraph = () => {
+    if (paragraphLines.length === 0) return;
+    const html = paragraphLines.map(line => formatInline(line)).join('<br />');
+    chunks.push(`<p>${html}</p>`);
+    paragraphLines.length = 0;
+  };
+
+  lines.forEach((line) => {
+    const bulletMatch = line.match(bulletRegex);
+    if (bulletMatch) {
+      flushParagraph();
+      if (activeList !== 'ul') {
+        closeList();
+        chunks.push('<ul>');
+        activeList = 'ul';
+      }
+      chunks.push(`<li>${formatInline(bulletMatch[1])}</li>`);
+      return;
+    }
+
+    const orderedMatch = line.match(orderedRegex);
+    if (orderedMatch) {
+      flushParagraph();
+      const startValue = Number.parseInt(orderedMatch[1], 10);
+      if (activeList !== 'ol') {
+        closeList();
+        const startAttr = Number.isFinite(startValue) ? ` start="${startValue}"` : '';
+        chunks.push(`<ol${startAttr}>`);
+        activeList = 'ol';
+      }
+      chunks.push(`<li>${formatInline(orderedMatch[2])}</li>`);
+      return;
+    }
+
+    if (line.trim() === '') {
+      flushParagraph();
+      return;
+    }
+
+    closeList();
+    paragraphLines.push(line);
+  });
+
+  flushParagraph();
+  closeList();
+  return chunks.join('');
 };
 
 const TemplateShell = ({ children }: { children: React.ReactNode }) => (
@@ -135,6 +199,30 @@ const TemplateShell = ({ children }: { children: React.ReactNode }) => (
       .template-float { animation: template-float 10s ease-in-out infinite; }
       @media (prefers-reduced-motion: reduce) {
         .template-rise, .template-float { animation: none; }
+      }
+      .template-preview ul,
+      .template-preview ol {
+        list-style-position: outside;
+        margin: 0.6rem 0;
+        padding-left: 1.4rem;
+      }
+      .template-preview ul {
+        list-style-type: disc;
+      }
+      .template-preview ol {
+        list-style-type: decimal;
+      }
+      .template-preview li {
+        margin: 0.2rem 0;
+      }
+      .template-preview p {
+        margin: 0.65rem 0;
+      }
+      .template-preview p:first-child {
+        margin-top: 0;
+      }
+      .template-preview p:last-child {
+        margin-bottom: 0;
       }
     `}</style>
     <div className="pointer-events-none absolute inset-0">
@@ -380,6 +468,97 @@ const TemplateManager = () => {
       textarea.focus();
       const cursorStart = start + openTag.length;
       const cursorEnd = isCollapsed ? cursorStart : cursorStart + (end - start);
+      textarea.setSelectionRange(cursorStart, cursorEnd);
+    });
+  };
+
+  const applyUnderline = () => {
+    const textarea = contentRef.current;
+    if (!textarea) return;
+
+    const start = textarea.selectionStart ?? 0;
+    const end = textarea.selectionEnd ?? 0;
+    const isCollapsed = start === end;
+    const useHtml = form.is_html;
+    const openTag = useHtml ? '<u>' : '__';
+    const closeTag = useHtml ? '</u>' : '__';
+
+    setForm(prev => {
+      const base = prev.content || '';
+      const before = base.slice(0, start);
+      const selected = base.slice(start, end);
+      const after = base.slice(end);
+      return {
+        ...prev,
+        content: `${before}${openTag}${selected}${closeTag}${after}`,
+      };
+    });
+
+    if (!useHtml) {
+      toast({
+        title: "Underline added",
+        description: "Plain text uses __underline__ markers.",
+        duration: 1500,
+      });
+    }
+
+    requestAnimationFrame(() => {
+      textarea.focus();
+      const cursorStart = start + openTag.length;
+      const cursorEnd = isCollapsed ? cursorStart : cursorStart + (end - start);
+      textarea.setSelectionRange(cursorStart, cursorEnd);
+    });
+  };
+
+  const applyBullets = () => {
+    const textarea = contentRef.current;
+    const base = form.content || '';
+    const useHtml = form.is_html;
+
+    if (!textarea) {
+      const fallback = useHtml
+        ? '<ul>\n  <li>Item</li>\n</ul>'
+        : '- Item';
+      setForm(prev => ({ ...prev, content: `${prev.content}${fallback}` }));
+      return;
+    }
+
+    const start = textarea.selectionStart ?? 0;
+    const end = textarea.selectionEnd ?? 0;
+    const selected = base.slice(start, end);
+    const hasSelection = selected.trim().length > 0;
+    const lines = hasSelection ? selected.split(/\r?\n/) : [];
+    const items = lines.map(line => line.trim()).filter(Boolean);
+
+    let insertion = '';
+    let cursorStart = start;
+    let cursorEnd = start;
+
+    if (useHtml) {
+      const listItems = (items.length ? items : ['Item']).map((line) => `  <li>${line}</li>`).join('\n');
+      insertion = `<ul>\n${listItems}\n</ul>`;
+      const firstItem = items.length ? items[0] : 'Item';
+      const itemStart = insertion.indexOf('<li>') + 4;
+      cursorStart = start + itemStart;
+      cursorEnd = cursorStart + firstItem.length;
+    } else {
+      const listItems = (items.length ? items : ['Item']).map((line) => `- ${line}`).join('\n');
+      insertion = listItems;
+      const firstItem = items.length ? items[0] : 'Item';
+      const itemStart = insertion.indexOf(firstItem);
+      cursorStart = start + itemStart;
+      cursorEnd = cursorStart + firstItem.length;
+    }
+
+    const before = base.slice(0, start);
+    const after = base.slice(end);
+    setForm(prev => ({
+      ...prev,
+      content: `${before}${insertion}${after}`,
+    }));
+
+    requestAnimationFrame(() => {
+      textarea.focus();
       textarea.setSelectionRange(cursorStart, cursorEnd);
     });
   };
@@ -1303,7 +1482,7 @@ const TemplateManager = () => {
                         <p className="text-[11px] font-semibold uppercase tracking-[0.2em] text-[var(--shell-muted)]">Compose</p>
                         <p className="text-sm text-[var(--shell-muted)]">Write the message body below.</p>
                       </div>
-                      <div className="flex items-center gap-2">
+                      <div className="flex flex-wrap items-center gap-2">
                         <Button
                           type="button"
                           variant="outline"
@@ -1313,8 +1492,26 @@ const TemplateManager = () => {
                         >
                           <span className="font-semibold">B</span>
                         </Button>
+                        <Button
+                          type="button"
+                          variant="outline"
+                          size="sm"
+                          className="h-8 px-3 text-xs border-[var(--shell-border)] bg-white/90 text-[var(--shell-ink)]"
+                          onClick={applyUnderline}
+                        >
+                          <span className="underline">U</span>
+                        </Button>
+                        <Button
+                          type="button"
+                          variant="outline"
+                          size="sm"
+                          className="h-8 px-3 text-xs border-[var(--shell-border)] bg-white/90 text-[var(--shell-ink)]"
+                          onClick={applyBullets}
+                        >
+                          <ListChecks className="h-4 w-4" />
+                        </Button>
                         <span className="text-xs text-[var(--shell-muted)]">
-                          Plain text uses **bold**.
+                          Plain text uses **bold**, __underline__, - bullets, and 1) lists.
                         </span>
                       </div>
                     </div>
@@ -1357,12 +1554,12 @@ const TemplateManager = () => {
                         </div>
                         {form.is_html ? (
                           <div
-                            className="prose prose-sm max-w-none text-slate-800"
+                            className="template-preview prose prose-sm max-w-none text-slate-800"
                             dangerouslySetInnerHTML={{ __html: form.content }}
                           />
                         ) : form.content ? (
                           <div
-                            className="prose max-w-none text-sm text-[var(--shell-ink)]"
+                            className="template-preview prose max-w-none text-sm text-[var(--shell-ink)]"
                             dangerouslySetInnerHTML={{ __html: renderPlainTextPreviewHtml(form.content) }}
                           />
                         ) : (
@@ -1393,10 +1590,10 @@ const TemplateManager = () => {
           </DialogHeader>
           <div className="mt-4 p-4 border rounded-md bg-gray-50 min-h-[200px]">
             {previewContent?.is_html ? (
-              <div dangerouslySetInnerHTML={{ __html: previewContent.content }} className="prose max-w-none text-sm" />
+              <div dangerouslySetInnerHTML={{ __html: previewContent.content }} className="template-preview prose max-w-none text-sm" />
             ) : previewContent?.content ? (
               <div
-                className="prose max-w-none text-sm"
+                className="template-preview prose max-w-none text-sm"
                 dangerouslySetInnerHTML={{ __html: renderPlainTextPreviewHtml(previewContent.content) }}
               />
             ) : (

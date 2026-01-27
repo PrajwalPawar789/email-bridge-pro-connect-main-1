@@ -223,6 +223,7 @@ export type Database = {
           imap_host: string
           imap_port: number
           security: string
+          sender_name: string | null
           smtp_host: string
           smtp_password: string
           smtp_port: number
@@ -235,6 +236,7 @@ export type Database = {
           imap_host?: string
           imap_port?: number
           security?: string
+          sender_name?: string | null
           smtp_host?: string
           smtp_password: string
           smtp_port?: number
@@ -247,6 +249,7 @@ export type Database = {
           imap_host?: string
           imap_port?: number
           security?: string
+          sender_name?: string | null
           smtp_host?: string
           smtp_password?: string
           smtp_port?: number
@@ -410,34 +413,49 @@ export type Database = {
       prospects: {
         Row: {
           company: string | null
+          country: string | null
           created_at: string
           email: string
           email_list_id: string | null
           id: string
+          industry: string | null
+          job_title: string | null
           name: string
           phone: string | null
+          sender_email: string | null
+          sender_name: string | null
           updated_at: string
           user_id: string
         }
         Insert: {
           company?: string | null
+          country?: string | null
           created_at?: string
           email: string
           email_list_id?: string | null
           id?: string
+          industry?: string | null
+          job_title?: string | null
           name: string
           phone?: string | null
+          sender_email?: string | null
+          sender_name?: string | null
           updated_at?: string
           user_id: string
         }
         Update: {
           company?: string | null
+          country?: string | null
           created_at?: string
           email?: string
           email_list_id?: string | null
           id?: string
+          industry?: string | null
+          job_title?: string | null
           name?: string
           phone?: string | null
+          sender_email?: string | null
+          sender_name?: string | null
           updated_at?: string
           user_id?: string
         }

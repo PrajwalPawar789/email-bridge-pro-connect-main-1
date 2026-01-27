@@ -59,6 +59,7 @@ interface Prospect {
   name: string;
   email: string;
   company?: string;
+  job_title?: string;
   phone?: string;
   sender_name?: string;
   sender_email?: string;
@@ -73,6 +74,34 @@ interface EmailList {
   created_at: string;
   count?: number; // Optional count for UI
 }
+
+const ProspectShell = ({ children }: { children: React.ReactNode }) => (
+  <div className="relative -my-8 min-h-[calc(100vh-4rem)] bg-[var(--shell-bg)] text-[var(--shell-ink)]">
+    <style>{`
+      @keyframes list-rise {
+        from { opacity: 0; transform: translateY(14px); }
+        to { opacity: 1; transform: translateY(0); }
+      }
+      @keyframes list-float {
+        0%, 100% { transform: translateY(0); }
+        50% { transform: translateY(-12px); }
+      }
+      .list-rise { animation: list-rise 0.6s ease-out both; }
+      .list-float { animation: list-float 10s ease-in-out infinite; }
+      @media (prefers-reduced-motion: reduce) {
+        .list-rise, .list-float { animation: none; }
+      }
+    `}</style>
+    <div className="pointer-events-none absolute inset-0">
+      <div className="absolute -right-24 -top-24 h-72 w-72 rounded-full bg-emerald-200/40 blur-3xl list-float"></div>
+      <div className="absolute -left-24 top-1/3 h-72 w-72 rounded-full bg-amber-200/35 blur-3xl list-float" style={{ animationDelay: "1.2s" }}></div>
+      <div className="absolute bottom-0 right-1/3 h-56 w-56 rounded-full bg-sky-200/30 blur-3xl list-float" style={{ animationDelay: "2.2s" }}></div>
+    </div>
+    <div className="relative mx-auto w-full max-w-7xl space-y-6 px-5 py-6 lg:px-8 lg:py-8">
+      {children}
+    </div>
+  </div>
+);
 
 const ProspectListManager: React.FC = () => {
   const [lists, setLists] = useState<EmailList[]>([]);
@@ -107,6 +136,7 @@ const ProspectListManager: React.FC = () => {
     name: "",
     email: "",
     company: "",
+    job_title: "",
     phone: "",
     sender_name: "",
     sender_email: "",
@@ -156,7 +186,7 @@ const ProspectListManager: React.FC = () => {
     try {
       const { data, error, count } = await supabase
         .from("email_list_prospects")
-        .select("id, prospect_id, prospects (id, name, email, company, phone, country, industry, sender_name, sender_email)", { count: "exact" })
+        .select("id, prospect_id, prospects (id, name, email, company, job_title, phone, country, industry, sender_name, sender_email)", { count: "exact" })
         .eq("list_id", listId)
         .order("created_at", { ascending: false })
         .range(from, to);
@@ -217,7 +247,7 @@ const ProspectListManager: React.FC = () => {
   };
 
   const handleTemplateDownload = () => {
-    const header = "name,email,company,phone,country,industry,sender_name,sender_email\n";
+    const header = "name,email,company,job_title,phone,country,industry,sender_name,sender_email\n";
     const blob = new Blob([header], { type: "text/csv;charset=utf-8;" });
     const url = URL.createObjectURL(blob);
     const link = document.createElement("a");
@@ -300,6 +330,7 @@ const ProspectListManager: React.FC = () => {
           name: newProspectForm.name, 
           email: newProspectForm.email.trim().toLowerCase(), 
           company: newProspectForm.company || null, 
+          job_title: newProspectForm.job_title || null,
           phone: newProspectForm.phone || null,
           sender_name: newProspectForm.sender_name || null,
           sender_email: newProspectForm.sender_email || null,
@@ -324,7 +355,7 @@ const ProspectListManager: React.FC = () => {
 
       if (!linkError) {
         toast({ title: "Success", description: "Prospect added to list." });
-        setNewProspectForm({ name: "", email: "", company: "", phone: "", sender_name: "", sender_email: "", country: "", industry: "" });
+        setNewProspectForm({ name: "", email: "", company: "", job_title: "", phone: "", sender_name: "", sender_email: "", country: "", industry: "" });
         setIsAddProspectOpen(false);
         fetchProspects(selectedList.id);
         fetchLists(); // Update counts
@@ -433,6 +464,7 @@ const ProspectListManager: React.FC = () => {
           // General fields
           if (lowerCol === 'name' || lowerCol === 'full name' || lowerCol === 'contact name' || lowerCol === 'first name' || lowerCol === 'contact') headerIdx['name'] = idx;
           if (lowerCol === 'company' || lowerCol === 'organization' || lowerCol === 'organisation' || lowerCol.includes('company') || lowerCol.includes('org') || lowerCol === 'business' || lowerCol === 'employer') headerIdx['company'] = idx;
+          if (lowerCol === 'job_title' || lowerCol === 'job title' || lowerCol === 'title' || lowerCol === 'role' || lowerCol === 'position' || lowerCol === 'job') headerIdx['job_title'] = idx;
           if (lowerCol === 'phone' || lowerCol === 'telephone' || lowerCol === 'mobile' || lowerCol === 'cell' || lowerCol === 'phone number' || lowerCol.includes('phone') || lowerCol === 'tel') headerIdx['phone'] = idx;
           if (lowerCol === 'country' || lowerCol === 'nation' || lowerCol.includes('country') || lowerCol === 'location') headerIdx['country'] = idx;
           if (lowerCol === 'industry' || lowerCol === 'sector' || lowerCol === 'business type' || lowerCol.includes('industry') || lowerCol === 'field' || lowerCol === 'category') headerIdx['industry'] = idx;
@@ -447,6 +479,7 @@ const ProspectListManager: React.FC = () => {
 
         // Check which optional columns exist in the DB to avoid insert errors
         const columnAvailability: { [k: string]: boolean } = {
+          job_title: true,
           country: true,
           industry: true,
           sender_name: true,
@@ -470,6 +503,7 @@ const ProspectListManager: React.FC = () => {
         };
 
         // Test availability for each optional field (do them sequentially, cheap operations)
+        columnAvailability.job_title = await testColumn('job_title');
         columnAvailability.country = await testColumn('country');
         columnAvailability.industry = await testColumn('industry');
         columnAvailability.sender_name = await testColumn('sender_name');
@@ -546,6 +580,9 @@ const ProspectListManager: React.FC = () => {
             // Add optional fields only if they exist in the data
             if (headerIdx["company"] !== undefined && row[headerIdx["company"]]) {
               prospectData.company = row[headerIdx["company"]]?.toString().trim();
+            }
+            if (headerIdx["job_title"] !== undefined && row[headerIdx["job_title"]] && columnAvailability.job_title) {
+              prospectData.job_title = row[headerIdx["job_title"]]?.toString().trim();
             }
             if (headerIdx["phone"] !== undefined && row[headerIdx["phone"]]) {
               prospectData.phone = row[headerIdx["phone"]]?.toString().trim();
@@ -696,6 +733,7 @@ const ProspectListManager: React.FC = () => {
     p.name.toLowerCase().includes(prospectSearchQuery.toLowerCase()) ||
     p.email.toLowerCase().includes(prospectSearchQuery.toLowerCase()) ||
     (p.company && p.company.toLowerCase().includes(prospectSearchQuery.toLowerCase())) ||
+    (p.job_title && p.job_title.toLowerCase().includes(prospectSearchQuery.toLowerCase())) ||
     (p.country && p.country.toLowerCase().includes(prospectSearchQuery.toLowerCase())) ||
     (p.industry && p.industry.toLowerCase().includes(prospectSearchQuery.toLowerCase()))
   );
@@ -759,38 +797,10 @@ const ProspectListManager: React.FC = () => {
     setListPage(1);
   }, [searchQuery, listSort, listPageSize]);
 
-  const Shell = ({ children }: { children: React.ReactNode }) => (
-    <div className="relative -my-8 min-h-[calc(100vh-4rem)] bg-[var(--shell-bg)] text-[var(--shell-ink)]">
-      <style>{`
-        @keyframes list-rise {
-          from { opacity: 0; transform: translateY(14px); }
-          to { opacity: 1; transform: translateY(0); }
-        }
-        @keyframes list-float {
-          0%, 100% { transform: translateY(0); }
-          50% { transform: translateY(-12px); }
-        }
-        .list-rise { animation: list-rise 0.6s ease-out both; }
-        .list-float { animation: list-float 10s ease-in-out infinite; }
-        @media (prefers-reduced-motion: reduce) {
-          .list-rise, .list-float { animation: none; }
-        }
-      `}</style>
-      <div className="pointer-events-none absolute inset-0">
-        <div className="absolute -right-24 -top-24 h-72 w-72 rounded-full bg-emerald-200/40 blur-3xl list-float"></div>
-        <div className="absolute -left-24 top-1/3 h-72 w-72 rounded-full bg-amber-200/35 blur-3xl list-float" style={{ animationDelay: "1.2s" }}></div>
-        <div className="absolute bottom-0 right-1/3 h-56 w-56 rounded-full bg-sky-200/30 blur-3xl list-float" style={{ animationDelay: "2.2s" }}></div>
-      </div>
-      <div className="relative mx-auto w-full max-w-7xl space-y-6 px-5 py-6 lg:px-8 lg:py-8">
-        {children}
-      </div>
-    </div>
-  );
-
   if (selectedList) {
     // --- DETAIL VIEW ---
     return (
-      <Shell>
+      <ProspectShell>
         <section className="list-rise relative overflow-hidden rounded-[28px] border border-[var(--shell-border)] bg-[var(--shell-surface-strong)] p-6 shadow-[0_18px_40px_rgba(15,23,42,0.12)]">
           <div className="space-y-4">
             <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
@@ -875,7 +885,7 @@ const ProspectListManager: React.FC = () => {
                   <Building className="h-4 w-4 text-[var(--shell-muted)]" />
                 </div>
                 <p className="mt-2 text-sm font-semibold text-[var(--shell-ink)]">
-                  Company, phone, country, industry, sender overrides
+                  Company, job title, phone, country, industry, sender overrides
                 </p>
                 <p className="text-xs text-[var(--shell-muted)]">Add depth for personalization and filtering.</p>
               </div>
@@ -887,7 +897,7 @@ const ProspectListManager: React.FC = () => {
                   <Search className="h-4 w-4 text-[var(--shell-muted)]" />
                 </div>
                 <p className="mt-2 text-sm font-semibold text-[var(--shell-ink)]">
-                  Name, email, company, country, industry
+                  Name, email, company, job title, country, industry
                 </p>
                 <p className="text-xs text-[var(--shell-muted)]">Use search to narrow the current page.</p>
               </div>
@@ -902,7 +912,7 @@ const ProspectListManager: React.FC = () => {
               <div>
                 <CardTitle className="text-lg font-semibold text-[var(--shell-ink)]">Prospects</CardTitle>
                 <CardDescription className="text-xs text-[var(--shell-muted)]">
-                  Search within the current page of results by name, email, company, country, or industry.
+                  Search within the current page of results by name, email, company, job title, country, or industry.
                 </CardDescription>
               </div>
               <div className="relative w-full md:w-72">
@@ -919,12 +929,13 @@ const ProspectListManager: React.FC = () => {
           <CardContent className="p-0">
             <div className="rounded-md border-t border-[var(--shell-border)]">
               <div className="relative max-h-[60vh] w-full overflow-auto">
-                <table className="w-full min-w-[1280px] caption-bottom text-sm text-left">
+                <table className="w-full min-w-[1440px] caption-bottom text-sm text-left">
                   <thead className="bg-white/95">
                     <tr className="border-b border-slate-200/70">
                       <th className="sticky top-0 z-30 h-11 min-w-[160px] bg-white/95 px-4 align-middle text-xs font-semibold uppercase tracking-wide text-slate-500 backdrop-blur-sm">Name</th>
                       <th className="sticky top-0 z-30 h-11 min-w-[240px] bg-white/95 px-4 align-middle text-xs font-semibold uppercase tracking-wide text-slate-500 backdrop-blur-sm">Email</th>
                       <th className="sticky top-0 z-30 h-11 min-w-[160px] bg-white/95 px-4 align-middle text-xs font-semibold uppercase tracking-wide text-slate-500 backdrop-blur-sm">Company</th>
+                      <th className="sticky top-0 z-30 h-11 min-w-[180px] bg-white/95 px-4 align-middle text-xs font-semibold uppercase tracking-wide text-slate-500 backdrop-blur-sm">Job Title</th>
                       <th className="sticky top-0 z-30 h-11 min-w-[140px] bg-white/95 px-4 align-middle text-xs font-semibold uppercase tracking-wide text-slate-500 backdrop-blur-sm">Phone</th>
                       <th className="sticky top-0 z-30 h-11 min-w-[120px] bg-white/95 px-4 align-middle text-xs font-semibold uppercase tracking-wide text-slate-500 backdrop-blur-sm">Country</th>
                       <th className="sticky top-0 z-30 h-11 min-w-[140px] bg-white/95 px-4 align-middle text-xs font-semibold uppercase tracking-wide text-slate-500 backdrop-blur-sm">Industry</th>
@@ -935,7 +946,7 @@ const ProspectListManager: React.FC = () => {
                   <tbody className="divide-y divide-slate-100">
                     {filteredProspects.length === 0 ? (
                       <tr>
-                        <td colSpan={8} className="h-24 text-center text-muted-foreground">
+                        <td colSpan={9} className="h-24 text-center text-muted-foreground">
                           No prospects found.
                         </td>
                       </tr>
@@ -947,6 +958,7 @@ const ProspectListManager: React.FC = () => {
                             {p.email}
                           </td>
                           <td className="px-4 py-3 align-middle text-slate-600">{p.company || '-'}</td>
+                          <td className="px-4 py-3 align-middle text-slate-600">{p.job_title || '-'}</td>
                           <td className="px-4 py-3 align-middle text-slate-600 whitespace-nowrap">{p.phone || '-'}</td>
                           <td className="px-4 py-3 align-middle text-slate-600">{p.country || '-'}</td>
                           <td className="px-4 py-3 align-middle text-slate-600">{p.industry || '-'}</td>
@@ -1069,6 +1081,13 @@ const ProspectListManager: React.FC = () => {
                   />
                 </div>
                 <div className="space-y-2">
+                  <Label>Job Title</Label>
+                  <Input 
+                    value={newProspectForm.job_title} 
+                    onChange={(e) => setNewProspectForm({...newProspectForm, job_title: e.target.value})}
+                  />
+                </div>
+                <div className="space-y-2">
                   <Label>Phone</Label>
                   <Input 
                     value={newProspectForm.phone} 
@@ -1184,21 +1203,20 @@ const ProspectListManager: React.FC = () => {
                     <li>email (or e-mail, mail, email address)</li>
                   </ul>
                   <p className="mt-2 font-semibold">Supported Optional Columns:</p>
-                  <p>name (or full name, contact name), company (or organization), phone (or telephone, mobile)</p>
+                  <p>name (or full name, contact name), company (or organization), job title (or role, position), phone (or telephone, mobile)</p>
                   <p className="mt-2 text-xs italic">Column names are automatically matched with flexible variations.</p>
-                  <p className="mt-2 text-xs text-orange-600">Note: Country, industry, and sender fields are temporarily disabled while database schema updates are applied.</p>
                   <p className="mt-2 text-xs text-green-600">Note: Duplicate prospects will be skipped automatically.</p>
                 </div>
             </div>
           </DialogContent>
         </Dialog>
-      </Shell>
+      </ProspectShell>
     );
   }
 
   // --- LIST GRID VIEW ---
   return (
-    <Shell>
+    <ProspectShell>
       <section className="list-rise relative overflow-hidden rounded-[28px] border border-[var(--shell-border)] bg-[var(--shell-surface-strong)] p-6 shadow-[0_18px_40px_rgba(15,23,42,0.12)]">
         <div className="grid gap-6 lg:grid-cols-[1.4fr_1fr]">
           <div className="space-y-4">
@@ -1529,13 +1547,19 @@ const ProspectListManager: React.FC = () => {
             <DialogTitle>Create New List</DialogTitle>
             <DialogDescription>Give your list a name and description to organize your prospects.</DialogDescription>
           </DialogHeader>
-          <div className="space-y-4 py-4">
+          <form
+            className="space-y-4 py-4"
+            onSubmit={(event) => {
+              event.preventDefault();
+              handleCreateList();
+            }}
+          >
             <div className="space-y-2">
               <Label>List Name</Label>
               <Input 
                 placeholder="e.g., Tech Startups Q1" 
                 value={newListForm.name}
-                onChange={(e) => setNewListForm({...newListForm, name: e.target.value})}
+                onChange={(e) => setNewListForm((prev) => ({ ...prev, name: e.target.value }))}
               />
             </div>
             <div className="space-y-2">
@@ -1543,17 +1567,17 @@ const ProspectListManager: React.FC = () => {
               <Input 
                 placeholder="Optional description..." 
                 value={newListForm.description}
-                onChange={(e) => setNewListForm({...newListForm, description: e.target.value})}
+                onChange={(e) => setNewListForm((prev) => ({ ...prev, description: e.target.value }))}
               />
             </div>
-          </div>
-          <DialogFooter>
-            <Button variant="outline" onClick={() => setIsCreateListOpen(false)}>Cancel</Button>
-            <Button onClick={handleCreateList}>Create List</Button>
-          </DialogFooter>
+            <DialogFooter>
+              <Button type="button" variant="outline" onClick={() => setIsCreateListOpen(false)}>Cancel</Button>
+              <Button type="submit">Create List</Button>
+            </DialogFooter>
+          </form>
         </DialogContent>
       </Dialog>
-    </Shell>
+    </ProspectShell>
   );
 };
 

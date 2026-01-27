@@ -770,7 +770,7 @@ const EmailAnalyticsDashboard = () => {
                 </SelectContent>
               </Select>
 
-              <Select value={selectedIndustry} onValueChange={setSelectedIndustry}>
+              {/* <Select value={selectedIndustry} onValueChange={setSelectedIndustry}>
                 <SelectTrigger className="h-10 w-[180px] rounded-full border border-[var(--dash-border)] bg-white/80 text-xs font-semibold text-[var(--dash-ink)] shadow-sm">
                   <Filter className="h-4 w-4 mr-2 text-[var(--dash-muted)]" />
                   <SelectValue placeholder="Select Industry" />
@@ -782,7 +782,7 @@ const EmailAnalyticsDashboard = () => {
                   <SelectItem value="consulting">Consulting</SelectItem>
                   <SelectItem value="healthcare">Healthcare</SelectItem>
                 </SelectContent>
-              </Select>
+              </Select> */}
               
               <Button onClick={fetchAnalyticsData} variant="outline" className="h-10 rounded-full border-[var(--dash-border)] bg-white/80 text-xs font-semibold text-[var(--dash-ink)] shadow-sm hover:bg-white">
                 <RefreshCw className="h-4 w-4 mr-2" />
