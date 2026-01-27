@@ -56,6 +56,87 @@ const builderStyles = {
   fontFamily: 'var(--builder-font-body)'
 } as React.CSSProperties;
 
+const escapeHtml = (value: string) =>
+  value
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+
+const renderPlainTextPreviewHtml = (value: string) => {
+  if (!value) return '';
+  const escaped = escapeHtml(value);
+
+  const formatInline = (text: string) => {
+    const withBold = text.replace(/\*\*([\s\S]+?)\*\*/g, '<strong>$1</strong>');
+    return withBold.replace(/__([\s\S]+?)__/g, '<u>$1</u>');
+  };
+
+  const lines = escaped.split(/\r?\n/);
+  const chunks: string[] = [];
+  const paragraphLines: string[] = [];
+  let activeList: 'ul' | 'ol' | null = null;
+
+  const bulletRegex = /^\s*(?:[-*]|\u2022)\s+(.*)$/;
+  const orderedRegex = /^\s*(\d+)[.)]\s+(.*)$/;
+
+  const closeList = () => {
+    if (!activeList) return;
+    chunks.push(activeList === 'ul' ? '</ul>' : '</ol>');
+    activeList = null;
+  };
+
+  const flushParagraph = () => {
+    if (paragraphLines.length === 0) return;
+    const html = paragraphLines.map(line => formatInline(line)).join('<br />');
+    chunks.push(`<p>${html}</p>`);
+    paragraphLines.length = 0;
+  };
+
+  lines.forEach((line) => {
+    const bulletMatch = line.match(bulletRegex);
+    if (bulletMatch) {
+      flushParagraph();
+      if (activeList !== 'ul') {
+        closeList();
+        chunks.push('<ul>');
+        activeList = 'ul';
+      }
+      chunks.push(`<li>${formatInline(bulletMatch[1])}</li>`);
+      return;
+    }
+
+    const orderedMatch = line.match(orderedRegex);
+    if (orderedMatch) {
+      flushParagraph();
+      const startValue = Number.parseInt(orderedMatch[1], 10);
+      if (activeList !== 'ol') {
+        closeList();
+        const startAttr = Number.isFinite(startValue) ? ` start="${startValue}"` : '';
+        chunks.push(`<ol${startAttr}>`);
+        activeList = 'ol';
+      }
+      chunks.push(`<li>${formatInline(orderedMatch[2])}</li>`);
+      return;
+    }
+
+    if (line.trim() === '') {
+      flushParagraph();
+      return;
+    }
+
+    closeList();
+    paragraphLines.push(line);
+  });
+
+  flushParagraph();
+  closeList();
+  return chunks.join('');
+};
+
+const looksLikeHtml = (value: string) => /<\s*[a-z][\w-]*(\s[^>]*)?>/i.test(value);
+
 const CampaignBuilder: React.FC<CampaignBuilderProps> = ({ emailConfigs }) => {
   const navigate = useNavigate();
   const [currentStep, setCurrentStep] = useState(1);
@@ -122,6 +203,14 @@ const CampaignBuilder: React.FC<CampaignBuilderProps> = ({ emailConfigs }) => {
   }, []);
 
   useEffect(() => {
+    if (currentStep !== 3) return;
+    const textarea = contentBodyRef.current;
+    if (!textarea) return;
+    textarea.style.height = "auto";
+    textarea.style.height = `${textarea.scrollHeight}px`;
+  }, [form.content, currentStep, selectedTemplate]);
+
+  useEffect(() => {
     if (selectedListId) {
       const fetchCount = async () => {
         const { count } = await supabase
@@ -169,10 +258,11 @@ const CampaignBuilder: React.FC<CampaignBuilderProps> = ({ emailConfigs }) => {
   const handleTemplateSelect = (templateId: string) => {
     const template = templates.find(t => t.id === templateId);
     if (template) {
+      const normalizedContent = (template.content || "").replace(/\s+$/, "");
       setForm(prev => ({
         ...prev,
         subject: template.subject || '',
-        content: template.content || '',
+        content: normalizedContent,
         is_html: !!template.is_html
       }));
     }
@@ -837,7 +927,7 @@ const CampaignBuilder: React.FC<CampaignBuilderProps> = ({ emailConfigs }) => {
   );
 
   const renderContentStep = () => (
-    <div className="space-y-4 animate-in fade-in slide-in-from-right-4 duration-500 h-full flex flex-col">
+    <div className="space-y-4 animate-in fade-in slide-in-from-right-4 duration-500 flex flex-col">
       {templates.length === 0 && (
         <div className="rounded-2xl border border-amber-200/70 bg-amber-50/80 p-4 flex items-center justify-between">
           <div className="flex items-center gap-3">
@@ -911,15 +1001,16 @@ const CampaignBuilder: React.FC<CampaignBuilderProps> = ({ emailConfigs }) => {
                             </div>
                         </div>
                           {form.content ? (
-                            form.is_html ? (
+                            form.is_html && looksLikeHtml(form.content) ? (
                               <div
-                                className="prose prose-sm max-w-none text-slate-800"
+                                className="builder-preview prose prose-sm max-w-none text-slate-800"
                                 dangerouslySetInnerHTML={{ __html: form.content }}
                               />
                             ) : (
-                              <div className="prose prose-sm max-w-none text-slate-800 whitespace-pre-wrap font-sans">
-                                {form.content}
-                              </div>
+                              <div
+                                className="builder-preview prose prose-sm max-w-none text-slate-800"
+                                dangerouslySetInnerHTML={{ __html: renderPlainTextPreviewHtml(form.content) }}
+                              />
                             )
                           ) : (
                             <div className="prose prose-sm max-w-none text-slate-300 italic">
@@ -933,9 +1024,9 @@ const CampaignBuilder: React.FC<CampaignBuilderProps> = ({ emailConfigs }) => {
         </div>
       </div>
 
-      <div className="flex-1 min-h-0">
+      <div>
         {/* Editor */}
-        <div className="flex flex-col h-full min-h-[420px] md:min-h-[520px] border border-[var(--builder-border)] rounded-2xl overflow-hidden bg-white/90 shadow-[0_12px_24px_rgba(15,23,42,0.06)]">
+        <div className="flex flex-col border border-[var(--builder-border)] rounded-2xl bg-white/90 shadow-[0_12px_24px_rgba(15,23,42,0.06)]">
             <div className="p-3 border-b border-[var(--builder-border)] bg-white/70 shrink-0">
                 <Input
                   placeholder="Subject Line"
@@ -944,10 +1035,10 @@ const CampaignBuilder: React.FC<CampaignBuilderProps> = ({ emailConfigs }) => {
                   className="border-0 bg-transparent text-lg font-medium px-0 focus-visible:ring-0 placeholder:text-gray-400 h-auto py-1"
                 />
             </div>
-            <div className="flex-1 relative min-h-0">
+            <div className="relative">
                 <Textarea
                   placeholder="Hi {first_name},&#10;&#10;I'm writing to you because..."
-                  className="h-full w-full resize-none border-0 p-4 focus-visible:ring-0 font-mono text-sm leading-relaxed text-[var(--builder-ink)]"
+                  className="w-full resize-none border-0 p-4 focus-visible:ring-0 font-mono text-sm leading-relaxed text-[var(--builder-ink)] overflow-hidden"
                   value={form.content}
                   onChange={(e) => setForm({ ...form, content: e.target.value })}
                   ref={contentBodyRef}
@@ -1185,6 +1276,30 @@ const CampaignBuilder: React.FC<CampaignBuilderProps> = ({ emailConfigs }) => {
         .builder-float { animation: builder-float 8s ease-in-out infinite; }
         @media (prefers-reduced-motion: reduce) {
           .builder-rise, .builder-float { animation: none; }
+        }
+        .builder-preview ul,
+        .builder-preview ol {
+          list-style-position: outside;
+          margin: 0.6rem 0;
+          padding-left: 1.4rem;
+        }
+        .builder-preview ul {
+          list-style-type: disc;
+        }
+        .builder-preview ol {
+          list-style-type: decimal;
+        }
+        .builder-preview li {
+          margin: 0.2rem 0;
+        }
+        .builder-preview p {
+          margin: 0.65rem 0;
+        }
+        .builder-preview p:first-child {
+          margin-top: 0;
+        }
+        .builder-preview p:last-child {
+          margin-bottom: 0;
         }
       `}</style>
 

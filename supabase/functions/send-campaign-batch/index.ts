@@ -20,6 +20,7 @@ interface EmailConfig {
   username: string;
   password: string;
   security: 'SSL' | 'TLS';
+  sender_name?: string | null;
 }
 
 interface EmailConfigRow {
@@ -29,6 +30,7 @@ interface EmailConfigRow {
   smtp_username: string;
   smtp_password: string;
   security: 'SSL' | 'TLS' | null;
+  sender_name?: string | null;
 }
 
 interface Campaign {
@@ -61,6 +63,8 @@ interface Recipient {
 type PersonalizationData = {
   company?: string;
   phone?: string;
+  sender_name?: string;
+  sender_email?: string;
 };
 
 // Utility functions
@@ -91,6 +95,90 @@ const getErrorMessage = (error: unknown) => {
   }
 };
 
+const escapeHtml = (value: string) =>
+  value
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+
+const looksLikeHtml = (value: string) => /<\s*[a-z][\w-]*(\s[^>]*)?>/i.test(value);
+
+const hasMarkdownFormatting = (value: string) =>
+  /(\*\*|__|^\s*(?:[-*]|\u2022)\s+|^\s*\d+[.)]\s+)/m.test(value);
+
+const formatPlainTextToHtml = (value: string) => {
+  if (!value) return '';
+  const escaped = escapeHtml(value);
+
+  const formatInline = (text: string) => {
+    const withBold = text.replace(/\*\*([\s\S]+?)\*\*/g, '<strong>$1</strong>');
+    return withBold.replace(/__([\s\S]+?)__/g, '<u>$1</u>');
+  };
+
+  const lines = escaped.split(/\r?\n/);
+  const chunks: string[] = [];
+  const paragraphLines: string[] = [];
+  let activeList: 'ul' | 'ol' | null = null;
+
+  const bulletRegex = /^\s*(?:[-*]|\u2022)\s+(.*)$/;
+  const orderedRegex = /^\s*(\d+)[.)]\s+(.*)$/;
+
+  const closeList = () => {
+    if (!activeList) return;
+    chunks.push(activeList === 'ul' ? '</ul>' : '</ol>');
+    activeList = null;
+  };
+
+  const flushParagraph = () => {
+    if (paragraphLines.length === 0) return;
+    const html = paragraphLines.map(line => formatInline(line)).join('<br />');
+    chunks.push(`<p>${html}</p>`);
+    paragraphLines.length = 0;
+  };
+
+  lines.forEach((line) => {
+    const bulletMatch = line.match(bulletRegex);
+    if (bulletMatch) {
+      flushParagraph();
+      if (activeList !== 'ul') {
+        closeList();
+        chunks.push('<ul>');
+        activeList = 'ul';
+      }
+      chunks.push(`<li>${formatInline(bulletMatch[1])}</li>`);
+      return;
+    }
+
+    const orderedMatch = line.match(orderedRegex);
+    if (orderedMatch) {
+      flushParagraph();
+      const startValue = Number.parseInt(orderedMatch[1], 10);
+      if (activeList !== 'ol') {
+        closeList();
+        const startAttr = Number.isFinite(startValue) ? ` start="${startValue}"` : '';
+        chunks.push(`<ol${startAttr}>`);
+        activeList = 'ol';
+      }
+      chunks.push(`<li>${formatInline(orderedMatch[2])}</li>`);
+      return;
+    }
+
+    if (line.trim() === '') {
+      flushParagraph();
+      return;
+    }
+
+    closeList();
+    paragraphLines.push(line);
+  });
+
+  flushParagraph();
+  closeList();
+  return chunks.join('');
+};
+
 const personalizeContent = (
   content: string,
   recipient: Recipient,
@@ -105,33 +193,41 @@ const personalizeContent = (
   const lastName = fullName.split(' ').slice(1).join(' ') || '';
   const company = campaignData.company || recipient.email.split('@')[1].split('.')[0];
   const phone = campaignData.phone || '';
+  const senderName = campaignData.sender_name || '';
+  const senderEmail = campaignData.sender_email || '';
   
-  const replacements = {
-    '{{first_name}}': firstName,
-    '{{last_name}}': lastName,
-    '{{full_name}}': fullName,
-    '{{email}}': recipient.email,
-    '{{company}}': company,
-    '{{phone}}': phone,
-    '{name}': fullName,
-    '{first_name}': firstName,
-    '{last_name}': lastName,
-    '{full_name}': fullName,
-    '{email}': recipient.email,
-    '{company}': company,
-    '{phone}': phone,
+  const replaceToken = (token: string, value: string) => {
+    const escapedToken = token.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const braceOpen = '(?:\\{|&#123;|&#x7b;|&#x007b;|&lcub;|&lbrace;|&amp;#123;|&amp;#x7b;|&amp;#x007b;|\\uFF5B)';
+    const braceClose = '(?:\\}|&#125;|&#x7d;|&#x007d;|&rcub;|&rbrace;|&amp;#125;|&amp;#x7d;|&amp;#x007d;|\\uFF5D)';
+    const ws = '(?:\\s|&nbsp;|&#160;|&#xA0;|&#x00A0;)*';
+    const pattern = new RegExp(
+      `${braceOpen}${braceOpen}${ws}${escapedToken}${ws}${braceClose}${braceClose}|${braceOpen}${ws}${escapedToken}${ws}${braceClose}`,
+      'gi'
+    );
+    personalized = personalized.replace(pattern, value || '');
   };
-  
-  Object.entries(replacements).forEach(([placeholder, value]) => {
-    const escapedPlaceholder = placeholder.replace(/[-\/\\^$*+?.()|[\]{}]/g, '\\$&');
-    const regex = new RegExp(escapedPlaceholder, 'gi');
-    personalized = personalized.replace(regex, value || '');
+
+  const tokenValues = {
+    name: fullName,
+    first_name: firstName,
+    last_name: lastName,
+    full_name: fullName,
+    email: recipient.email,
+    company,
+    phone,
+    sender_name: senderName,
+    sender_email: senderEmail,
+  };
+
+  Object.entries(tokenValues).forEach(([token, value]) => {
+    replaceToken(token, value ?? '');
   });
-  
-  if (!isSubject) {
-    personalized = personalized.replace(/\n/g, '<br>');
+
+  if (/sender_name/i.test(personalized)) {
+    console.warn('Personalization warning: sender_name token still present after replacement');
   }
-  
+
   return personalized;
 };
 
@@ -183,6 +279,7 @@ const normalizeEmailConfig = (row: EmailConfigRow): EmailConfig => ({
   username: row.smtp_username,
   password: row.smtp_password,
   security: row.security === 'TLS' ? 'TLS' : 'SSL',
+  sender_name: row.sender_name ?? null,
 });
 
 const fetchEmailConfigForCampaign = async (campaign: Campaign): Promise<EmailConfig> => {
@@ -191,7 +288,7 @@ const fetchEmailConfigForCampaign = async (campaign: Campaign): Promise<EmailCon
   if (campaign.email_config_id) {
     const { data, error } = await supabase
       .from('email_configs')
-      .select('id, smtp_host, smtp_port, smtp_username, smtp_password, security')
+      .select('id, smtp_host, smtp_port, smtp_username, smtp_password, security, sender_name')
       .eq('id', campaign.email_config_id)
       .maybeSingle();
 
@@ -205,7 +302,7 @@ const fetchEmailConfigForCampaign = async (campaign: Campaign): Promise<EmailCon
   if (!emailConfigRow) {
     const { data: fallbackConfig, error: fallbackError } = await supabase
       .from('email_configs')
-      .select('id, smtp_host, smtp_port, smtp_username, smtp_password, security')
+      .select('id, smtp_host, smtp_port, smtp_username, smtp_password, security, sender_name')
       .eq('user_id', campaign.user_id)
       .order('created_at', { ascending: false })
       .limit(1)
@@ -229,6 +326,7 @@ const fetchEmailConfigForCampaign = async (campaign: Campaign): Promise<EmailCon
 type EmailContentOverride = {
   subject: string;
   body: string;
+  is_html?: boolean;
 };
 
 const sendEmail = async (
@@ -274,7 +372,15 @@ const sendEmail = async (
   const personalizedContent = personalizeContent(bodyToSend, recipient, extraData);
   console.log(`Personalizing content for recipient: ${recipient.id} (${recipient.email})`);
 
-  const { content: contentWithClickTracking, trackingUrls } = addTrackingToLinks(personalizedContent, campaign.id, recipient.id);
+  let isHtmlContent = contentOverride?.is_html ?? looksLikeHtml(bodyToSend);
+  if (hasMarkdownFormatting(bodyToSend)) {
+    isHtmlContent = false;
+  }
+  const formattedContent = isHtmlContent
+    ? personalizedContent
+    : formatPlainTextToHtml(personalizedContent);
+
+  const { content: contentWithClickTracking, trackingUrls } = addTrackingToLinks(formattedContent, campaign.id, recipient.id);
   console.log(`Added tracking to ${trackingUrls.length} total URLs for recipient ${recipient.id}`);
 
   // Store first tracking URL in track_click_link field
@@ -305,7 +411,7 @@ const sendEmail = async (
   const messageId = generateUniqueId();
   const currentDate = new Date().toUTCString();
   const senderEmail = config.username;
-  const senderName = campaign.name;
+  const senderName = (config.sender_name || '').trim() || campaign.name;
   const senderDomain = senderEmail.includes('@') ? senderEmail.split('@')[1] : 'example.com';
 
   console.log(`Sending email with improved anti-spam configuration to: ${recipient.email}`);
@@ -315,6 +421,7 @@ const sendEmail = async (
     to: recipient.email,
     subject: personalizedSubject,
     html: finalContent,
+    text: personalizedContent,
     messageId: `<${messageId}@${senderDomain}>`,
     headers: {
       'Date': currentDate,
@@ -400,6 +507,7 @@ const processBatch = async (campaignId: string, batchSize = 3, step = 0, emailCo
     let body = campaign.body;
     let isFollowUp = step > 0;
     let followup = null;
+    let isHtml: boolean | undefined = undefined;
 
     if (isFollowUp) {
       const { data: f, error: followupError } = await supabase
@@ -420,13 +528,16 @@ const processBatch = async (campaignId: string, batchSize = 3, step = 0, emailCo
       if (followup.template_id) {
         const { data: template } = await supabase
           .from('email_templates')
-          .select('subject, content')
+          .select('subject, content, is_html')
           .eq('id', followup.template_id)
           .single();
         
         if (template) {
           subject = followup.subject || template.subject || `Re: ${campaign.subject}`;
           body = followup.body || template.content;
+          if (!followup.body) {
+            isHtml = template.is_html ?? undefined;
+          }
         } else {
            subject = followup.subject || `Re: ${campaign.subject}`;
            body = followup.body;
@@ -657,7 +768,7 @@ const processBatch = async (campaignId: string, batchSize = 3, step = 0, emailCo
     const emails = recipients.map(r => r.email);
     const { data: prospects } = await supabase
       .from('prospects')
-      .select('email, company, phone')
+      .select('email, company, phone, sender_name, sender_email')
       .eq('user_id', campaign.user_id)
       .in('email', emails);
       
@@ -779,7 +890,7 @@ const processBatch = async (campaignId: string, batchSize = 3, step = 0, emailCo
           prospectData,
           recipient.message_id,
           recipient.thread_id,
-          { subject, body }
+          { subject, body, is_html: isHtml }
         );
 
         // Update recipient status

@@ -8,7 +8,7 @@ import { simpleParser } from 'mailparser';
 
 const DEFAULT_SUPABASE_URL = 'https://lyerkyijpavilyufcrgb.supabase.co';
 const DEFAULT_SERVICE_ROLE_KEY = 'REDACTED_SUPABASE_SERVICE_ROLE_KEY';
-const DEFAULT_ALLOWED_ORIGINS = 'http://localhost:5173,http://localhost:8081,http://localhost:8080';
+const DEFAULT_ALLOWED_ORIGINS = 'http://localhost:5173,http://localhost:8080,http://10.127.57.196:8080';
 const DEFAULT_MAILBOX_PORT = 8787;
 const DEFAULT_BYPASS_AUTH = 'true';
 
