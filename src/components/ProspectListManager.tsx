@@ -53,6 +53,7 @@ import {
 import { Badge } from "@/components/ui/badge";
 import { Separator } from "@/components/ui/separator";
 import * as XLSX from "xlsx";
+import { useAuth } from "@/providers/AuthProvider";
 
 interface Prospect {
   id: string;
@@ -104,6 +105,7 @@ const ProspectShell = ({ children }: { children: React.ReactNode }) => (
 );
 
 const ProspectListManager: React.FC = () => {
+  const { user } = useAuth();
   const [lists, setLists] = useState<EmailList[]>([]);
   const [selectedList, setSelectedList] = useState<EmailList | null>(null);
   const [prospects, setProspects] = useState<Prospect[]>([]);
@@ -284,19 +286,73 @@ const ProspectListManager: React.FC = () => {
   };
 
   const handleDeleteList = async (listId: string) => {
-    if (!confirm("Are you sure you want to delete this list? This action cannot be undone.")) return;
+    const confirmMessage =
+      "Are you sure you want to delete this list? Prospects that are only in this list will be deleted. Prospects in other lists will be kept.";
+    if (!confirm(confirmMessage)) return;
 
-    const { error } = await supabase
-      .from("email_lists")
-      .delete()
-      .eq("id", listId);
+    const { data: userData } = await supabase.auth.getUser();
+    const user_id = userData?.user?.id;
 
-    if (error) {
-      toast({ title: "Error", description: error.message, variant: "destructive" });
-    } else {
-      toast({ title: "Deleted", description: "List deleted successfully." });
-      if (selectedList?.id === listId) setSelectedList(null);
+    try {
+      const { data: listLinks, error: listLinksError } = await supabase
+        .from("email_list_prospects")
+        .select("prospect_id")
+        .eq("list_id", listId);
+
+      if (listLinksError) throw listLinksError;
+
+      const prospectIds = (listLinks || []).map((row: any) => row.prospect_id).filter(Boolean);
+
+      let orphanIds: string[] = [];
+      if (prospectIds.length > 0) {
+        const { data: otherLinks, error: otherLinksError } = await supabase
+          .from("email_list_prospects")
+          .select("prospect_id")
+          .in("prospect_id", prospectIds)
+          .neq("list_id", listId);
+
+        if (otherLinksError) throw otherLinksError;
+
+        const protectedIds = new Set((otherLinks || []).map((row: any) => row.prospect_id));
+        orphanIds = prospectIds.filter((id) => !protectedIds.has(id));
+      }
+
+      const { error: deleteListError } = await supabase
+        .from("email_lists")
+        .delete()
+        .eq("id", listId);
+
+      if (deleteListError) throw deleteListError;
+
+      let removedProspects = 0;
+      if (orphanIds.length > 0 && user_id) {
+        const { error: deleteProspectsError } = await supabase
+          .from("prospects")
+          .delete()
+          .in("id", orphanIds)
+          .eq("user_id", user_id);
+
+        if (deleteProspectsError) {
+          console.warn("Failed to delete orphan prospects:", deleteProspectsError);
+        } else {
+          removedProspects = orphanIds.length;
+        }
+      }
+
+      const message =
+        removedProspects > 0
+          ? `List deleted. ${removedProspects} prospects removed.`
+          : "List deleted successfully.";
+      toast({ title: "Deleted", description: message });
+
+      if (selectedList?.id === listId) {
+        setSelectedList(null);
+        setProspects([]);
+        setTotalProspects(0);
+      }
       fetchLists();
+    } catch (err: any) {
+      toast({ title: "Error", description: err?.message || "Failed to delete list.", variant: "destructive" });
     }
   };
 
@@ -307,18 +363,27 @@ const ProspectListManager: React.FC = () => {
       return;
     }
 
-    const { data: userData } = await supabase.auth.getUser();
-    const user_id = userData?.user?.id;
-    if (!user_id) return;
+    const user_id = user?.id;
+    if (!user_id) {
+      toast({ title: "Error", description: "You must be logged in to add prospects.", variant: "destructive" });
+      return;
+    }
+
+    const normalizedEmail = newProspectForm.email.trim().toLowerCase();
 
     // 1. Check/Create Prospect
     let { data: prospectData, error } = await supabase
       .from("prospects")
-      .select("*")
-      .eq("email", newProspectForm.email.trim().toLowerCase())
+      .select("id, name, email, company, job_title, phone, sender_name, sender_email, country, industry")
+      .eq("email", normalizedEmail)
       .eq("user_id", user_id)
       .limit(1)
       .maybeSingle();
+
+    if (error) {
+      toast({ title: "Error", description: error.message, variant: "destructive" });
+      return;
+    }
 
     let prospect = prospectData as any;
 
@@ -328,7 +393,7 @@ const ProspectListManager: React.FC = () => {
         .insert({ 
           user_id, 
           name: newProspectForm.name, 
-          email: newProspectForm.email.trim().toLowerCase(), 
+          email: normalizedEmail, 
           company: newProspectForm.company || null, 
           job_title: newProspectForm.job_title || null,
           phone: newProspectForm.phone || null,
@@ -337,7 +402,7 @@ const ProspectListManager: React.FC = () => {
           country: newProspectForm.country || null,
           industry: newProspectForm.industry || null
         } as any)
-        .select()
+        .select("id, name, email, company, job_title, phone, sender_name, sender_email, country, industry")
         .single();
       
       if (insertErr) {
@@ -357,8 +422,31 @@ const ProspectListManager: React.FC = () => {
         toast({ title: "Success", description: "Prospect added to list." });
         setNewProspectForm({ name: "", email: "", company: "", job_title: "", phone: "", sender_name: "", sender_email: "", country: "", industry: "" });
         setIsAddProspectOpen(false);
-        fetchProspects(selectedList.id);
-        fetchLists(); // Update counts
+        setTotalProspects((prev) => prev + 1);
+        setLists((prev) =>
+          prev.map((list) =>
+            list.id === selectedList.id ? { ...list, count: (list.count || 0) + 1 } : list
+          )
+        );
+        if (currentPage === 1) {
+          const newProspect: Prospect = {
+            id: prospect.id,
+            name: prospect.name || newProspectForm.name,
+            email: prospect.email || normalizedEmail,
+            company: prospect.company || undefined,
+            job_title: prospect.job_title || undefined,
+            phone: prospect.phone || undefined,
+            sender_name: prospect.sender_name || undefined,
+            sender_email: prospect.sender_email || undefined,
+            country: prospect.country || undefined,
+            industry: prospect.industry || undefined,
+          };
+          setProspects((prev) => {
+            if (prev.some((p) => p.id === newProspect.id)) return prev;
+            const next = [newProspect, ...prev];
+            return next.slice(0, pageSize);
+          });
+        }
       } else {
         if (linkError.code === '23505') { // Unique violation
            toast({ title: "Info", description: "Prospect is already in this list." });
@@ -410,16 +498,57 @@ const ProspectListManager: React.FC = () => {
         console.log('Using sheet:', sheetName);
         console.log('Sheet data keys:', Object.keys(sheet));
         
-        const rows = XLSX.utils.sheet_to_json(sheet, { header: 1 }) as string[][];
+        const rows = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: "", blankrows: false }) as (string | number | null)[][];
         console.log('Raw rows data:', rows);
         console.log('Number of rows:', rows.length);
 
+        const headerRowIndex = rows.findIndex((row) =>
+          Array.isArray(row) && row.some((cell) => (cell ?? "").toString().trim() !== "")
+        );
+
+        if (headerRowIndex === -1) {
+          toast({ title: "Error", description: "No header row found. Please check your file format.", variant: "destructive" });
+          setExcelUploading(false);
+          return;
+        }
+
         // Header mapping logic - prefer exact matches and avoid confusing sender_email with main email
         let headerIdx: { [k: string]: number } = {};
-        const headerRow = rows[0]?.map(x => (x || "").toString().toLowerCase().trim());
+        const rawHeaderRow = rows[headerRowIndex] || [];
+        const headerRow = rawHeaderRow.map(x => (x ?? "").toString().toLowerCase().trim());
+        const headerLength = headerRow.length;
 
-        console.log('Raw header row:', rows[0]);
+        console.log('Raw header row:', rawHeaderRow);
         console.log('Processed headers:', headerRow);
+
+        const findExactIndex = (aliases: string[]) => {
+          for (const alias of aliases) {
+            const idx = headerRow.findIndex((c) => c === alias);
+            if (idx !== -1) return idx;
+          }
+          return -1;
+        };
+
+        const findContainsIndex = (tokens: string[], excludeTokens: string[] = []) =>
+          headerRow.findIndex((c) => tokens.some((t) => c.includes(t)) && !excludeTokens.some((ex) => c.includes(ex)));
+
+        const findContainsAllIndex = (tokens: string[], excludeTokens: string[] = []) =>
+          headerRow.findIndex((c) => tokens.every((t) => c.includes(t)) && !excludeTokens.some((ex) => c.includes(ex)));
+
+        const pickIndex = (exactAliases: string[], containsTokens?: string[], excludeTokens?: string[]) => {
+          const exactIdx = findExactIndex(exactAliases);
+          if (exactIdx !== -1) return exactIdx;
+          if (containsTokens && containsTokens.length > 0) {
+            return findContainsIndex(containsTokens, excludeTokens);
+          }
+          return -1;
+        };
+
+        const setHeaderIndex = (key: string, idx: number) => {
+          if (idx !== -1 && headerIdx[key] === undefined) {
+            headerIdx[key] = idx;
+          }
+        };
 
         // Find main email column: prefer exact 'email' (not 'sender_email')
         const findEmailIndex = () => {
@@ -447,28 +576,67 @@ const ProspectListManager: React.FC = () => {
 
         headerIdx['email'] = emailIndex;
 
-        // Map all possible column variations with prioritization (sender_* checked before general matches)
-        headerRow?.forEach((col, idx) => {
-          const lowerCol = (col || '').toLowerCase().trim();
+        // Map all possible column variations with prioritization (exact > contains)
+        setHeaderIndex('sender_name', pickIndex(['sender_name', 'sender name', 'from name']));
+        if (headerIdx['sender_name'] === undefined) {
+          setHeaderIndex('sender_name', findContainsAllIndex(['sender', 'name'], ['email']));
+          setHeaderIndex('sender_name', findContainsAllIndex(['from', 'name'], ['email']));
+        }
 
-          // Sender-specific first
-          if ((lowerCol === 'sender_name' || lowerCol === 'sender name' || lowerCol === 'from name' || (lowerCol.includes('sender') && lowerCol.includes('name')))) {
-            headerIdx['sender_name'] = idx;
-            return;
-          }
-          if ((lowerCol === 'sender_email' || lowerCol === 'sender email' || lowerCol === 'from email' || (lowerCol.includes('sender') && lowerCol.includes('email')))) {
-            headerIdx['sender_email'] = idx;
-            return;
-          }
+        setHeaderIndex('sender_email', pickIndex(['sender_email', 'sender email', 'from email']));
+        if (headerIdx['sender_email'] === undefined) {
+          setHeaderIndex('sender_email', findContainsAllIndex(['sender', 'email']));
+          setHeaderIndex('sender_email', findContainsAllIndex(['from', 'email']));
+        }
 
-          // General fields
-          if (lowerCol === 'name' || lowerCol === 'full name' || lowerCol === 'contact name' || lowerCol === 'first name' || lowerCol === 'contact') headerIdx['name'] = idx;
-          if (lowerCol === 'company' || lowerCol === 'organization' || lowerCol === 'organisation' || lowerCol.includes('company') || lowerCol.includes('org') || lowerCol === 'business' || lowerCol === 'employer') headerIdx['company'] = idx;
-          if (lowerCol === 'job_title' || lowerCol === 'job title' || lowerCol === 'title' || lowerCol === 'role' || lowerCol === 'position' || lowerCol === 'job') headerIdx['job_title'] = idx;
-          if (lowerCol === 'phone' || lowerCol === 'telephone' || lowerCol === 'mobile' || lowerCol === 'cell' || lowerCol === 'phone number' || lowerCol.includes('phone') || lowerCol === 'tel') headerIdx['phone'] = idx;
-          if (lowerCol === 'country' || lowerCol === 'nation' || lowerCol.includes('country') || lowerCol === 'location') headerIdx['country'] = idx;
-          if (lowerCol === 'industry' || lowerCol === 'sector' || lowerCol === 'business type' || lowerCol.includes('industry') || lowerCol === 'field' || lowerCol === 'category') headerIdx['industry'] = idx;
-        });
+        setHeaderIndex(
+          'name',
+          pickIndex(
+            ['name', 'full name', 'contact name', 'first name', 'contact'],
+            ['name'],
+            ['sender', 'company', 'email']
+          )
+        );
+        setHeaderIndex(
+          'company',
+          pickIndex(
+            ['company', 'company name', 'organization', 'organisation', 'business', 'employer'],
+            ['company', 'organization', 'organisation', 'org'],
+            ['email', 'website', 'domain', 'size']
+          )
+        );
+        setHeaderIndex(
+          'job_title',
+          pickIndex(
+            ['job_title', 'job title', 'title', 'role', 'position', 'job'],
+            ['title', 'role', 'position', 'job'],
+            ['email', 'sender']
+          )
+        );
+        setHeaderIndex(
+          'phone',
+          pickIndex(
+            ['phone', 'telephone', 'mobile', 'cell', 'phone number', 'tel'],
+            ['phone', 'telephone', 'mobile', 'cell', 'tel'],
+            ['fax']
+          )
+        );
+        setHeaderIndex(
+          'country',
+          pickIndex(
+            ['country', 'nation', 'location'],
+            ['country', 'nation', 'location'],
+            ['company', 'email']
+          )
+        );
+        setHeaderIndex(
+          'industry',
+          pickIndex(
+            ['industry', 'sector', 'business type', 'field', 'category'],
+            ['industry', 'sector'],
+            ['email']
+          )
+        );
 
         console.log('Final column mapping:', headerIdx);
         const { data: userData } = await supabase.auth.getUser();
@@ -517,47 +685,62 @@ const ProspectListManager: React.FC = () => {
           return;
         }
 
-        const totalRows = rows.length - 1; // Exclude header
+        const dataRows = rows.slice(headerRowIndex + 1);
+        const totalRows = dataRows.length;
         setImportProgress({ processed: 0, total: totalRows, errors: 0 });
         
         let successCount = 0;
         let errorCount = 0;
         let skippedCount = 0;
+        let columnMismatchCount = 0;
 
         // Process rows
-        for (let i = 1; i < rows.length; i++) {
-          const row = rows[i];
+        for (let i = 0; i < dataRows.length; i++) {
+          const row = dataRows[i];
+          const rowNumber = headerRowIndex + i + 2;
           
           // Skip empty rows
           if (!row || row.every(cell => !cell || cell.toString().trim() === '')) {
-            console.log(`Skipping empty row ${i + 1}`);
+            console.log(`Skipping empty row ${rowNumber}`);
             continue;
           }
+
+          const extraCells = Array.isArray(row) ? row.slice(headerLength) : [];
+          const hasExtraData = extraCells.some((cell) => (cell ?? "").toString().trim() !== "");
+          if (hasExtraData) {
+            console.log(`Skipping row ${rowNumber}: extra columns detected`, row);
+            columnMismatchCount++;
+            errorCount++;
+            setImportProgress(prev => ({ ...prev, processed: i + 1, errors: prev.errors + 1 }));
+            continue;
+          }
+
+          const normalizedRow = Array.from({ length: headerLength }, (_, idx) => row?.[idx] ?? "");
           
-          console.log(`Processing row ${i + 1}:`, row);
+          console.log(`Processing row ${rowNumber}:`, normalizedRow);
           
-          const email = row[headerIdx["email"]]?.toString().trim();
+          const email = normalizedRow[headerIdx["email"]]?.toString().trim();
           console.log(`Email extracted: "${email}" from index ${headerIdx["email"]}`);
           
           if (!email) {
-            console.log(`Skipping row ${i + 1}: no email found`);
+            console.log(`Skipping row ${rowNumber}: no email found`);
             skippedCount++;
-            setImportProgress(prev => ({ ...prev, processed: i, errors: prev.errors + 1 }));
+            setImportProgress(prev => ({ ...prev, processed: i + 1, errors: prev.errors + 1 }));
             continue;
           }
           
           // Validate email format
           const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
           if (!emailRegex.test(email)) {
-            console.log(`Skipping row ${i + 1}: invalid email format: ${email}`);
+            console.log(`Skipping row ${rowNumber}: invalid email format: ${email}`);
             errorCount++;
-            setImportProgress(prev => ({ ...prev, processed: i, errors: prev.errors + 1 }));
+            setImportProgress(prev => ({ ...prev, processed: i + 1, errors: prev.errors + 1 }));
             continue;
           }
           
-          const name = row[headerIdx["name"]]?.toString().trim() || email.split('@')[0] || "Unknown";
+          const name = normalizedRow[headerIdx["name"]]?.toString().trim() || email.split('@')[0] || "Unknown";
 
-          console.log(`Processing row ${i + 1}: ${name} <${email}>`);
+          console.log(`Processing row ${rowNumber}: ${name} <${email}>`);
 
           // Create/Get Prospect
           let { data: prospect } = await supabase
@@ -578,27 +761,27 @@ const ProspectListManager: React.FC = () => {
             };
 
             // Add optional fields only if they exist in the data
-            if (headerIdx["company"] !== undefined && row[headerIdx["company"]]) {
-              prospectData.company = row[headerIdx["company"]]?.toString().trim();
+            if (headerIdx["company"] !== undefined && normalizedRow[headerIdx["company"]]) {
+              prospectData.company = normalizedRow[headerIdx["company"]]?.toString().trim();
             }
-            if (headerIdx["job_title"] !== undefined && row[headerIdx["job_title"]] && columnAvailability.job_title) {
-              prospectData.job_title = row[headerIdx["job_title"]]?.toString().trim();
+            if (headerIdx["job_title"] !== undefined && normalizedRow[headerIdx["job_title"]] && columnAvailability.job_title) {
+              prospectData.job_title = normalizedRow[headerIdx["job_title"]]?.toString().trim();
             }
-            if (headerIdx["phone"] !== undefined && row[headerIdx["phone"]]) {
-              prospectData.phone = row[headerIdx["phone"]]?.toString().trim();
+            if (headerIdx["phone"] !== undefined && normalizedRow[headerIdx["phone"]]) {
+              prospectData.phone = normalizedRow[headerIdx["phone"]]?.toString().trim();
             }
             // Add optional fields only if present in the file, non-empty, and column exists in DB
-            if (headerIdx["country"] !== undefined && row[headerIdx["country"]] && columnAvailability.country) {
-              prospectData.country = row[headerIdx["country"]]?.toString().trim();
+            if (headerIdx["country"] !== undefined && normalizedRow[headerIdx["country"]] && columnAvailability.country) {
+              prospectData.country = normalizedRow[headerIdx["country"]]?.toString().trim();
             }
-            if (headerIdx["industry"] !== undefined && row[headerIdx["industry"]] && columnAvailability.industry) {
-              prospectData.industry = row[headerIdx["industry"]]?.toString().trim();
+            if (headerIdx["industry"] !== undefined && normalizedRow[headerIdx["industry"]] && columnAvailability.industry) {
+              prospectData.industry = normalizedRow[headerIdx["industry"]]?.toString().trim();
             }
-            if (headerIdx["sender_name"] !== undefined && row[headerIdx["sender_name"]] && columnAvailability.sender_name) {
-              prospectData.sender_name = row[headerIdx["sender_name"]]?.toString().trim();
+            if (headerIdx["sender_name"] !== undefined && normalizedRow[headerIdx["sender_name"]] && columnAvailability.sender_name) {
+              prospectData.sender_name = normalizedRow[headerIdx["sender_name"]]?.toString().trim();
             }
-            if (headerIdx["sender_email"] !== undefined && row[headerIdx["sender_email"]] && columnAvailability.sender_email) {
-              prospectData.sender_email = row[headerIdx["sender_email"]]?.toString().trim();
+            if (headerIdx["sender_email"] !== undefined && normalizedRow[headerIdx["sender_email"]] && columnAvailability.sender_email) {
+              prospectData.sender_email = normalizedRow[headerIdx["sender_email"]]?.toString().trim();
             }
 
             console.log('Inserting prospect:', prospectData);
@@ -612,7 +795,7 @@ const ProspectListManager: React.FC = () => {
             if (insertError) {
               console.error('Error inserting prospect:', insertError, 'Data:', prospectData);
               errorCount++;
-              setImportProgress(prev => ({ ...prev, processed: i, errors: prev.errors + 1 }));
+              setImportProgress(prev => ({ ...prev, processed: i + 1, errors: prev.errors + 1 }));
               continue; // Skip this row but continue with others
             }
             
@@ -651,15 +834,16 @@ const ProspectListManager: React.FC = () => {
             }
           }
           
-          setImportProgress(prev => ({ ...prev, processed: i }));
+          setImportProgress(prev => ({ ...prev, processed: i + 1 }));
         }
 
         setImportResults({ success: successCount, errors: errorCount, skipped: skippedCount });
         
-        console.log('Import completed:', { successCount, errorCount, skippedCount });
+        console.log('Import completed:', { successCount, errorCount, skippedCount, columnMismatchCount });
         
         if (successCount > 0) {
-          toast({ title: "Import Complete", description: `Successfully processed ${successCount} prospects. ${errorCount > 0 ? `${errorCount} errors occurred.` : ''} Duplicates were automatically skipped.` });
+          const mismatchNote = columnMismatchCount > 0 ? ` ${columnMismatchCount} rows skipped due to column mismatch.` : '';
+          toast({ title: "Import Complete", description: `Successfully processed ${successCount} prospects. ${errorCount > 0 ? `${errorCount} errors occurred.` : ''}${mismatchNote} Duplicates were automatically skipped.` });
           // Don't close dialog immediately so user can see results
           setTimeout(() => {
             setIsImportOpen(false);

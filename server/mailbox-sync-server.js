@@ -7,6 +7,8 @@ import { ImapFlow } from 'imapflow';
 import { simpleParser } from 'mailparser';
 
 const DEFAULT_SUPABASE_URL = 'https://lyerkyijpavilyufcrgb.supabase.co';
+const DEFAULT_SUPABASE_ANON_KEY =
+  'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imx5ZXJreWlqcGF2aWx5dWZjcmdiIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NDg3NTM0NjQsImV4cCI6MjA2NDMyOTQ2NH0.hdh-tzbNBmCusr_ZJBU_K27P-6K9s1kwpBE3PrzXiwc';
 const DEFAULT_SERVICE_ROLE_KEY = 'REDACTED_SUPABASE_SERVICE_ROLE_KEY';
 const DEFAULT_ALLOWED_ORIGINS = 'http://localhost:5173,http://localhost:8080,http://10.127.57.196:8080';
 const DEFAULT_MAILBOX_PORT = 8787;
@@ -20,9 +22,36 @@ const ALLOWED_ORIGINS = (process.env.MAILBOX_ALLOWED_ORIGINS || DEFAULT_ALLOWED_
 
 const SUPABASE_URL = process.env.SUPABASE_URL || DEFAULT_SUPABASE_URL;
 const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY || DEFAULT_SERVICE_ROLE_KEY;
+const SUPABASE_ANON_KEY =
+  process.env.SUPABASE_ANON_KEY ||
+  process.env.VITE_SUPABASE_ANON_KEY ||
+  process.env.SUPABASE_PUBLISHABLE_KEY ||
+  DEFAULT_SUPABASE_ANON_KEY;
 const MAILBOX_BYPASS_AUTH = (process.env.MAILBOX_BYPASS_AUTH || DEFAULT_BYPASS_AUTH).toLowerCase() === 'true';
 
-const supabaseAdmin = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
+const isPlaceholderValue = (value) => {
+  if (!value) return true;
+  const normalized = value.toLowerCase();
+  return (
+    normalized.includes('redacted') ||
+    normalized.includes('your-service-role-key') ||
+    normalized.includes('your-anon-key')
+  );
+};
+
+const hasServiceRoleKey = !isPlaceholderValue(SUPABASE_SERVICE_ROLE_KEY);
+const hasAnonKey = !isPlaceholderValue(SUPABASE_ANON_KEY);
+const supabaseAdmin = hasServiceRoleKey ? createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY) : null;
+
+if (!hasServiceRoleKey) {
+  console.warn('[mailbox] SUPABASE_SERVICE_ROLE_KEY is missing or placeholder. Falling back to anon key.');
+}
+if (!hasAnonKey) {
+  console.warn('[mailbox] SUPABASE_ANON_KEY is missing or placeholder. Mailbox sync may fail.');
+}
+if (MAILBOX_BYPASS_AUTH && !hasServiceRoleKey) {
+  console.warn('[mailbox] MAILBOX_BYPASS_AUTH requires a service role key. Bypass auth disabled.');
+}
 
 const app = express();
 app.use(express.json({ limit: '1mb' }));
@@ -90,7 +119,10 @@ const mapMessageToRow = (config, message, parsed, mailboxPath) => {
   };
 };
 
-const syncMailbox = async (config, limit = 50) => {
+const syncMailbox = async (config, limit = 50, dbClient) => {
+  if (!dbClient) {
+    throw new Error('Supabase client not configured');
+  }
   const client = buildImapClient(config);
   let processed = 0;
   const rows = [];
@@ -174,7 +206,7 @@ const syncMailbox = async (config, limit = 50) => {
     // Fetch UIDs that already exist for this config
     let existingUids = new Set();
     if (uniqueRows.length > 0) {
-      const { data: existingData, error: existingError } = await supabaseAdmin
+      const { data: existingData, error: existingError } = await dbClient
         .from('email_messages')
         .select('uid')
         .eq('config_id', config.id)
@@ -190,7 +222,7 @@ const syncMailbox = async (config, limit = 50) => {
     const newRows = uniqueRows.filter((row) => !existingUids.has(row.uid));
 
     if (newRows.length > 0) {
-      const { error: insertError } = await supabaseAdmin
+      const { error: insertError } = await dbClient
         .from('email_messages')
         .insert(newRows);
 
@@ -221,10 +253,21 @@ const BYPASS_USER = {
   email: 'bypass@local.dev',
 };
 
+const buildUserSupabaseClient = (authHeader) => {
+  if (!hasAnonKey) return null;
+  const headers = authHeader ? { Authorization: authHeader } : {};
+  return createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
+    global: { headers },
+    auth: { persistSession: false },
+  });
+};
+
 const authenticateRequest = async (authHeader) => {
+  const canBypassAuth = MAILBOX_BYPASS_AUTH && hasServiceRoleKey;
+
   if (!authHeader?.startsWith('Bearer ')) {
-    if (MAILBOX_BYPASS_AUTH) {
-      console.warn('[mailbox] No Authorization header supplied – bypassing auth (development mode).');
+    if (canBypassAuth) {
+      console.warn('[mailbox] No Authorization header supplied - bypassing auth (development mode).');
       return BYPASS_USER;
     }
     console.warn('[mailbox] Missing Authorization header.');
@@ -234,13 +277,19 @@ const authenticateRequest = async (authHeader) => {
   const token = authHeader.replace('Bearer ', '').trim();
   if (!token) {
     console.warn('[mailbox] Authorization header present but token empty.');
-    return MAILBOX_BYPASS_AUTH ? BYPASS_USER : null;
+    return canBypassAuth ? BYPASS_USER : null;
   }
 
-  const { data, error } = await supabaseAdmin.auth.getUser(token);
+  const authClient = supabaseAdmin || buildUserSupabaseClient(authHeader);
+  if (!authClient) {
+    console.warn('[mailbox] Supabase keys not configured for auth.');
+    return null;
+  }
+
+  const { data, error } = await authClient.auth.getUser(token);
   if (error || !data?.user) {
     console.warn('[mailbox] Supabase token validation failed:', error?.message || 'unknown error');
-    return MAILBOX_BYPASS_AUTH ? BYPASS_USER : null;
+    return canBypassAuth ? BYPASS_USER : null;
   }
   return data.user;
 };
@@ -251,9 +300,18 @@ app.get('/healthz', (_req, res) => {
 
 app.post('/sync-mailbox', async (req, res) => {
   try {
-    const user = await authenticateRequest(req.headers.authorization);
+    const authHeader = req.headers.authorization || '';
+    const canBypassAuth = MAILBOX_BYPASS_AUTH && hasServiceRoleKey;
+    const user = await authenticateRequest(authHeader);
     if (!user) {
       return res.status(401).json({ error: 'Unauthorized' });
+    }
+
+    const dbClient = supabaseAdmin || buildUserSupabaseClient(authHeader);
+    if (!dbClient) {
+      return res.status(500).json({
+        error: 'Supabase keys are not configured. Set SUPABASE_SERVICE_ROLE_KEY or SUPABASE_ANON_KEY.',
+      });
     }
 
     const { configId, limit = 50 } = req.body || {};
@@ -261,18 +319,23 @@ app.post('/sync-mailbox', async (req, res) => {
       return res.status(400).json({ error: 'configId is required' });
     }
 
-    let configQuery = supabaseAdmin
+    let configQuery = dbClient
       .from('email_configs')
       .select('*')
       .eq('id', configId);
 
-    if (!MAILBOX_BYPASS_AUTH) {
+    if (!canBypassAuth) {
       configQuery = configQuery.eq('user_id', user.id);
     }
 
-    const { data: config, error: configError } = await configQuery.single();
+    const { data: config, error: configError } = await configQuery.maybeSingle();
 
-    if (configError || !config) {
+    if (configError) {
+      console.error('[mailbox] Failed to load email configuration:', configError);
+      return res.status(500).json({ error: 'Failed to load email configuration' });
+    }
+
+    if (!config) {
       return res.status(404).json({ error: 'Email configuration not found' });
     }
 
@@ -280,7 +343,7 @@ app.post('/sync-mailbox', async (req, res) => {
       return res.status(400).json({ error: 'IMAP host/port missing on configuration' });
     }
 
-    const stats = await syncMailbox(config, limit);
+    const stats = await syncMailbox(config, limit, dbClient);
     res.json({ success: true, ...stats });
   } catch (error) {
     console.error('Mailbox sync error', error);
