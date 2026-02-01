@@ -1,18 +1,19 @@
 import React from 'react';
 import { Link } from 'react-router-dom';
-import { 
-  Home, 
-  Send, 
-  RefreshCw, 
-  Users, 
-  Sparkles, 
-  LayoutTemplate, 
-  Grid, 
-  Settings, 
+import {
+  Home,
+  Send,
+  RefreshCw,
+  Users,
+  Sparkles,
+  LayoutTemplate,
+  Grid,
+  Settings,
   ExternalLink,
   ChevronLeft,
   ChevronRight,
-  Inbox
+  Inbox,
+  PlugZap
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import Logo from '../Logo';
@@ -52,6 +53,7 @@ const Sidebar = ({ activeTab, onTabChange, isCollapsed, toggleSidebar }: Sidebar
     {
       label: 'System',
       items: [
+        { id: 'integrations', label: 'Integrations', icon: PlugZap },
         { id: 'settings', label: 'Settings', icon: Settings, hasSubmenu: true }
       ]
     }

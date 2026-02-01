@@ -14,6 +14,8 @@ import Inbox from "./pages/Inbox";
 import Automations from "./pages/Automations";
 import NotFound from "./pages/NotFound";
 import { AuthProvider } from "./providers/AuthProvider";
+import Onboarding from "./pages/Onboarding";
+import OnboardingGuard from "./components/onboarding/OnboardingGuard";
 
 const queryClient = new QueryClient();
 
@@ -27,12 +29,15 @@ const App = () => (
           <Routes>
             <Route path="/" element={<LandingPage />} />
             <Route path="/auth" element={<Auth />} />
-            <Route path="/dashboard" element={<Dashboard />} />
-            <Route path="/profile" element={<Profile />} />
-            <Route path="/campaigns" element={<Campaigns />} />
-            <Route path="/inbox" element={<Inbox />} />
-            <Route path="/automations" element={<Automations />} />
-            <Route path="/campaign/:id" element={<CampaignTracker />} />
+            <Route path="/onboarding" element={<Onboarding />} />
+            <Route element={<OnboardingGuard />}>
+              <Route path="/dashboard" element={<Dashboard />} />
+              <Route path="/profile" element={<Profile />} />
+              <Route path="/campaigns" element={<Campaigns />} />
+              <Route path="/inbox" element={<Inbox />} />
+              <Route path="/automations" element={<Automations />} />
+              <Route path="/campaign/:id" element={<CampaignTracker />} />
+            </Route>
             {/* ADD ALL CUSTOM ROUTES ABOVE THE CATCH-ALL "*" ROUTE */}
             <Route path="*" element={<NotFound />} />
           </Routes>

@@ -410,6 +410,48 @@ export type Database = {
         }
         Relationships: []
       }
+      onboarding_profiles: {
+        Row: {
+          user_id: string
+          role: string | null
+          use_case: string | null
+          experience: string | null
+          target_industry: string | null
+          product_category: string | null
+          postmaster_domain: string | null
+          completion_status: string
+          completed_at: string | null
+          created_at: string | null
+          updated_at: string | null
+        }
+        Insert: {
+          user_id: string
+          role?: string | null
+          use_case?: string | null
+          experience?: string | null
+          target_industry?: string | null
+          product_category?: string | null
+          postmaster_domain?: string | null
+          completion_status?: string
+          completed_at?: string | null
+          created_at?: string | null
+          updated_at?: string | null
+        }
+        Update: {
+          user_id?: string
+          role?: string | null
+          use_case?: string | null
+          experience?: string | null
+          target_industry?: string | null
+          product_category?: string | null
+          postmaster_domain?: string | null
+          completion_status?: string
+          completed_at?: string | null
+          created_at?: string | null
+          updated_at?: string | null
+        }
+        Relationships: []
+      }
       prospects: {
         Row: {
           company: string | null

@@ -3,6 +3,8 @@ import { useNavigate } from 'react-router-dom';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
+import { Input } from '@/components/ui/input';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import {
   Tooltip,
@@ -39,7 +41,11 @@ import {
   Filter,
   Download,
   RefreshCw,
-  CheckCircle2
+  CheckCircle2,
+  Send,
+  Globe,
+  Link2,
+  BadgeCheck
 } from 'lucide-react';
 import {
   XAxis,
@@ -118,11 +124,132 @@ const EmailAnalyticsDashboard = () => {
   });
   const [loading, setLoading] = useState(true);
   const [selectedIndustry, setSelectedIndustry] = useState('general');
+  const [postmasterDomain, setPostmasterDomain] = useState('');
+  const [postmasterInput, setPostmasterInput] = useState('');
+  const [postmasterSuggested, setPostmasterSuggested] = useState('');
+  const [postmasterState, setPostmasterState] = useState<'idle' | 'checking' | 'connected' | 'disconnected' | 'error'>('idle');
+  const [postmasterHint, setPostmasterHint] = useState<string | null>(null);
+  const [postmasterDialogOpen, setPostmasterDialogOpen] = useState(false);
   const { toast } = useToast();
 
   useEffect(() => {
     fetchAnalyticsData();
   }, [dateRange]);
+
+  const normalizeDomain = (value: string) => {
+    const trimmed = value.trim().toLowerCase();
+    if (!trimmed) return '';
+    const withoutProtocol = trimmed.replace(/^https?:\/\//, '');
+    return withoutProtocol.split('/')[0];
+  };
+
+  const isValidDomain = (value: string) => {
+    if (!value) return false;
+    return /^(?!-)[a-z0-9-]+(\.[a-z0-9-]+)+$/.test(value);
+  };
+
+  const fetchPostmasterStats = async (domain: string) => {
+    if (!domain) {
+      setPostmasterState('disconnected');
+      setPostmasterHint('Add a domain to connect Postmaster tools.');
+      return null;
+    }
+
+    setPostmasterState('checking');
+    setPostmasterHint(null);
+
+    const { data: postmasterData, error: postmasterError } = await supabase.functions.invoke('google-postmaster', {
+      body: { domain }
+    });
+
+    if (postmasterError) {
+      setPostmasterState('error');
+      setPostmasterHint('Unable to reach Google Postmaster right now. Try again.');
+      return null;
+    }
+
+    if (!postmasterData?.data?.length) {
+      const hint = postmasterData?.message || 'No Postmaster data found for this domain yet.';
+      setPostmasterState('disconnected');
+      setPostmasterHint(hint);
+      return null;
+    }
+
+    const latestStats = postmasterData.data[postmasterData.data.length - 1];
+    let nextReputation: 'High' | 'Medium' | 'Low' | 'Bad' = 'High';
+    let nextSpamRate = 0.05;
+
+    if (latestStats.domainReputation) {
+      const rep = latestStats.domainReputation as string;
+      nextReputation = rep.charAt(0).toUpperCase() + rep.slice(1).toLowerCase() as any;
+    }
+    if (latestStats.userReportedSpamRatio !== undefined && latestStats.userReportedSpamRatio !== null) {
+      nextSpamRate = latestStats.userReportedSpamRatio * 100;
+    }
+
+    setPostmasterState('connected');
+    setPostmasterHint(null);
+    return { domainReputation: nextReputation, spamRate: nextSpamRate };
+  };
+
+  const handlePostmasterConnect = async (event?: React.FormEvent) => {
+    event?.preventDefault();
+    const normalizedDomain = normalizeDomain(postmasterInput || postmasterSuggested || postmasterDomain);
+
+    if (!isValidDomain(normalizedDomain)) {
+      toast({
+        title: "Invalid domain",
+        description: "Enter a valid domain like example.com.",
+        variant: "destructive"
+      });
+      return;
+    }
+
+    const { data: { user } } = await supabase.auth.getUser();
+    if (!user) {
+      toast({
+        title: "Not signed in",
+        description: "Please sign in again to connect Postmaster.",
+        variant: "destructive"
+      });
+      return;
+    }
+
+    try {
+      setPostmasterDomain(normalizedDomain);
+      setPostmasterInput(normalizedDomain);
+
+      await supabase
+        .from('onboarding_profiles')
+        .upsert({ user_id: user.id, postmaster_domain: normalizedDomain }, { onConflict: 'user_id' });
+
+      const stats = await fetchPostmasterStats(normalizedDomain);
+      if (stats) {
+        setData(prev => ({
+          ...prev,
+          domainReputation: stats.domainReputation,
+          spamRate: stats.spamRate
+        }));
+        toast({
+          title: "Postmaster connected",
+          description: `Domain ${normalizedDomain} is now connected.`
+        });
+        setPostmasterDialogOpen(false);
+      } else {
+        toast({
+          title: "Domain saved",
+          description: "We couldn't find data yet. Verify the domain in Google Postmaster and try again."
+        });
+      }
+    } catch (error) {
+      console.error('Postmaster connect error:', error);
+      toast({
+        title: "Connection failed",
+        description: "Unable to save the domain. Please try again.",
+        variant: "destructive"
+      });
+    }
+  };
 
   const fetchAnalyticsData = async () => {
     setLoading(true);
@@ -148,6 +275,15 @@ const EmailAnalyticsDashboard = () => {
         .from('email_configs')
         .select('id, smtp_username')
         .eq('user_id', user.id);
+
+      const suggestedDomain = emailConfigs?.[0]?.smtp_username?.split('@')[1] || '';
+      const normalizedSuggested = normalizeDomain(suggestedDomain);
+      if (normalizedSuggested) {
+        setPostmasterSuggested(normalizedSuggested);
+        if (!postmasterInput) {
+          setPostmasterInput(normalizedSuggested);
+        }
+      }
 
       const configMap = new Map(emailConfigs?.map(c => [c.id, c]) || []);
       // Default to 500 emails per day per account if not specified in DB
@@ -396,35 +532,29 @@ const EmailAnalyticsDashboard = () => {
         };
       });
 
-      // Fetch Email Config to get the domain (for reputation)
-      // We already fetched emailConfigs, let's use the first one for domain check
       let domainReputation: 'High' | 'Medium' | 'Low' | 'Bad' = 'High';
       let spamRate = 0.05;
 
-      if (emailConfigs && emailConfigs.length > 0) {
-        const firstConfig = emailConfigs[0];
-        if (firstConfig.smtp_username && typeof firstConfig.smtp_username === 'string') {
-          const parts = firstConfig.smtp_username.split('@');
-          if (parts.length > 1) {
-            const domain = parts[1];
-            
-            // Call Supabase Edge Function to get real Postmaster Data
-            const { data: postmasterData, error: postmasterError } = await supabase.functions.invoke('google-postmaster', {
-              body: { domain }
-            });
+      const { data: profileData } = await supabase
+        .from('onboarding_profiles')
+        .select('postmaster_domain')
+        .eq('user_id', user.id)
+        .maybeSingle();
 
-            if (!postmasterError && postmasterData?.data?.length > 0) {
-              const latestStats = postmasterData.data[postmasterData.data.length - 1];
-              if (latestStats.domainReputation) {
-                const rep = latestStats.domainReputation;
-                domainReputation = rep.charAt(0).toUpperCase() + rep.slice(1).toLowerCase() as any;
-              }
-              if (latestStats.userReportedSpamRatio) {
-                spamRate = latestStats.userReportedSpamRatio * 100;
-              }
-            }
-          }
+      const savedDomain = normalizeDomain(profileData?.postmaster_domain || '');
+      if (savedDomain) {
+        setPostmasterDomain(savedDomain);
+        if (!postmasterInput) {
+          setPostmasterInput(savedDomain);
         }
+        const stats = await fetchPostmasterStats(savedDomain);
+        if (stats) {
+          domainReputation = stats.domainReputation;
+          spamRate = stats.spamRate;
+        }
+      } else {
+        setPostmasterState('disconnected');
+        setPostmasterHint('Connect your domain to see Postmaster metrics.');
       }
 
       // Mock Previous Period Comparison
@@ -481,6 +611,28 @@ const EmailAnalyticsDashboard = () => {
   };
 
   const currentBenchmarks = benchmarks[selectedIndustry as keyof typeof benchmarks];
+  const isPostmasterConnected = postmasterState === 'connected';
+  const isPostmasterChecking = postmasterState === 'checking';
+  const reputationLabel = isPostmasterConnected ? data.domainReputation : 'Not connected';
+  const reputationTextClass = !isPostmasterConnected
+    ? 'text-slate-500'
+    : data.domainReputation === 'High'
+      ? 'text-emerald-600'
+      : data.domainReputation === 'Medium'
+        ? 'text-amber-600'
+        : 'text-rose-600';
+  const reputationBadgeClass = !isPostmasterConnected
+    ? 'border-slate-200 bg-slate-100 text-slate-500'
+    : data.domainReputation === 'Bad' || data.domainReputation === 'Low'
+      ? 'border-rose-200 bg-rose-100 text-rose-600'
+      : data.domainReputation === 'Medium'
+        ? 'border-amber-200 bg-amber-100 text-amber-600'
+        : 'border-emerald-200 bg-emerald-100 text-emerald-600';
+  const reputationIcon = !isPostmasterConnected
+    ? <ShieldAlert className="h-6 w-6" />
+    : data.domainReputation === 'Bad' || data.domainReputation === 'Low'
+      ? <ShieldAlert className="h-6 w-6" />
+      : <ShieldCheck className="h-6 w-6" />;
 
   const getPerformanceStatus = (rate: number, benchmark: number) => {
     if (rate >= benchmark * 1.2) {
@@ -571,7 +723,9 @@ const EmailAnalyticsDashboard = () => {
     { name: 'Delivered', value: data.totalEmails - data.totalBounced, fill: '#0f766e' },
     { name: 'Opened', value: data.totalOpens, fill: '#14b8a6' },
     { name: 'Clicked', value: data.totalClicks, fill: '#f59e0b' },
-    { name: 'Replied', value: data.totalReplies, fill: '#f97316' },
+        { name: 'Replied', value: data.totalReplies, fill: '#f97316' },
+    { name: 'Interested', value: data.totalReplies, fill: '#48cf09' },
+{ name: 'Not Interested', value: data.totalReplies, fill: '#f5182a' },
   ];
 
   const insights = useMemo(() => getInsights(), [data, selectedIndustry, currentBenchmarks]);
@@ -1135,72 +1289,115 @@ const EmailAnalyticsDashboard = () => {
           <Card className="dash-rise border border-[var(--dash-border)] bg-[var(--dash-surface)] shadow-[0_16px_36px_rgba(15,23,42,0.08)]" style={{ animationDelay: '380ms' }}>
             <CardHeader className="pb-2">
               <CardTitle className="flex items-center gap-2 text-base">
-                <ShieldCheck className="h-5 w-5 text-emerald-600" />
+                {/* <Globe className="h-5 w-5 text-emerald-600" /> */}
                 Domain Health
               </CardTitle>
             </CardHeader>
             <CardContent className="space-y-4">
-              <div className="rounded-xl border border-emerald-200/70 bg-emerald-50/70 px-3 py-2 flex items-center justify-between">
-                <div className="flex items-center gap-2">
-                  <div className="h-2 w-2 rounded-full bg-emerald-500 animate-pulse"></div>
-                  <span className="text-xs font-semibold text-emerald-900">Google Postmaster Connected</span>
+              {isPostmasterConnected ? (
+                <div className="rounded-xl border border-emerald-200/70 bg-emerald-50/70 px-3 py-2 flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    <div className="h-2 w-2 rounded-full bg-emerald-500 animate-pulse"></div>
+                    <span className="text-xs font-semibold text-emerald-900">Google Postmaster Connected</span>
+                    {postmasterDomain ? (
+                      <span className="text-[10px] font-semibold text-emerald-700/80">{postmasterDomain}</span>
+                    ) : null}
+                  </div>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    className="h-6 text-xs text-emerald-700 hover:text-emerald-800 hover:bg-emerald-100"
+                    onClick={() => setPostmasterDialogOpen(true)}
+                  >
+                    Configure
+                  </Button>
                 </div>
-                <Button variant="ghost" size="sm" className="h-6 text-xs text-emerald-700 hover:text-emerald-800 hover:bg-emerald-100">
-                  Configure
-                </Button>
-              </div>
+              ) : (
+                <div className="rounded-2xl border border-dashed border-slate-200 bg-white/70 px-4 py-5">
+                  <div className="mx-auto flex max-w-[240px] flex-col items-center text-center">
+                    <div className="mb-3 flex h-12 w-12 items-center justify-center rounded-2xl bg-slate-900 text-white shadow-[0_12px_28px_rgba(15,23,42,0.2)]">
+                      <Link2 className="h-5 w-5" />
+                    </div>
+                    <p className="text-sm font-semibold text-[var(--dash-ink)]">Connect Google Postmaster</p>
+                    <p className="mt-1 text-xs text-[var(--dash-muted)]">
+                      Add your sending domain to pull reputation and spam metrics.
+                    </p>
+                    {postmasterDomain ? (
+                      <p className="mt-2 text-[11px] text-slate-500">Current domain: {postmasterDomain}</p>
+                    ) : postmasterSuggested ? (
+                      <p className="mt-2 text-[11px] text-slate-500">Suggested: {postmasterSuggested}</p>
+                    ) : null}
+                    {postmasterHint ? (
+                      <p className="mt-2 text-[11px] text-amber-600">{postmasterHint}</p>
+                    ) : null}
+                    <Button
+                      variant="secondary"
+                      size="sm"
+                      className="mt-3 h-8 text-xs"
+                      onClick={() => setPostmasterDialogOpen(true)}
+                      disabled={isPostmasterChecking}
+                    >
+                      {isPostmasterChecking ? 'Checking...' : 'Connect Postmaster'}
+                    </Button>
+                  </div>
+                </div>
+              )}
 
               <div className="flex items-center justify-between">
                 <div>
                   <p className="text-[11px] font-semibold uppercase tracking-[0.2em] text-[var(--dash-muted)]">Reputation</p>
-                  <p className={`text-2xl font-semibold ${
-                    data.domainReputation === 'High' ? 'text-emerald-600' :
-                    data.domainReputation === 'Medium' ? 'text-amber-600' :
-                    'text-rose-600'
-                  }`}>
-                    {data.domainReputation}
+                  <p className={`text-2xl font-semibold ${reputationTextClass}`}>
+                    {reputationLabel}
                   </p>
                 </div>
-                <div className={`h-12 w-12 rounded-full flex items-center justify-center border ${
-                  data.domainReputation === 'Bad' || data.domainReputation === 'Low' ? 'border-rose-200 bg-rose-100 text-rose-600' : 
-                  data.domainReputation === 'Medium' ? 'border-amber-200 bg-amber-100 text-amber-600' : 
-                  'border-emerald-200 bg-emerald-100 text-emerald-600'
-                }`}>
-                  {data.domainReputation === 'Bad' || data.domainReputation === 'Low' ? <ShieldAlert className="h-6 w-6" /> : <ShieldCheck className="h-6 w-6" />}
+                <div className={`h-12 w-12 rounded-full flex items-center justify-center border ${reputationBadgeClass}`}>
+                  {reputationIcon}
                 </div>
               </div>
 
               <div className="space-y-2">
-                <div className="flex items-center justify-between text-sm">
-                  <span className="text-[var(--dash-muted)] flex items-center gap-2">
-                    <div className={`h-2 w-2 rounded-full ${data.spamRate > 0.3 ? 'bg-rose-500' : data.spamRate > 0.1 ? 'bg-amber-500' : 'bg-emerald-500'}`}></div>
-                    Spam Rate (Postmaster)
-                  </span>
-                  <span className={`font-semibold ${data.spamRate > 0.3 ? 'text-rose-600' : data.spamRate > 0.1 ? 'text-amber-600' : 'text-emerald-600'}`}>
-                    {data.spamRate}%
-                  </span>
-                </div>
-                <div className="flex items-center justify-between text-sm">
-                  <span className="text-[var(--dash-muted)] flex items-center gap-2">
-                    <CheckCircle2 className="h-3 w-3 text-emerald-500" />
-                    SPF Record
-                  </span>
-                  <Badge variant="outline" className="text-emerald-700 bg-emerald-50 border-emerald-200 text-[10px]">Verified</Badge>
-                </div>
-                <div className="flex items-center justify-between text-sm">
-                  <span className="text-[var(--dash-muted)] flex items-center gap-2">
-                    <CheckCircle2 className="h-3 w-3 text-emerald-500" />
-                    DKIM Record
-                  </span>
-                  <Badge variant="outline" className="text-emerald-700 bg-emerald-50 border-emerald-200 text-[10px]">Verified</Badge>
-                </div>
-                <div className="flex items-center justify-between text-sm">
-                  <span className="text-[var(--dash-muted)] flex items-center gap-2">
-                    <CheckCircle2 className="h-3 w-3 text-emerald-500" />
-                    DMARC Policy
-                  </span>
-                  <Badge variant="outline" className="text-emerald-700 bg-emerald-50 border-emerald-200 text-[10px]">Enforced</Badge>
-                </div>
+                {isPostmasterConnected ? (
+                  <div className="flex items-center justify-between text-sm">
+                    <span className="text-[var(--dash-muted)] flex items-center gap-2">
+                      <div className={`h-2 w-2 rounded-full ${
+                        data.spamRate > 0.3 ? 'bg-rose-500' :
+                        data.spamRate > 0.1 ? 'bg-amber-500' : 'bg-emerald-500'
+                      }`}></div>
+                      Spam Rate (Postmaster)
+                    </span>
+                    <span className={`font-semibold ${
+                      data.spamRate > 0.3 ? 'text-rose-600' :
+                      data.spamRate > 0.1 ? 'text-amber-600' : 'text-emerald-600'
+                    }`}>
+                      {data.spamRate}%
+                    </span>
+                  </div>
+                ) : null}
+                {isPostmasterConnected ? (
+                  <>
+                    <div className="flex items-center justify-between text-sm">
+                      <span className="text-[var(--dash-muted)] flex items-center gap-2">
+                        <BadgeCheck className="h-3 w-3 text-emerald-500" />
+                        SPF Record
+                      </span>
+                      <Badge variant="outline" className="text-emerald-700 bg-emerald-50 border-emerald-200 text-[10px]">Verified</Badge>
+                    </div>
+                    <div className="flex items-center justify-between text-sm">
+                      <span className="text-[var(--dash-muted)] flex items-center gap-2">
+                        <BadgeCheck className="h-3 w-3 text-emerald-500" />
+                        DKIM Record
+                      </span>
+                      <Badge variant="outline" className="text-emerald-700 bg-emerald-50 border-emerald-200 text-[10px]">Verified</Badge>
+                    </div>
+                    <div className="flex items-center justify-between text-sm">
+                      <span className="text-[var(--dash-muted)] flex items-center gap-2">
+                        <BadgeCheck className="h-3 w-3 text-emerald-500" />
+                        DMARC Policy
+                      </span>
+                      <Badge variant="outline" className="text-emerald-700 bg-emerald-50 border-emerald-200 text-[10px]">Enforced</Badge>
+                    </div>
+                  </>
+                ) : null}
               </div>
 
               <div className="pt-3 border-t border-[var(--dash-border)]">
@@ -1267,6 +1464,42 @@ const EmailAnalyticsDashboard = () => {
           </Card>
         </div>
       </section>
+
+      <Dialog open={postmasterDialogOpen} onOpenChange={setPostmasterDialogOpen}>
+        <DialogContent className="sm:max-w-[460px]">
+          <DialogHeader>
+            <DialogTitle>Connect Google Postmaster</DialogTitle>
+            <DialogDescription>
+              Add your sending domain to pull reputation and spam rate metrics.
+            </DialogDescription>
+          </DialogHeader>
+          <form onSubmit={handlePostmasterConnect} className="space-y-4">
+            <div className="space-y-2">
+              <label htmlFor="postmaster-domain" className="text-[11px] font-semibold uppercase tracking-[0.2em] text-[var(--dash-muted)]">
+                Domain
+              </label>
+              <Input
+                id="postmaster-domain"
+                value={postmasterInput}
+                onChange={(event) => setPostmasterInput(event.target.value)}
+                placeholder={postmasterSuggested || "example.com"}
+                autoComplete="off"
+              />
+              <p className="text-xs text-slate-500">
+                Use the exact domain verified in Google Postmaster Tools.
+              </p>
+            </div>
+            <DialogFooter className="gap-2 sm:gap-0">
+              <Button type="button" variant="ghost" onClick={() => setPostmasterDialogOpen(false)}>
+                Cancel
+              </Button>
+              <Button type="submit" disabled={isPostmasterChecking}>
+                {isPostmasterChecking ? 'Connecting...' : 'Connect'}
+              </Button>
+            </DialogFooter>
+          </form>
+        </DialogContent>
+      </Dialog>
     </div>
   </div>
   );

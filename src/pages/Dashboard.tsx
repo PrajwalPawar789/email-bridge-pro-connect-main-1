@@ -1,9 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { supabase } from '@/integrations/supabase/client';
-import { Button } from '@/components/ui/button';
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
-import { Plus } from 'lucide-react';
 import EmailConfig from '@/components/EmailConfig';
 import CampaignList from '@/components/CampaignList';
 import CampaignBuilder from '@/components/CampaignBuilder';
@@ -11,6 +8,7 @@ import TemplateManager from '@/components/TemplateManager';
 import Mailbox from '@/components/Mailbox';
 import ProspectListManager from '@/components/ProspectListManager';
 import EmailAnalyticsDashboard from '@/components/EmailAnalyticsDashboard';
+import Integrations from '@/pages/Integrations';
 import { toast } from '@/hooks/use-toast';
 import DashboardLayout from '@/components/Layout/DashboardLayout';
 import { useAuth } from '@/providers/AuthProvider';
@@ -130,6 +128,7 @@ const Dashboard = () => {
     mailbox: <Mailbox emailConfigs={emailConfigs} />,
     config: <EmailConfig onConfigAdded={fetchEmailConfigs} />,
     contacts: <ProspectListManager />,
+    integrations: <Integrations />,
     automations: comingSoon('Automations'),
     segments: comingSoon('Segments'),
     connect: comingSoon('Connect site')
@@ -142,54 +141,11 @@ const Dashboard = () => {
       user={user} 
       onLogout={handleLogout}
     >
-      {emailConfigs.length === 0 && activeTab !== 'config' && activeTab !== 'settings' ? (
-        <Card className="max-w-3xl mx-auto mt-8">
-          <CardHeader className="space-y-2">
-            <CardTitle>Welcome to EmailBridge Pro!</CardTitle>
-            <p className="text-sm text-gray-600">
-              Connect your first inbox to start sending campaigns and tracking replies.
-            </p>
-          </CardHeader>
-          <CardContent className="space-y-6">
-            <div className="grid gap-6 md:grid-cols-2">
-              <div className="space-y-3">
-                <h3 className="text-sm font-semibold text-gray-900">Quick start</h3>
-                <ol className="list-decimal list-inside text-sm text-gray-600 space-y-1">
-                  <li>Add an email account (SMTP + IMAP).</li>
-                  <li>Build a campaign or template.</li>
-                  <li>Monitor replies in Inbox and Analytics.</li>
-                </ol>
-                <p className="text-xs text-gray-500">
-                  You can add more inboxes later from Email Configuration.
-                </p>
-              </div>
-              <div className="rounded-lg border bg-gray-50 p-4">
-                <h3 className="text-sm font-semibold text-gray-900 mb-2">Have this ready</h3>
-                <ul className="text-sm text-gray-600 space-y-1">
-                  <li>Email address and password.</li>
-                  <li>SMTP host and port (we prefill common providers).</li>
-                  <li>IMAP host and port for replies.</li>
-                </ul>
-                <p className="text-xs text-gray-500 mt-3">
-                  Gmail users: you'll need an App Password instead of your normal password.
-                </p>
-              </div>
-            </div>
-            <div className="flex flex-col sm:flex-row gap-3">
-              <Button onClick={() => handleTabChange('settings')} className="sm:w-auto">
-                <Plus className="h-4 w-4 mr-2" />
-                Add Email Configuration
-              </Button>
-            </div>
-          </CardContent>
-        </Card>
-      ) : (
-        mountedTabs.map((tabKey) => (
-          <section key={tabKey} hidden={tabKey !== normalizedActiveTab}>
-            {tabContents[tabKey] ?? tabContents.home}
-          </section>
-        ))
-      )}
+      {mountedTabs.map((tabKey) => (
+        <section key={tabKey} hidden={tabKey !== normalizedActiveTab}>
+          {tabContents[tabKey] ?? tabContents.home}
+        </section>
+      ))}
     </DashboardLayout>
   );
 };

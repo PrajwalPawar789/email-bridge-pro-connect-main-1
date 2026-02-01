@@ -181,4 +181,22 @@
     background: linear-gradient(180deg, hsl(var(--primary) / 0.9), hsl(var(--primary) / 0.2));
     box-shadow: 0 0 14px hsl(var(--primary) / 0.25);
   }
+
+  .glow {
+    box-shadow: 0 0 0 1px rgba(16, 185, 129, 0.15), 0 30px 80px rgba(15, 23, 42, 0.18);
+  }
+
+  .float-animation {
+    animation: float-slow 6s ease-in-out infinite;
+  }
+}
+
+@keyframes float-slow {
+  0%,
+  100% {
+    transform: translateY(0);
+  }
+  50% {
+    transform: translateY(-6px);
+  }
 }
