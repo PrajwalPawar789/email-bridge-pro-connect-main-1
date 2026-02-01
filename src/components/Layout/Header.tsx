@@ -28,6 +28,7 @@ const Header = ({ user, onLogout, activeTab }: HeaderProps) => {
     segments: 'Segments',
     templates: 'Templates',
     connect: 'Connect',
+    integrations: 'Integrations',
     settings: 'Settings'
   };
   const activeLabel = activeTab ? tabLabels[activeTab] || 'Workspace' : 'Workspace';

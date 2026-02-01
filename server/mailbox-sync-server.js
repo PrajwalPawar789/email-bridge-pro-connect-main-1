@@ -2,6 +2,7 @@ import 'dotenv/config';
 import express from 'express';
 import cors from 'cors';
 import axios from 'axios';
+import crypto from 'crypto';
 import { createClient } from '@supabase/supabase-js';
 import { ImapFlow } from 'imapflow';
 import { simpleParser } from 'mailparser';
@@ -13,6 +14,8 @@ const DEFAULT_SERVICE_ROLE_KEY = 'REDACTED_SUPABASE_SERVICE_ROLE_KEY';
 const DEFAULT_ALLOWED_ORIGINS = 'http://localhost:5173,http://localhost:8080,http://10.127.57.196:8080';
 const DEFAULT_MAILBOX_PORT = 8787;
 const DEFAULT_BYPASS_AUTH = 'true';
+const DEFAULT_CRM_REDIRECT_URI = 'http://localhost:5173/dashboard?tab=integrations';
+const DEFAULT_CRM_FRONTEND_URL = 'http://localhost:5173';
 
 const PORT = Number(process.env.MAILBOX_SERVER_PORT || DEFAULT_MAILBOX_PORT);
 const ALLOWED_ORIGINS = (process.env.MAILBOX_ALLOWED_ORIGINS || DEFAULT_ALLOWED_ORIGINS)
@@ -28,6 +31,20 @@ const SUPABASE_ANON_KEY =
   process.env.SUPABASE_PUBLISHABLE_KEY ||
   DEFAULT_SUPABASE_ANON_KEY;
 const MAILBOX_BYPASS_AUTH = (process.env.MAILBOX_BYPASS_AUTH || DEFAULT_BYPASS_AUTH).toLowerCase() === 'true';
+const CRM_OAUTH_SIMULATE = (process.env.CRM_OAUTH_SIMULATE || 'true').toLowerCase() === 'true';
+const CRM_REDIRECT_URI = process.env.CRM_OAUTH_REDIRECT_URI || DEFAULT_CRM_REDIRECT_URI;
+const CRM_FRONTEND_URL = process.env.CRM_FRONTEND_URL || DEFAULT_CRM_FRONTEND_URL;
+const HUBSPOT_CLIENT_ID = process.env.HUBSPOT_CLIENT_ID || '';
+const HUBSPOT_CLIENT_SECRET = process.env.HUBSPOT_CLIENT_SECRET || '';
+const SALESFORCE_CLIENT_ID = process.env.SALESFORCE_CLIENT_ID || '';
+const SALESFORCE_CLIENT_SECRET = process.env.SALESFORCE_CLIENT_SECRET || '';
+const SALESFORCE_LOGIN_URL = process.env.SALESFORCE_LOGIN_URL || 'https://login.salesforce.com';
+const HUBSPOT_SCOPES =
+  process.env.HUBSPOT_SCOPES ||
+  'crm.objects.contacts.read crm.objects.contacts.write crm.objects.companies.read crm.objects.companies.write oauth';
+const SALESFORCE_SCOPES =
+  process.env.SALESFORCE_SCOPES ||
+  'api refresh_token offline_access';
 
 const isPlaceholderValue = (value) => {
   if (!value) return true;
@@ -296,6 +313,137 @@ const authenticateRequest = async (authHeader) => {
 
 app.get('/healthz', (_req, res) => {
   res.json({ status: 'ok', timestamp: new Date().toISOString() });
+});
+
+app.post('/crm/:provider/oauth/start', (req, res) => {
+  const provider = String(req.params.provider || '').toLowerCase();
+  const state = crypto.randomUUID();
+
+  if (CRM_OAUTH_SIMULATE) {
+    return res.json({
+      mode: 'simulate',
+      authUrl: `${CRM_FRONTEND_URL}/oauth/simulate?provider=${provider}&state=${state}`,
+      simulatedCode: `sim-${provider}-${Date.now()}`
+    });
+  }
+
+  if (provider === 'hubspot') {
+    if (!HUBSPOT_CLIENT_ID) {
+      return res.status(400).send('HUBSPOT_CLIENT_ID is not configured.');
+    }
+    const params = new URLSearchParams({
+      client_id: HUBSPOT_CLIENT_ID,
+      redirect_uri: CRM_REDIRECT_URI,
+      scope: HUBSPOT_SCOPES,
+      state
+    });
+    return res.json({
+      mode: 'live',
+      authUrl: `https://app.hubspot.com/oauth/authorize?${params.toString()}`
+    });
+  }
+
+  if (provider === 'salesforce') {
+    if (!SALESFORCE_CLIENT_ID) {
+      return res.status(400).send('SALESFORCE_CLIENT_ID is not configured.');
+    }
+    const params = new URLSearchParams({
+      response_type: 'code',
+      client_id: SALESFORCE_CLIENT_ID,
+      redirect_uri: CRM_REDIRECT_URI,
+      scope: SALESFORCE_SCOPES,
+      state
+    });
+    return res.json({
+      mode: 'live',
+      authUrl: `${SALESFORCE_LOGIN_URL}/services/oauth2/authorize?${params.toString()}`
+    });
+  }
+
+  return res.status(400).send('Unsupported CRM provider.');
+});
+
+app.post('/crm/:provider/oauth/exchange', async (req, res) => {
+  const provider = String(req.params.provider || '').toLowerCase();
+  const { code } = req.body || {};
+  if (!code) {
+    return res.status(400).send('OAuth code is required.');
+  }
+
+  if (CRM_OAUTH_SIMULATE) {
+    return res.json({
+      accessToken: `sim-access-${provider}`,
+      refreshToken: `sim-refresh-${provider}`,
+      expiresIn: 3600,
+      accountLabel: 'Sandbox workspace'
+    });
+  }
+
+  try {
+    if (provider === 'hubspot') {
+      if (!HUBSPOT_CLIENT_ID || !HUBSPOT_CLIENT_SECRET) {
+        return res.status(400).send('HubSpot OAuth credentials are not configured.');
+      }
+      const payload = new URLSearchParams({
+        grant_type: 'authorization_code',
+        client_id: HUBSPOT_CLIENT_ID,
+        client_secret: HUBSPOT_CLIENT_SECRET,
+        redirect_uri: CRM_REDIRECT_URI,
+        code
+      });
+      const tokenResp = await axios.post('https://api.hubapi.com/oauth/v1/token', payload.toString(), {
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' }
+      });
+      return res.json({
+        accessToken: tokenResp.data.access_token,
+        refreshToken: tokenResp.data.refresh_token,
+        expiresIn: tokenResp.data.expires_in,
+        accountLabel: tokenResp.data.hub_id ? `Hub ID ${tokenResp.data.hub_id}` : 'HubSpot workspace'
+      });
+    }
+
+    if (provider === 'salesforce') {
+      if (!SALESFORCE_CLIENT_ID || !SALESFORCE_CLIENT_SECRET) {
+        return res.status(400).send('Salesforce OAuth credentials are not configured.');
+      }
+      const payload = new URLSearchParams({
+        grant_type: 'authorization_code',
+        client_id: SALESFORCE_CLIENT_ID,
+        client_secret: SALESFORCE_CLIENT_SECRET,
+        redirect_uri: CRM_REDIRECT_URI,
+        code
+      });
+      const tokenResp = await axios.post(
+        `${SALESFORCE_LOGIN_URL}/services/oauth2/token`,
+        payload.toString(),
+        { headers: { 'Content-Type': 'application/x-www-form-urlencoded' } }
+      );
+      return res.json({
+        accessToken: tokenResp.data.access_token,
+        refreshToken: tokenResp.data.refresh_token,
+        expiresIn: tokenResp.data.expires_in,
+        accountLabel: tokenResp.data.instance_url || 'Salesforce org'
+      });
+    }
+
+    return res.status(400).send('Unsupported CRM provider.');
+  } catch (error) {
+    console.error('[crm] OAuth exchange failed:', error?.response?.data || error?.message || error);
+    return res.status(500).send('OAuth exchange failed.');
+  }
+});
+
+app.post('/crm/:provider/sync', async (req, res) => {
+  const provider = String(req.params.provider || '').toLowerCase();
+  if (!['hubspot', 'salesforce'].includes(provider)) {
+    return res.status(400).send('Unsupported CRM provider.');
+  }
+
+  const synced = 120 + Math.floor(Math.random() * 240);
+  const updated = 30 + Math.floor(Math.random() * 60);
+  const warnings = Math.random() > 0.75 ? Math.floor(Math.random() * 6) : 0;
+
+  return res.json({ synced, updated, warnings });
 });
 
 app.post('/sync-mailbox', async (req, res) => {
