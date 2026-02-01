@@ -1465,7 +1465,7 @@ const ProspectListManager: React.FC = () => {
         </div>
       </section>
 
-      <section className="grid gap-6 lg:grid-cols-[1.7fr_0.8fr]">
+      <section className="grid gap-6 ">
         <div className="space-y-4">
           <Card className="rounded-[24px] border-[var(--shell-border)] bg-[var(--shell-surface-strong)] shadow-[0_12px_24px_rgba(15,23,42,0.08)]">
             <CardHeader className="space-y-3 pb-4">
@@ -1658,7 +1658,7 @@ const ProspectListManager: React.FC = () => {
           )}
         </div>
 
-        <aside className="space-y-4">
+        {/* <aside className="space-y-4">
           <div className="rounded-[24px] border border-[var(--shell-border)] bg-[var(--shell-surface-strong)] p-5 shadow-[0_12px_24px_rgba(15,23,42,0.08)]">
             <div className="flex items-center gap-2 text-[11px] font-semibold uppercase tracking-[0.24em] text-[var(--shell-muted)]">
               <Sparkles className="h-3 w-3" />
@@ -1721,7 +1721,7 @@ const ProspectListManager: React.FC = () => {
               <p>Use list pages to keep navigation fast as your list count grows.</p>
             </div>
           </div>
-        </aside>
+        </aside> */}
       </section>
 
       {/* Create List Dialog */}
