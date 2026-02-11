@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { supabase } from '@/integrations/supabase/client';
 import { Button } from '@/components/ui/button';
@@ -31,6 +31,12 @@ import {
 } from 'recharts';
 import DashboardLayout from '@/components/Layout/DashboardLayout';
 import { useAuth } from '@/providers/AuthProvider';
+import PipelineBoard from '@/components/pipeline/PipelineBoard';
+import { PipelineOpportunity, PipelineStage } from '@/lib/pipeline';
+import { ensureDefaultPipeline, fetchOpportunities, fetchPipelineStages, updateOpportunity, deleteOpportunity } from '@/lib/pipelineStore';
+import { toast } from '@/hooks/use-toast';
+
+type TimelineFilter = 'all' | 'human' | 'bot' | 'opens' | 'clicks' | 'sent';
 
 const CampaignTracker = () => {
   const { id } = useParams();
@@ -43,14 +49,26 @@ const CampaignTracker = () => {
   const [statusFilter, setStatusFilter] = useState('all');
   const [recentActivity, setRecentActivity] = useState<any[]>([]);
   const [selectedRecipient, setSelectedRecipient] = useState<any>(null);
+  const [recipientTimelineEvents, setRecipientTimelineEvents] = useState<any[]>([]);
+  const [recipientTimelineLoading, setRecipientTimelineLoading] = useState(false);
+  const [timelineFilter, setTimelineFilter] = useState<TimelineFilter>('all');
   const [replies, setReplies] = useState<any[]>([]);
   const [expandedReply, setExpandedReply] = useState<string | null>(null);
+  const [selectedSequenceStep, setSelectedSequenceStep] = useState<null | {
+    title: string;
+    stepLabel: string;
+    subject: string;
+    body: string;
+  }>(null);
   const { user, loading: authLoading } = useAuth();
   const [recipientPage, setRecipientPage] = useState(1);
   const [recipientPageSize, setRecipientPageSize] = useState(100);
   const [recipientTotal, setRecipientTotal] = useState(0);
   const [analyticsRecipients, setAnalyticsRecipients] = useState<any[]>([]);
   const [analyticsLoading, setAnalyticsLoading] = useState(false);
+  const [pipelineStages, setPipelineStages] = useState<PipelineStage[]>([]);
+  const [pipelineOpportunities, setPipelineOpportunities] = useState<PipelineOpportunity[]>([]);
+  const [pipelineLoading, setPipelineLoading] = useState(false);
   const analyticsCacheRef = useRef<{ id?: string; total?: number }>({});
   const pageSizeOptions = [100, 500, 1000];
   const trimmedSearchTerm = searchTerm.trim();
@@ -77,6 +95,8 @@ const CampaignTracker = () => {
       navigate('/inbox');
     } else if (tab === 'automations') {
       navigate('/automations');
+    } else if (tab === 'pipeline') {
+      navigate('/pipeline');
     } else if (
       tab === 'contacts' ||
       tab === 'segments' ||
@@ -142,10 +162,16 @@ const CampaignTracker = () => {
   }, [id, recipientPage, recipientPageSize]);
 
   useEffect(() => {
-    if (activeTab === 'replies') {
+    if (activeTab === 'replies' || activeTab === 'pipeline') {
       fetchReplies();
     }
   }, [activeTab, id]);
+
+  useEffect(() => {
+    if (activeTab === 'pipeline') {
+      fetchPipelineData();
+    }
+  }, [activeTab, id, user]);
 
   useEffect(() => {
     if (activeTab === 'overview' || activeTab === 'analytics') {
@@ -158,6 +184,50 @@ const CampaignTracker = () => {
       fetchAnalyticsRecipients();
     }
   }, [activeTab, hasRecipientFilters, id, recipientTotal]);
+
+  useEffect(() => {
+    if (!selectedRecipient?.id) {
+      setRecipientTimelineEvents([]);
+      setRecipientTimelineLoading(false);
+      return;
+    }
+
+    let cancelled = false;
+
+    const loadTimeline = async () => {
+      setRecipientTimelineLoading(true);
+      try {
+        const { data, error } = await supabase
+          .from('tracking_events')
+          .select('id, event_type, created_at, step_number, is_bot, bot_reasons, metadata')
+          .eq('recipient_id', selectedRecipient.id)
+          .order('created_at', { ascending: true });
+
+        if (error) {
+          throw error;
+        }
+
+        if (!cancelled) {
+          setRecipientTimelineEvents(data || []);
+        }
+      } catch (error) {
+        console.error('Error fetching recipient tracking events:', error);
+        if (!cancelled) {
+          setRecipientTimelineEvents([]);
+        }
+      } finally {
+        if (!cancelled) {
+          setRecipientTimelineLoading(false);
+        }
+      }
+    };
+
+    loadTimeline();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [selectedRecipient?.id]);
 
   const fetchReplies = async () => {
     if (!id) return;
@@ -354,6 +424,322 @@ const CampaignTracker = () => {
     }
   };
 
+  const formatDateTime = (value?: string | null) =>
+    value ? format(new Date(value), 'MMM d, HH:mm') : '—';
+
+
+  const recipientTimeline = useMemo(() => {
+    if (!selectedRecipient) return [];
+
+    const events: Array<{
+      id: string;
+      label: string;
+      date: string;
+      color: string;
+      kind: 'system' | 'sent' | 'open' | 'click' | 'reply' | 'bounce';
+      step?: number;
+      details?: string;
+      isBot?: boolean;
+    }> = [];
+
+    if (campaign?.created_at) {
+      events.push({
+        id: 'campaign-added',
+        label: 'Added to Campaign',
+        date: campaign.created_at,
+        color: 'bg-blue-500',
+        kind: 'system',
+      });
+    }
+
+    const followups = (campaign?.campaign_followups || [])
+      .slice()
+      .sort((a: any, b: any) => a.step_number - b.step_number);
+
+    const sentSteps: Array<{ step: number; date: string; time: number; isEstimated: boolean }> = [];
+    if (selectedRecipient.last_email_sent_at) {
+      const currentStep = selectedRecipient.current_step ?? 0;
+      const sentMap = new Map<number, Date>();
+      sentMap.set(currentStep, new Date(selectedRecipient.last_email_sent_at));
+
+      for (let step = currentStep; step > 0; step -= 1) {
+        const followup = followups.find((item: any) => item.step_number === step);
+        if (!followup) break;
+        const delayDays = Number.isFinite(followup.delay_days) ? followup.delay_days : 0;
+        const delayHours = Number.isFinite(followup.delay_hours) ? followup.delay_hours : 0;
+        const nextSentAt = sentMap.get(step);
+        if (!nextSentAt) break;
+        const deltaMs = ((delayDays * 24) + delayHours) * 60 * 60 * 1000;
+        sentMap.set(step - 1, new Date(nextSentAt.getTime() - deltaMs));
+      }
+
+      Array.from(sentMap.entries())
+        .sort((a, b) => a[0] - b[0])
+        .forEach(([step, date]) => {
+          const iso = date.toISOString();
+          sentSteps.push({
+            step,
+            date: iso,
+            time: date.getTime(),
+            isEstimated: step !== currentStep,
+          });
+        });
+    }
+
+    sentSteps.forEach((stepEntry) => {
+      events.push({
+        id: `email-sent-${stepEntry.step}`,
+        label: `Email Sent (Step ${stepEntry.step})`,
+        date: stepEntry.date,
+        color: 'bg-blue-500',
+        kind: 'sent',
+        step: stepEntry.step,
+      });
+    });
+
+    const resolveStepFromTime = (date: string) => {
+      if (sentSteps.length === 0) return null;
+      const eventTime = new Date(date).getTime();
+      let resolvedStep = sentSteps[0].step;
+      sentSteps.forEach((stepEntry) => {
+        if (eventTime >= stepEntry.time) {
+          resolvedStep = stepEntry.step;
+        }
+      });
+      return resolvedStep;
+    };
+
+    recipientTimelineEvents.forEach((event) => {
+      if (!event?.created_at) return;
+
+      const explicitStep = Number.isFinite(event.step_number) ? event.step_number : null;
+      const resolvedStep = explicitStep ?? resolveStepFromTime(event.created_at);
+      const stepLabel = resolvedStep !== null ? `Step ${resolvedStep}` : null;
+      const isBot = !!event.is_bot;
+      const baseLabel = event.event_type === 'open'
+        ? (isBot ? 'Bot Opened' : 'Email Opened')
+        : (isBot ? 'Bot Clicked' : 'Link Clicked');
+      const label = stepLabel ? `${baseLabel} (${stepLabel})` : baseLabel;
+      const color = event.event_type === 'open'
+        ? (isBot ? 'bg-slate-400' : 'bg-green-500')
+        : (isBot ? 'bg-slate-400' : 'bg-purple-500');
+      const detailParts: string[] = [];
+
+      if (event.event_type === 'click' && event.metadata && typeof event.metadata === 'object') {
+        const targetUrl = (event.metadata as any).target_url;
+        if (typeof targetUrl === 'string') {
+          let displayTarget = targetUrl;
+          try {
+            displayTarget = new URL(targetUrl).hostname || targetUrl;
+          } catch (_) {
+            displayTarget = targetUrl;
+          }
+          detailParts.push(`Target: ${displayTarget}`);
+        }
+      }
+
+      if (isBot && Array.isArray(event.bot_reasons) && event.bot_reasons.length > 0) {
+        detailParts.push(`Reasons: ${event.bot_reasons.join(', ')}`);
+      }
+
+      const details = detailParts.length > 0 ? detailParts.join(' • ') : undefined;
+
+      events.push({
+        id: event.id,
+        label,
+        date: event.created_at,
+        color,
+        kind: event.event_type,
+        step: resolvedStep ?? undefined,
+        details,
+        isBot,
+      });
+    });
+
+    if (selectedRecipient.replied) {
+      const replyDate = selectedRecipient.updated_at || selectedRecipient.last_email_sent_at;
+      if (replyDate) {
+        events.push({
+          id: 'replied',
+          label: 'Replied',
+          date: replyDate,
+          color: 'bg-yellow-500',
+          kind: 'reply',
+        });
+      }
+    }
+
+    if (selectedRecipient.bounced) {
+      const bounceDate = selectedRecipient.bounced_at || selectedRecipient.last_email_sent_at;
+      if (bounceDate) {
+        events.push({
+          id: 'bounced',
+          label: 'Bounced',
+          date: bounceDate,
+          color: 'bg-rose-500',
+          kind: 'bounce',
+        });
+      }
+    }
+
+    return events.sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime());
+  }, [campaign, recipientTimelineEvents, selectedRecipient]);
+
+  const filteredTimeline = useMemo(() => {
+    if (timelineFilter === 'all') return recipientTimeline;
+    if (timelineFilter === 'human') return recipientTimeline.filter((event) => !event.isBot);
+    if (timelineFilter === 'bot') return recipientTimeline.filter((event) => event.isBot);
+    if (timelineFilter === 'opens') return recipientTimeline.filter((event) => event.kind === 'open');
+    if (timelineFilter === 'clicks') return recipientTimeline.filter((event) => event.kind === 'click');
+    if (timelineFilter === 'sent') return recipientTimeline.filter((event) => event.kind === 'sent');
+    return recipientTimeline;
+  }, [recipientTimeline, timelineFilter]);
+
+
+  const fetchPipelineData = async () => {
+    if (!user || !id) return;
+    setPipelineLoading(true);
+    try {
+      let pipelineId: string | null = null;
+      const { data: settingsData, error: settingsError } = await supabase
+        .from('campaign_pipeline_settings')
+        .select('pipeline_id')
+        .eq('campaign_id', id)
+        .limit(1);
+
+      if (settingsError) {
+        console.error('Error fetching pipeline settings:', settingsError);
+      }
+
+      if (settingsData && settingsData[0]?.pipeline_id) {
+        pipelineId = settingsData[0].pipeline_id;
+      } else {
+        const { pipeline } = await ensureDefaultPipeline(user.id);
+        pipelineId = pipeline.id;
+      }
+
+      if (!pipelineId) {
+        setPipelineStages([]);
+        setPipelineOpportunities([]);
+        return;
+      }
+
+      const stageRows = await fetchPipelineStages(pipelineId);
+      const mappedStages: PipelineStage[] = stageRows.map((stage) => ({
+        id: stage.id,
+        name: stage.name,
+        description: stage.description || '',
+        tone: (stage.tone as PipelineStage['tone']) || 'slate',
+        isWon: stage.is_won,
+        isLost: stage.is_lost,
+      }));
+      setPipelineStages(mappedStages);
+
+      const opportunities = await fetchOpportunities({ userId: user.id, pipelineId, campaignId: id });
+      const mappedOpportunities: PipelineOpportunity[] = opportunities.map((opp) => {
+        const value = typeof opp.value === 'number' ? opp.value : (opp.value ? Number(opp.value) : undefined);
+        return {
+          id: opp.id,
+          contactName: opp.contact_name || opp.contact_email || 'Unknown',
+          company: opp.company || '',
+          email: opp.contact_email || '',
+          owner: opp.owner || 'Unassigned',
+          value,
+          stageId: opp.stage_id || '',
+          status: (opp.status as PipelineOpportunity['status']) || 'open',
+          lastActivityAt: opp.last_activity_at,
+          nextStep: opp.next_step || '',
+          campaignId: opp.campaign_id || id || null,
+          sourceCampaign: opp.campaigns?.name || campaign?.name,
+        };
+      });
+      setPipelineOpportunities(mappedOpportunities);
+    } catch (error) {
+      console.error('Error fetching pipeline data:', error);
+    } finally {
+      setPipelineLoading(false);
+    }
+  };
+
+  const handleMovePipelineOpportunity = async (opportunityId: string, stageId: string) => {
+    const stage = pipelineStages.find((item) => item.id === stageId);
+    if (!stage) return;
+    const previous = pipelineOpportunities.find((opp) => opp.id === opportunityId);
+    if (!previous) return;
+
+    const status = stage.isWon ? 'won' : stage.isLost ? 'lost' : 'open';
+    const optimistic: PipelineOpportunity = {
+      ...previous,
+      stageId,
+      status: status as PipelineOpportunity['status'],
+      lastActivityAt: new Date().toISOString(),
+    };
+    setPipelineOpportunities((prev) => prev.map((opp) => opp.id === opportunityId ? optimistic : opp));
+
+    try {
+      const updated = await updateOpportunity(opportunityId, {
+        stageId,
+        status,
+        lastActivityAt: new Date().toISOString(),
+      });
+      const mapped: PipelineOpportunity = {
+        ...optimistic,
+        stageId: updated.stage_id || stageId,
+        status: (updated.status as PipelineOpportunity['status']) || status,
+        lastActivityAt: updated.last_activity_at,
+        sourceCampaign: updated.campaigns?.name || optimistic.sourceCampaign,
+      };
+      setPipelineOpportunities((prev) => prev.map((opp) => opp.id === opportunityId ? mapped : opp));
+    } catch (error) {
+      console.error('Failed to move pipeline opportunity', error);
+      setPipelineOpportunities((prev) => prev.map((opp) => opp.id === opportunityId ? previous : opp));
+      toast({
+        title: 'Move failed',
+        description: 'Could not update the stage. Please try again.',
+        variant: 'destructive',
+      });
+    }
+  };
+
+  const handleRemovePipelineOpportunity = async (opportunity: PipelineOpportunity) => {
+    try {
+      await deleteOpportunity(opportunity.id);
+      setPipelineOpportunities((prev) => prev.filter((item) => item.id !== opportunity.id));
+      const label = opportunity.contactName || opportunity.email || 'Opportunity';
+      toast({
+        title: 'Opportunity removed',
+        description: `${label} removed from the pipeline.`,
+      });
+    } catch (error) {
+      console.error('Failed to remove pipeline opportunity', error);
+      toast({
+        title: 'Remove failed',
+        description: 'Could not remove this opportunity. Please try again.',
+        variant: 'destructive',
+      });
+    }
+  };
+
+  const renderEmailBody = (body?: string) => {
+    if (!body) {
+      return <div className="text-sm text-slate-500 italic">No email content available.</div>;
+    }
+    const looksLikeHtml = /<\/?[a-z][\s\S]*>/i.test(body);
+    if (looksLikeHtml) {
+      return (
+        <div
+          className="prose prose-sm max-w-none bg-white p-4 rounded border shadow-sm"
+          dangerouslySetInnerHTML={{ __html: body }}
+        />
+      );
+    }
+    return (
+      <div className="whitespace-pre-wrap text-sm text-slate-700 bg-white p-4 rounded border shadow-sm">
+        {body}
+      </div>
+    );
+  };
+
   const getPaginationItems = (page: number, total: number) => {
     const pages = new Set<number>([1, total, page, page - 1, page + 1]);
     const sorted = Array.from(pages)
@@ -499,6 +885,7 @@ const CampaignTracker = () => {
     });
     return stats;
   }, [analyticsRecipients, recipients]);
+
 
   const timelineData = React.useMemo(() => {
     const source = analyticsRecipients.length > 0 ? analyticsRecipients : recipients;
@@ -862,6 +1249,9 @@ const CampaignTracker = () => {
             </TabsTrigger>
             <TabsTrigger value="replies" className="rounded-full px-4 py-2 text-sm font-semibold text-slate-600 data-[state=active]:bg-white data-[state=active]:text-slate-900 data-[state=active]:shadow">
               Replies <Badge variant="secondary" className="ml-2 bg-white/70 text-slate-600">{stats.replies.toLocaleString()}</Badge>
+            </TabsTrigger>
+            <TabsTrigger value="pipeline" className="rounded-full px-4 py-2 text-sm font-semibold text-slate-600 data-[state=active]:bg-white data-[state=active]:text-slate-900 data-[state=active]:shadow">
+              Pipeline <Badge variant="secondary" className="ml-2 bg-white/70 text-slate-600">{pipelineOpportunities.length}</Badge>
             </TabsTrigger>
             <TabsTrigger value="sequence" className="rounded-full px-4 py-2 text-sm font-semibold text-slate-600 data-[state=active]:bg-white data-[state=active]:text-slate-900 data-[state=active]:shadow">Sequence</TabsTrigger>
           </TabsList>
@@ -1393,6 +1783,60 @@ const CampaignTracker = () => {
               </CardContent>
             </Card>
           </TabsContent>
+          {/* PIPELINE TAB */}
+          <TabsContent value="pipeline" className="space-y-6">
+            <div className="flex flex-wrap items-start justify-between gap-3">
+              <div>
+                <h3 className="text-lg font-semibold text-[var(--shell-ink)]">Pipeline from campaign replies</h3>
+                <p className="text-sm text-[var(--shell-muted)]">
+                  Replies that signal intent should move into qualified stages.
+                </p>
+              </div>
+              <Button
+                variant="outline"
+                className="border-[var(--shell-border)] bg-white/80"
+                onClick={() => navigate('/pipeline')}
+              >
+                View full pipeline
+              </Button>
+            </div>
+
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+              <Card className="border border-[var(--shell-border)] bg-[var(--shell-surface-strong)]/90 shadow-[0_12px_24px_rgba(15,23,42,0.08)]">
+                <CardContent className="p-5">
+                  <p className="text-xs font-semibold uppercase tracking-wide text-[var(--shell-muted)]">Replies captured</p>
+                  <p className="mt-2 text-2xl font-semibold text-[var(--shell-ink)]">{pipelineOpportunities.length}</p>
+                  <p className="mt-1 text-xs text-[var(--shell-muted)]">Ready for qualification</p>
+                </CardContent>
+              </Card>
+              <Card className="border border-[var(--shell-border)] bg-[var(--shell-surface-strong)]/90 shadow-[0_12px_24px_rgba(15,23,42,0.08)]">
+                <CardContent className="p-5">
+                  <p className="text-xs font-semibold uppercase tracking-wide text-[var(--shell-muted)]">Next steps set</p>
+                  <p className="mt-2 text-2xl font-semibold text-[var(--shell-ink)]">
+                    {pipelineOpportunities.filter((opp) => !!opp.nextStep).length}
+                  </p>
+                  <p className="mt-1 text-xs text-[var(--shell-muted)]">Keep momentum with tasks</p>
+                </CardContent>
+              </Card>
+              <Card className="border border-[var(--shell-border)] bg-[var(--shell-surface-strong)]/90 shadow-[0_12px_24px_rgba(15,23,42,0.08)]">
+                <CardContent className="p-5">
+                  <p className="text-xs font-semibold uppercase tracking-wide text-[var(--shell-muted)]">Meetings booked</p>
+                  <p className="mt-2 text-2xl font-semibold text-[var(--shell-ink)]">0</p>
+                  <p className="mt-1 text-xs text-[var(--shell-muted)]">Sync calendar in V2</p>
+                </CardContent>
+              </Card>
+            </div>
+
+            <PipelineBoard
+              stages={pipelineStages}
+              opportunities={pipelineOpportunities}
+              emptyLabel={pipelineLoading
+                ? "Loading pipeline..."
+                : "No opportunities yet. Use the Inbox to classify replies into pipeline stages."}
+              onMoveOpportunity={handleMovePipelineOpportunity}
+              onRemoveOpportunity={handleRemovePipelineOpportunity}
+            />
+          </TabsContent>
           {/* SEQUENCE TAB */}
           <TabsContent value="sequence">
             <Card className="border border-[var(--shell-border)] bg-[var(--shell-surface-strong)]/95 shadow-[0_12px_30px_rgba(15,23,42,0.08)]">
@@ -1407,7 +1851,28 @@ const CampaignTracker = () => {
                     <div className="absolute -left-[29px] top-0 h-8 w-8 rounded-full bg-blue-600 text-white flex items-center justify-center font-bold text-sm ring-4 ring-white">
                       1
                     </div>
-                    <Card className="border border-[var(--shell-border)] bg-white/95 shadow-sm">
+                    <Card
+                      className="border border-[var(--shell-border)] bg-white/95 shadow-sm transition hover:shadow-md cursor-pointer"
+                      role="button"
+                      tabIndex={0}
+                      onClick={() => setSelectedSequenceStep({
+                        title: 'Initial Email',
+                        stepLabel: 'Step 0',
+                        subject: campaign.subject,
+                        body: campaign.body
+                      })}
+                      onKeyDown={(event) => {
+                        if (event.key === 'Enter' || event.key === ' ') {
+                          event.preventDefault();
+                          setSelectedSequenceStep({
+                            title: 'Initial Email',
+                            stepLabel: 'Step 0',
+                            subject: campaign.subject,
+                            body: campaign.body
+                          });
+                        }
+                      }}
+                    >
                       <CardHeader className="pb-2">
                         <div className="flex justify-between">
                           <CardTitle className="text-base">Initial Email</CardTitle>
@@ -1435,7 +1900,28 @@ const CampaignTracker = () => {
                         <span>Wait {step.delay_days} days, {step.delay_hours} hours</span>
                       </div>
 
-                      <Card className="border border-[var(--shell-border)] bg-white/95 shadow-sm">
+                      <Card
+                        className="border border-[var(--shell-border)] bg-white/95 shadow-sm transition hover:shadow-md cursor-pointer"
+                        role="button"
+                        tabIndex={0}
+                        onClick={() => setSelectedSequenceStep({
+                          title: `Follow-up ${index + 1}`,
+                          stepLabel: `Step ${step.step_number}`,
+                          subject: step.subject || `Re: ${campaign.subject}`,
+                          body: step.body
+                        })}
+                        onKeyDown={(event) => {
+                          if (event.key === 'Enter' || event.key === ' ') {
+                            event.preventDefault();
+                            setSelectedSequenceStep({
+                              title: `Follow-up ${index + 1}`,
+                              stepLabel: `Step ${step.step_number}`,
+                              subject: step.subject || `Re: ${campaign.subject}`,
+                              body: step.body
+                            });
+                          }
+                        }}
+                      >
                         <CardHeader className="pb-2">
                           <div className="flex justify-between">
                             <CardTitle className="text-base">Follow-up {index + 1}</CardTitle>
@@ -1460,90 +1946,114 @@ const CampaignTracker = () => {
         </Tabs>
       </div>
 
+      {/* Sequence Step Details Dialog */}
+      <Dialog open={!!selectedSequenceStep} onOpenChange={(open) => !open && setSelectedSequenceStep(null)}>
+        <DialogContent className="max-w-3xl border border-[var(--shell-border)] bg-white/95">
+          <DialogHeader>
+            <DialogTitle>{selectedSequenceStep?.title}</DialogTitle>
+            <DialogDescription>{selectedSequenceStep?.stepLabel}</DialogDescription>
+          </DialogHeader>
+          <div className="space-y-4">
+            <div className="text-sm font-medium text-slate-700">
+              Subject: {selectedSequenceStep?.subject || 'No subject'}
+            </div>
+            <ScrollArea className="h-[60vh] pr-4">
+              {renderEmailBody(selectedSequenceStep?.body)}
+            </ScrollArea>
+          </div>
+        </DialogContent>
+      </Dialog>
+
       {/* Recipient Details Dialog */}
       <Dialog open={!!selectedRecipient} onOpenChange={(open) => !open && setSelectedRecipient(null)}>
-      <DialogContent className="max-w-2xl border border-[var(--shell-border)] bg-white/95">
-          <DialogHeader>
-            <DialogTitle>Recipient Details</DialogTitle>
-            <DialogDescription>
-              Detailed history for {selectedRecipient?.email}
-            </DialogDescription>
+      <DialogContent className="max-w-4xl border border-[var(--shell-border)] bg-white/95">
+          <DialogHeader className="space-y-3">
+            <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+              <div>
+                <DialogTitle>Recipient Details</DialogTitle>
+                <DialogDescription>
+                  Detailed history for {selectedRecipient?.email}
+                </DialogDescription>
+              </div>
+              {selectedRecipient && (
+                <div className="flex flex-wrap items-center gap-2">
+                  <Badge className={`border ${getStatusColor(selectedRecipient.status || 'sent')}`}>
+                    {selectedRecipient.status || 'sent'}
+                  </Badge>
+                  <Badge variant="secondary" className="bg-slate-100 text-slate-700">
+                    Step {selectedRecipient.current_step ?? 0}
+                  </Badge>
+                </div>
+              )}
+            </div>
           </DialogHeader>
           
           {selectedRecipient && (
-            <div className="space-y-6">
-              <div className="grid grid-cols-2 gap-4">
-                <div className="bg-gray-50 p-3 rounded-lg">
-                  <p className="text-xs text-gray-500">Status</p>
-                  <p className="font-medium capitalize">{selectedRecipient.status}</p>
-                </div>
-                <div className="bg-gray-50 p-3 rounded-lg">
-                  <p className="text-xs text-gray-500">Current Step</p>
-                  <p className="font-medium">Step {selectedRecipient.current_step ?? 0}</p>
-                </div>
-                <div className="bg-gray-50 p-3 rounded-lg">
-                  <p className="text-xs text-gray-500">Last Sent</p>
-                  <p className="font-medium">
-                    {selectedRecipient.last_email_sent_at 
-                      ? format(new Date(selectedRecipient.last_email_sent_at), 'MMM d, HH:mm') 
-                      : 'Never'}
-                  </p>
-                </div>
-                <div className="bg-gray-50 p-3 rounded-lg">
-                  <p className="text-xs text-gray-500">Engagement</p>
-                  <div className="flex gap-2 mt-1">
-                    {selectedRecipient.opened_at && <Badge variant="secondary" className="bg-green-100 text-green-700">Opened</Badge>}
-                    {selectedRecipient.clicked_at && <Badge variant="secondary" className="bg-purple-100 text-purple-700">Clicked</Badge>}
-                    {selectedRecipient.replied && <Badge variant="secondary" className="bg-yellow-100 text-yellow-700">Replied</Badge>}
-                    {!selectedRecipient.opened_at && !selectedRecipient.clicked_at && !selectedRecipient.replied && <span className="text-sm text-gray-400">No engagement yet</span>}
+            <Card className="border border-[var(--shell-border)] bg-[var(--shell-surface-strong)]/95 shadow-[0_10px_24px_rgba(15,23,42,0.08)]">
+              <CardHeader className="pb-3">
+                <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+                  <div>
+                    <CardTitle className="text-base font-semibold text-[var(--shell-ink)]">Timeline</CardTitle>
+                    <CardDescription className="text-sm text-[var(--shell-muted)]">
+                      Chronological activity with step context and bot labels.
+                    </CardDescription>
+                  </div>
+                  <div className="flex flex-wrap gap-2">
+                    {([
+                      { id: 'all', label: 'All' },
+                      { id: 'human', label: 'Human' },
+                      { id: 'bot', label: 'Bots' },
+                      { id: 'opens', label: 'Opens' },
+                      { id: 'clicks', label: 'Clicks' },
+                      { id: 'sent', label: 'Sent' },
+                    ] as const).map((option) => (
+                      <Button
+                        key={option.id}
+                        size="sm"
+                        variant={timelineFilter === option.id ? 'default' : 'outline'}
+                        className="h-8 px-3 text-xs"
+                        onClick={() => setTimelineFilter(option.id)}
+                      >
+                        {option.label}
+                      </Button>
+                    ))}
                   </div>
                 </div>
-              </div>
-
-              <div>
-                <h4 className="text-sm font-medium mb-3">Timeline</h4>
-                <div className="relative pl-4 border-l-2 border-gray-200 space-y-6">
-                  {/* Timeline events would go here - for now we simulate based on fields */}
-                  <div className="relative">
-                    <div className="absolute -left-[21px] top-0 h-4 w-4 rounded-full bg-blue-500 border-2 border-white"></div>
-                    <p className="text-sm font-medium">Added to Campaign</p>
-                    <p className="text-xs text-gray-500">{format(new Date(campaign.created_at), 'MMM d, HH:mm')}</p>
-                  </div>
-                  
-                  {selectedRecipient.last_email_sent_at && (
-                    <div className="relative">
-                      <div className="absolute -left-[21px] top-0 h-4 w-4 rounded-full bg-blue-500 border-2 border-white"></div>
-                      <p className="text-sm font-medium">Email Sent (Step {selectedRecipient.current_step})</p>
-                      <p className="text-xs text-gray-500">{format(new Date(selectedRecipient.last_email_sent_at), 'MMM d, HH:mm')}</p>
-                    </div>
-                  )}
-
-                  {selectedRecipient.opened_at && (
-                    <div className="relative">
-                      <div className="absolute -left-[21px] top-0 h-4 w-4 rounded-full bg-green-500 border-2 border-white"></div>
-                      <p className="text-sm font-medium">Email Opened</p>
-                      <p className="text-xs text-gray-500">{format(new Date(selectedRecipient.opened_at), 'MMM d, HH:mm')}</p>
-                    </div>
-                  )}
-
-                  {selectedRecipient.clicked_at && (
-                    <div className="relative">
-                      <div className="absolute -left-[21px] top-0 h-4 w-4 rounded-full bg-purple-500 border-2 border-white"></div>
-                      <p className="text-sm font-medium">Link Clicked</p>
-                      <p className="text-xs text-gray-500">{format(new Date(selectedRecipient.clicked_at), 'MMM d, HH:mm')}</p>
-                    </div>
-                  )}
-                  
-                  {selectedRecipient.replied && (
-                    <div className="relative">
-                      <div className="absolute -left-[21px] top-0 h-4 w-4 rounded-full bg-yellow-500 border-2 border-white"></div>
-                      <p className="text-sm font-medium">Replied</p>
-                      <p className="text-xs text-gray-500">Detected via inbox sync</p>
-                    </div>
-                  )}
+                <div className="mt-2 flex items-center gap-2 text-xs text-slate-500">
+                  <Activity className="h-3 w-3" />
+                  {filteredTimeline.length} events shown
                 </div>
-              </div>
-            </div>
+              </CardHeader>
+              <CardContent>
+                {recipientTimelineLoading ? (
+                  <div className="text-sm text-slate-500">Loading timeline...</div>
+                ) : filteredTimeline.length === 0 ? (
+                  <div className="text-sm text-slate-400">No activity for this filter.</div>
+                ) : (
+                  <ScrollArea className="h-[520px] pr-4">
+                    <div className="relative space-y-6 border-l-2 border-gray-200 pl-4">
+                      {filteredTimeline.map((event) => (
+                        <div key={event.id} className="relative">
+                          <div className={`absolute -left-[21px] top-0 h-4 w-4 rounded-full ${event.color} border-2 border-white`}></div>
+                          <div className="flex flex-wrap items-center gap-2">
+                            <p className="text-sm font-medium">{event.label}</p>
+                            {event.isBot && (
+                              <Badge variant="secondary" className="bg-slate-100 text-slate-600">
+                                Bot
+                              </Badge>
+                            )}
+                          </div>
+                          <p className="text-xs text-gray-500">{formatDateTime(event.date)}</p>
+                          {event.details && (
+                            <p className="mt-1 text-xs text-slate-500">{event.details}</p>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                  </ScrollArea>
+                )}
+              </CardContent>
+            </Card>
           )}
         </DialogContent>
       </Dialog>

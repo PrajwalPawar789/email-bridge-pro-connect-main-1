@@ -119,9 +119,81 @@ export type Database = {
           },
         ]
       }
+      campaign_pipeline_settings: {
+        Row: {
+          campaign_id: string
+          created_at: string | null
+          create_on: string
+          enabled: boolean
+          fixed_owner: string | null
+          id: string
+          initial_stage_id: string | null
+          initial_stage_template_id: string | null
+          owner_rule: string
+          pipeline_id: string | null
+          stop_on_interested: boolean
+          stop_on_not_interested: boolean
+          updated_at: string | null
+        }
+        Insert: {
+          campaign_id: string
+          created_at?: string | null
+          create_on?: string
+          enabled?: boolean
+          fixed_owner?: string | null
+          id?: string
+          initial_stage_id?: string | null
+          initial_stage_template_id?: string | null
+          owner_rule?: string
+          pipeline_id?: string | null
+          stop_on_interested?: boolean
+          stop_on_not_interested?: boolean
+          updated_at?: string | null
+        }
+        Update: {
+          campaign_id?: string
+          created_at?: string | null
+          create_on?: string
+          enabled?: boolean
+          fixed_owner?: string | null
+          id?: string
+          initial_stage_id?: string | null
+          initial_stage_template_id?: string | null
+          owner_rule?: string
+          pipeline_id?: string | null
+          stop_on_interested?: boolean
+          stop_on_not_interested?: boolean
+          updated_at?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "campaign_pipeline_settings_campaign_id_fkey"
+            columns: ["campaign_id"]
+            isOneToOne: true
+            referencedRelation: "campaigns"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "campaign_pipeline_settings_initial_stage_id_fkey"
+            columns: ["initial_stage_id"]
+            isOneToOne: false
+            referencedRelation: "pipeline_stages"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "campaign_pipeline_settings_pipeline_id_fkey"
+            columns: ["pipeline_id"]
+            isOneToOne: false
+            referencedRelation: "pipelines"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       campaigns: {
         Row: {
           batch_size: number | null
+          bot_click_count: number | null
+          bot_open_count: number | null
           body: string
           clicked_count: number | null
           created_at: string | null
@@ -146,6 +218,8 @@ export type Database = {
         }
         Insert: {
           batch_size?: number | null
+          bot_click_count?: number | null
+          bot_open_count?: number | null
           body?: string
           clicked_count?: number | null
           created_at?: string | null
@@ -170,6 +244,8 @@ export type Database = {
         }
         Update: {
           batch_size?: number | null
+          bot_click_count?: number | null
+          bot_open_count?: number | null
           body?: string
           clicked_count?: number | null
           created_at?: string | null
@@ -452,6 +528,165 @@ export type Database = {
         }
         Relationships: []
       }
+      opportunities: {
+        Row: {
+          campaign_id: string | null
+          company: string | null
+          contact_email: string | null
+          contact_name: string | null
+          created_at: string | null
+          id: string
+          last_activity_at: string
+          next_step: string | null
+          owner: string | null
+          pipeline_id: string
+          stage_id: string | null
+          status: string
+          updated_at: string | null
+          user_id: string
+          value: number | null
+        }
+        Insert: {
+          campaign_id?: string | null
+          company?: string | null
+          contact_email?: string | null
+          contact_name?: string | null
+          created_at?: string | null
+          id?: string
+          last_activity_at?: string
+          next_step?: string | null
+          owner?: string | null
+          pipeline_id: string
+          stage_id?: string | null
+          status?: string
+          updated_at?: string | null
+          user_id: string
+          value?: number | null
+        }
+        Update: {
+          campaign_id?: string | null
+          company?: string | null
+          contact_email?: string | null
+          contact_name?: string | null
+          created_at?: string | null
+          id?: string
+          last_activity_at?: string
+          next_step?: string | null
+          owner?: string | null
+          pipeline_id?: string
+          stage_id?: string | null
+          status?: string
+          updated_at?: string | null
+          user_id?: string
+          value?: number | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "opportunities_campaign_id_fkey"
+            columns: ["campaign_id"]
+            isOneToOne: false
+            referencedRelation: "campaigns"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "opportunities_pipeline_id_fkey"
+            columns: ["pipeline_id"]
+            isOneToOne: false
+            referencedRelation: "pipelines"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "opportunities_stage_id_fkey"
+            columns: ["stage_id"]
+            isOneToOne: false
+            referencedRelation: "pipeline_stages"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      pipeline_stages: {
+        Row: {
+          created_at: string | null
+          description: string | null
+          id: string
+          is_lost: boolean
+          is_won: boolean
+          name: string
+          pipeline_id: string
+          sort_order: number
+          template_stage_id: string | null
+          tone: string | null
+          updated_at: string | null
+        }
+        Insert: {
+          created_at?: string | null
+          description?: string | null
+          id?: string
+          is_lost?: boolean
+          is_won?: boolean
+          name: string
+          pipeline_id: string
+          sort_order: number
+          template_stage_id?: string | null
+          tone?: string | null
+          updated_at?: string | null
+        }
+        Update: {
+          created_at?: string | null
+          description?: string | null
+          id?: string
+          is_lost?: boolean
+          is_won?: boolean
+          name?: string
+          pipeline_id?: string
+          sort_order?: number
+          template_stage_id?: string | null
+          tone?: string | null
+          updated_at?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "pipeline_stages_pipeline_id_fkey"
+            columns: ["pipeline_id"]
+            isOneToOne: false
+            referencedRelation: "pipelines"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      pipelines: {
+        Row: {
+          created_at: string | null
+          description: string | null
+          id: string
+          is_default: boolean
+          name: string
+          template_id: string | null
+          updated_at: string | null
+          user_id: string
+        }
+        Insert: {
+          created_at?: string | null
+          description?: string | null
+          id?: string
+          is_default?: boolean
+          name: string
+          template_id?: string | null
+          updated_at?: string | null
+          user_id: string
+        }
+        Update: {
+          created_at?: string | null
+          description?: string | null
+          id?: string
+          is_default?: boolean
+          name?: string
+          template_id?: string | null
+          updated_at?: string | null
+          user_id?: string
+        }
+        Relationships: []
+      }
       prospects: {
         Row: {
           company: string | null
@@ -614,6 +849,66 @@ export type Database = {
           username?: string
         }
         Relationships: []
+      }
+      tracking_events: {
+        Row: {
+          id: string
+          campaign_id: string | null
+          recipient_id: string | null
+          event_type: string
+          created_at: string | null
+          user_agent: string | null
+          ip_address: string | null
+          is_bot: boolean | null
+          bot_score: number | null
+          bot_reasons: string[] | null
+          metadata: Json | null
+          step_number: number | null
+        }
+        Insert: {
+          id?: string
+          campaign_id?: string | null
+          recipient_id?: string | null
+          event_type: string
+          created_at?: string | null
+          user_agent?: string | null
+          ip_address?: string | null
+          is_bot?: boolean | null
+          bot_score?: number | null
+          bot_reasons?: string[] | null
+          metadata?: Json | null
+          step_number?: number | null
+        }
+        Update: {
+          id?: string
+          campaign_id?: string | null
+          recipient_id?: string | null
+          event_type?: string
+          created_at?: string | null
+          user_agent?: string | null
+          ip_address?: string | null
+          is_bot?: boolean | null
+          bot_score?: number | null
+          bot_reasons?: string[] | null
+          metadata?: Json | null
+          step_number?: number | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "tracking_events_campaign_id_fkey"
+            columns: ["campaign_id"]
+            isOneToOne: false
+            referencedRelation: "campaigns"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "tracking_events_recipient_id_fkey"
+            columns: ["recipient_id"]
+            isOneToOne: false
+            referencedRelation: "recipients"
+            referencedColumns: ["id"]
+          },
+        ]
       }
     }
     Views: {

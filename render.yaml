@@ -1,0 +1,37 @@
+services:
+  - type: web
+    name: vais-pro-mailbox
+    runtime: node
+    buildCommand: npm ci
+    startCommand: node server/mailbox-sync-server.js
+    healthCheckPath: /healthz
+    autoDeploy: true
+    envVars:
+      - key: SUPABASE_URL
+        sync: false
+      - key: SUPABASE_SERVICE_ROLE_KEY
+        sync: false
+      - key: SUPABASE_ANON_KEY
+        sync: false
+      - key: MAILBOX_ADMIN_SECRET
+        sync: false
+      - key: MAILBOX_BYPASS_AUTH
+        value: "false"
+      - key: MAILBOX_ALLOWED_ORIGINS
+        sync: false
+      - key: CRM_FRONTEND_URL
+        sync: false
+      - key: CRM_OAUTH_REDIRECT_URI
+        sync: false
+      - key: CRM_OAUTH_SIMULATE
+        value: "false"
+      - key: HUBSPOT_CLIENT_ID
+        sync: false
+      - key: HUBSPOT_CLIENT_SECRET
+        sync: false
+      - key: SALESFORCE_CLIENT_ID
+        sync: false
+      - key: SALESFORCE_CLIENT_SECRET
+        sync: false
+      - key: SALESFORCE_LOGIN_URL
+        sync: false

@@ -9,6 +9,7 @@ interface DashboardLayoutProps {
   onTabChange: (tab: string) => void;
   user: any;
   onLogout: () => void;
+  contentClassName?: string;
 }
 
 const SIDEBAR_COLLAPSE_STORAGE_KEY = 'dashboard:sidebar-collapsed';
@@ -18,7 +19,8 @@ const DashboardLayout = ({
   activeTab, 
   onTabChange, 
   user, 
-  onLogout 
+  onLogout,
+  contentClassName
 }: DashboardLayoutProps) => {
   const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(() => {
     if (typeof window === 'undefined') return false;
@@ -77,7 +79,7 @@ const DashboardLayout = ({
         "pt-16 min-h-screen transition-all duration-300",
         isSidebarCollapsed ? "pl-20" : "pl-64"
       )}>
-        <div className="p-8 max-w-7xl mx-auto">
+        <div className={cn("p-8 max-w-7xl mx-auto", contentClassName)}>
           {children}
         </div>
       </main>

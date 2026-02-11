@@ -96,6 +96,10 @@ const Dashboard = () => {
       navigate('/automations');
       return;
     }
+    if (tab === 'pipeline') {
+      navigate('/pipeline');
+      return;
+    }
 
     setActiveTab(tab);
     if (tab === 'home') {

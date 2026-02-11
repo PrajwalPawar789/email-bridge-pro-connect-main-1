@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html>
+<html lang="en">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
@@ -47,10 +47,25 @@
     @media screen and (max-width: 600px) {
       .header, .content { padding: 24px; }
       h1 { font-size: 20px; }
+      .btn-primary { width: 100% !important; box-sizing: border-box; text-align: center; }
     }
+
+    /* Dark mode support for modern clients */
+    @media (prefers-color-scheme: dark) {
+      body { background-color: #0b1220; color: #e6eef6; }
+      .main-table { background-color: #071022; border-color: #172033; }
+      .content p { color: #cbd5e1; }
+      .footer { color: #94a3b8; }
+    }
+
+    /* Preheader hidden for inbox preview */
+    .preheader { display:none !important; visibility:hidden; opacity:0; color:transparent; height:0; width:0; max-height:0; max-width:0; overflow:hidden; mso-hide:all; }
   </style>
 </head>
 <body>
+
+  <!-- Preheader: short summary shown in inbox previews -->
+  <div class="preheader">Confirm your EmailBridge account to start sending and tracking outreach securely.</div>
 
   <div class="wrapper">
     <br><br>
@@ -93,24 +108,38 @@
       </tr>
 
       <tr>
-        <td class="content">
-          <h1>Confirm your signup</h1>
-          <p>Welcome to EmailBridge! We're excited to help you launch and monitor your outreach campaigns.</p>
-          <p>Please follow the link below to verify your email address and activate your account.</p>
-          
-          <table width="100%" border="0" cellspacing="0" cellpadding="0">
+        <td class="content" role="article" aria-labelledby="email-heading">
+          <h1 id="email-heading">Confirm your signup</h1>
+          <p>Welcome to EmailBridge — we've sent this email to verify your address and secure your account.</p>
+          <p>Please click the button below to verify your email and finish setting up your account.</p>
+
+          <!-- Bulletproof button: VML for Outlook, HTML for others -->
+          <table role="presentation" border="0" cellspacing="0" cellpadding="0">
             <tr>
               <td align="left">
-                <a href="{{ .ConfirmationURL }}" class="btn-primary">Confirm Email Address</a>
+                <!--[if mso]>
+                <v:roundrect xmlns:v="urn:schemas-microsoft-com:vml" xmlns:w="urn:schemas-microsoft-com:office:word" href="{{ .ConfirmationURL }}" style="height:44px;v-text-anchor:middle;width:240px;" arcsize="10%" strokecolor="#00d6a2" strokeweight="0.5pt" fillcolor="#00d6a2">
+                  <w:anchorlock/>
+                  <center style="color:#0f172a;font-family:Arial,sans-serif;font-size:16px;font-weight:600;">Confirm Email Address</center>
+                </v:roundrect>
+                <![endif]-->
+
+                <!--[if !mso]><!-- -->
+                <a href="{{ .ConfirmationURL }}" class="btn-primary" style="background-color:#00d6a2;color:#0f172a;display:inline-block;padding:12px 32px;border-radius:8px;text-decoration:none;font-weight:600;font-size:16px;">Confirm Email Address</a>
+                <!--<![endif]-->
               </td>
             </tr>
           </table>
 
           <br>
           <p style="font-size: 14px; color: #64748b;">
-            If the button above doesn't work, copy and paste this link into your browser:<br>
+            If the button doesn't work, copy and paste this link into your browser:<br>
             <a href="{{ .ConfirmationURL }}" style="color: #00d6a2; word-break: break-all;">{{ .ConfirmationURL }}</a>
           </p>
+
+          <hr style="border:none;border-top:1px solid #eef2f7;margin:24px 0;" />
+
+          <p style="font-size:13px;color:#94a3b8;">Need help? Contact <a href="mailto:support@example.com" style="color:#00d6a2;">support@example.com</a> or reply to this email.</p>
         </td>
       </tr>
       
@@ -118,6 +147,9 @@
 
     <div class="footer">
       <p>&copy; 2026 EmailBridge. All rights reserved.</p>
+      <p style="font-size:12px;margin:6px 0;color:#94a3b8;">EmailBridge Inc., 1234 Market St, Suite 100, City, State, ZIP</p>
+      <p style="font-size:12px;margin:6px 0;color:#94a3b8;">To manage your email preferences or unsubscribe, <a href="{{ .UnsubscribeURL }}" style="color:#00d6a2;">click here</a>.</p>
+      <p style="font-size:11px;margin-top:8px;color:#94a3b8;">This email was sent to you because you created an account with EmailBridge. If you didn't request this, you can ignore this message.</p>
     </div>
   </div>
 
