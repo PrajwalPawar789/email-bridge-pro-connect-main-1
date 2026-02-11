@@ -934,7 +934,7 @@ const Integrations = () => {
               <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4 text-sm text-slate-600">
                 <p className="font-semibold text-slate-700">Create a HubSpot private app token</p>
                 <ol className="mt-3 list-decimal space-y-2 pl-5">
-                  <li>In HubSpot, go to Settings -> Integrations -> Private Apps.</li>
+                  <li>In HubSpot, go to Settings &rarr; Integrations &rarr; Private Apps.</li>
                   <li>Create a private app and grant CRM scopes.</li>
                   <li>Copy the token and paste it into the form.</li>
                   <li>Grab the Owner ID from HubSpot (Users & Teams).</li>
@@ -1065,7 +1065,7 @@ const Integrations = () => {
               <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4 text-sm text-slate-600">
                 <p className="font-semibold text-slate-700">Create Salesforce OAuth credentials</p>
                 <ol className="mt-3 list-decimal space-y-2 pl-5">
-                  <li>Go to Setup -> App Manager -> New Connected App.</li>
+                  <li>Go to Setup &rarr; App Manager &rarr; New Connected App.</li>
                   <li>Enable OAuth settings and add your redirect URI.</li>
                   <li>Select scopes: api, refresh_token, offline_access.</li>
                   <li>Copy the client ID and client secret.</li>
