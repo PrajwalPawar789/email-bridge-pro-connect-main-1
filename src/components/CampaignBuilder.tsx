@@ -7,6 +7,7 @@ import { Label } from '@/components/ui/label';
 import { Textarea } from '@/components/ui/textarea';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Switch } from '@/components/ui/switch';
+import { RadioGroup, RadioGroupItem } from '@/components/ui/radio-group';
 import { toast } from '@/hooks/use-toast';
 import { 
   Plus, Clock, Info, Trash2, ArrowRight, ArrowLeft, CheckCircle2, 
@@ -19,6 +20,8 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 import { Separator } from "@/components/ui/separator";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from '@/components/ui/dialog';
 import { cn } from '@/lib/utils';
+import { PIPELINE_TEMPLATES, getPipelineTemplateById } from '@/lib/pipeline';
+import { ensurePipelineForTemplate } from '@/lib/pipelineStore';
 
 interface CampaignBuilderProps {
   emailConfigs: any[];
@@ -159,6 +162,16 @@ const CampaignBuilder: React.FC<CampaignBuilderProps> = ({ emailConfigs }) => {
   const [listCount, setListCount] = useState(0);
   const [audienceType, setAudienceType] = useState<'list' | 'manual'>('list');
   const [scheduledAt, setScheduledAt] = useState<string>('');
+  const [pipelineConfig, setPipelineConfig] = useState({
+    enabled: false,
+    templateId: PIPELINE_TEMPLATES[0].id,
+    createOn: 'positive',
+    initialStageId: 'qualified',
+    ownerRule: 'sender',
+    fixedOwner: '',
+    stopOnInterested: true,
+    stopOnNotInterested: true
+  });
   const contentBodyRef = useRef<HTMLTextAreaElement | null>(null);
   const totalRecipients = audienceType === 'list'
     ? listCount
@@ -166,6 +179,7 @@ const CampaignBuilder: React.FC<CampaignBuilderProps> = ({ emailConfigs }) => {
   const totalDailyLimit = selectedConfigs.reduce((acc, curr) => acc + curr.dailyLimit, 0);
   const estimatedDays = totalDailyLimit > 0 ? Math.ceil(totalRecipients / totalDailyLimit) : 0;
   const scheduleLabel = scheduledAt ? new Date(scheduledAt).toLocaleString() : 'Not scheduled';
+  const selectedPipelineTemplate = getPipelineTemplateById(pipelineConfig.templateId);
   const headerStats = [
     {
       label: 'Recipients',
@@ -396,6 +410,28 @@ const CampaignBuilder: React.FC<CampaignBuilderProps> = ({ emailConfigs }) => {
         await supabase.from('campaign_followups').insert(followupInserts);
       }
 
+      if (pipelineConfig.enabled) {
+        const { pipeline, stages } = await ensurePipelineForTemplate(user.id, pipelineConfig.templateId);
+        const initialStage = stages.find((stage) => stage.template_stage_id === pipelineConfig.initialStageId) || stages[0];
+
+        const { error: pipelineSettingsError } = await supabase
+          .from('campaign_pipeline_settings')
+          .insert({
+            campaign_id: campaign.id,
+            pipeline_id: pipeline.id,
+            create_on: pipelineConfig.createOn,
+            initial_stage_id: initialStage?.id || null,
+            initial_stage_template_id: pipelineConfig.initialStageId,
+            owner_rule: pipelineConfig.ownerRule,
+            fixed_owner: pipelineConfig.ownerRule === 'fixed' ? (pipelineConfig.fixedOwner || null) : null,
+            stop_on_interested: pipelineConfig.stopOnInterested,
+            stop_on_not_interested: pipelineConfig.stopOnNotInterested,
+            enabled: true,
+          });
+
+        if (pipelineSettingsError) throw pipelineSettingsError;
+      }
+
       // Helper to assign config
         const assignConfig = (index: number) => {
           return selectedConfigs[index % selectedConfigs.length].configId;
@@ -555,6 +591,16 @@ const CampaignBuilder: React.FC<CampaignBuilderProps> = ({ emailConfigs }) => {
         setSelectedTemplate('');
         setSelectedListId('');
         setFollowups([]);
+        setPipelineConfig({
+          enabled: false,
+          templateId: PIPELINE_TEMPLATES[0].id,
+          createOn: 'positive',
+          initialStageId: 'qualified',
+          ownerRule: 'sender',
+          fixedOwner: '',
+          stopOnInterested: true,
+          stopOnNotInterested: true
+        });
         setCurrentStep(1);
     } catch (error: any) {
       console.error('Error creating campaign:', error);
@@ -891,6 +937,155 @@ const CampaignBuilder: React.FC<CampaignBuilderProps> = ({ emailConfigs }) => {
               </div>
             </TabsContent>
           </Tabs>
+
+          <div className="mt-6 bg-white/80 border border-[var(--builder-border)] rounded-2xl p-6 space-y-4">
+            <div className="flex items-start justify-between gap-4">
+              <div>
+                <h4 className="text-base font-semibold text-[var(--builder-ink)]">Pipeline & routing</h4>
+                <p className="text-xs text-[var(--builder-muted)]">
+                  Automatically create pipeline opportunities when replies show intent.
+                </p>
+              </div>
+              <div className="flex items-center gap-2">
+                <span className="text-xs text-[var(--builder-muted)]">Enable</span>
+                <Switch
+                  checked={pipelineConfig.enabled}
+                  onCheckedChange={(checked) => setPipelineConfig((prev) => ({ ...prev, enabled: checked }))}
+                />
+              </div>
+            </div>
+
+            {pipelineConfig.enabled && (
+              <div className="space-y-5">
+                <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+                  <div className="space-y-2">
+                    <Label className="text-sm text-[var(--builder-muted)]">Pipeline template</Label>
+                    <Select
+                      value={pipelineConfig.templateId}
+                      onValueChange={(value) => setPipelineConfig((prev) => ({
+                        ...prev,
+                        templateId: value,
+                        initialStageId: getPipelineTemplateById(value).stages[0]?.id || prev.initialStageId
+                      }))}
+                    >
+                      <SelectTrigger className="h-10 bg-white/90 border-[var(--builder-border)]">
+                        <SelectValue placeholder="Choose pipeline" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {PIPELINE_TEMPLATES.map((template) => (
+                          <SelectItem key={template.id} value={template.id}>{template.name}</SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                    <p className="text-[11px] text-[var(--builder-muted)]">
+                      {selectedPipelineTemplate.description}
+                    </p>
+                  </div>
+
+                  <div className="space-y-2">
+                    <Label className="text-sm text-[var(--builder-muted)]">Initial stage</Label>
+                    <Select
+                      value={pipelineConfig.initialStageId}
+                      onValueChange={(value) => setPipelineConfig((prev) => ({ ...prev, initialStageId: value }))}
+                    >
+                      <SelectTrigger className="h-10 bg-white/90 border-[var(--builder-border)]">
+                        <SelectValue placeholder="Select stage" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {selectedPipelineTemplate.stages.map((stage) => (
+                          <SelectItem key={stage.id} value={stage.id}>{stage.name}</SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                </div>
+
+                <div className="space-y-3">
+                  <Label className="text-sm text-[var(--builder-muted)]">Create opportunity when</Label>
+                  <RadioGroup
+                    value={pipelineConfig.createOn}
+                    onValueChange={(value) => setPipelineConfig((prev) => ({ ...prev, createOn: value }))}
+                    className="grid gap-3 md:grid-cols-3"
+                  >
+                    {[
+                      { value: 'positive', label: 'Positive reply', helper: 'Recommended' },
+                      { value: 'any', label: 'Any reply', helper: 'Includes neutral replies' },
+                      { value: 'manual', label: 'Manually only', helper: 'No auto-create' },
+                    ].map((option) => (
+                      <label
+                        key={option.value}
+                        className={cn(
+                          "flex items-start gap-3 rounded-2xl border p-4 text-sm transition-all cursor-pointer",
+                          pipelineConfig.createOn === option.value
+                            ? "border-emerald-200 bg-emerald-50/80 text-emerald-900"
+                            : "border-[var(--builder-border)] bg-white/80 text-[var(--builder-muted)] hover:border-slate-300"
+                        )}
+                      >
+                        <RadioGroupItem value={option.value} className="mt-0.5" />
+                        <div>
+                          <p className="font-semibold">{option.label}</p>
+                          <p className="text-xs text-[var(--builder-muted)]">{option.helper}</p>
+                        </div>
+                      </label>
+                    ))}
+                  </RadioGroup>
+                </div>
+
+                <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+                  <div className="space-y-2">
+                    <Label className="text-sm text-[var(--builder-muted)]">Owner assignment</Label>
+                    <Select
+                      value={pipelineConfig.ownerRule}
+                      onValueChange={(value) => setPipelineConfig((prev) => ({ ...prev, ownerRule: value }))}
+                    >
+                      <SelectTrigger className="h-10 bg-white/90 border-[var(--builder-border)]">
+                        <SelectValue placeholder="Select owner rule" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="sender">Sender who emailed</SelectItem>
+                        <SelectItem value="round_robin">Round-robin team</SelectItem>
+                        <SelectItem value="fixed">Fixed owner</SelectItem>
+                      </SelectContent>
+                    </Select>
+                    {pipelineConfig.ownerRule === 'fixed' && (
+                      <Input
+                        placeholder="Owner name or email"
+                        value={pipelineConfig.fixedOwner}
+                        onChange={(e) => setPipelineConfig((prev) => ({ ...prev, fixedOwner: e.target.value }))}
+                        className="h-10 bg-white/90 border-[var(--builder-border)]"
+                      />
+                    )}
+                  </div>
+
+                  <div className="space-y-3">
+                    <Label className="text-sm text-[var(--builder-muted)]">Auto-actions</Label>
+                    <div className="space-y-3 rounded-2xl border border-[var(--builder-border)] bg-white/80 p-4">
+                      <div className="flex items-center justify-between">
+                        <span className="text-sm text-[var(--builder-ink)]">Stop sequence on Interested</span>
+                        <Switch
+                          checked={pipelineConfig.stopOnInterested}
+                          onCheckedChange={(checked) => setPipelineConfig((prev) => ({ ...prev, stopOnInterested: checked }))}
+                        />
+                      </div>
+                      <div className="flex items-center justify-between">
+                        <span className="text-sm text-[var(--builder-ink)]">Stop sequence + DNC on Not Interested</span>
+                        <Switch
+                          checked={pipelineConfig.stopOnNotInterested}
+                          onCheckedChange={(checked) => setPipelineConfig((prev) => ({ ...prev, stopOnNotInterested: checked }))}
+                        />
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {!pipelineConfig.enabled && (
+              <div className="rounded-xl border border-dashed border-[var(--builder-border)] bg-white/60 p-4 text-xs text-[var(--builder-muted)]">
+                Pipeline is off for this campaign. Enable it to auto-route replies into stages.
+              </div>
+            )}
+          </div>
         </div>
 
         <div>
@@ -1175,9 +1370,9 @@ const CampaignBuilder: React.FC<CampaignBuilderProps> = ({ emailConfigs }) => {
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
         <div className="lg:col-span-2 space-y-6">
-          <div className="bg-white/90 border border-[var(--builder-border)] rounded-2xl p-6 space-y-6">
-            <h4 className="font-semibold text-[var(--builder-ink)] border-b border-[var(--builder-border)] pb-4">Campaign Configuration</h4>
-            <div className="grid grid-cols-2 gap-6 text-sm">
+            <div className="bg-white/90 border border-[var(--builder-border)] rounded-2xl p-6 space-y-6">
+              <h4 className="font-semibold text-[var(--builder-ink)] border-b border-[var(--builder-border)] pb-4">Campaign Configuration</h4>
+              <div className="grid grid-cols-2 gap-6 text-sm">
                 <div>
                   <span className="text-[var(--builder-muted)] block mb-1">Campaign Name</span>
                   <span className="font-medium text-[var(--builder-ink)]">{form.name}</span>
@@ -1194,14 +1389,54 @@ const CampaignBuilder: React.FC<CampaignBuilderProps> = ({ emailConfigs }) => {
                     <span className="text-[var(--builder-muted)] block mb-1">Audience Source</span>
                     <span className="font-medium text-[var(--builder-ink)] capitalize">{audienceType}</span>
                   </div>
+                    <div>
+                      <span className="text-[var(--builder-muted)] block mb-1">Sender Routing</span>
+                      <span className="font-medium text-[var(--builder-ink)]">
+                        {senderAssignment === 'list' ? 'Use sender_email column' : 'Random distribution'}
+                      </span>
+                    </div>
+              </div>
+            </div>
+
+            <div className="bg-white/90 border border-[var(--builder-border)] rounded-2xl p-6 space-y-4">
+              <h4 className="font-semibold text-[var(--builder-ink)]">Pipeline & Routing</h4>
+              {pipelineConfig.enabled ? (
+                <div className="grid grid-cols-2 gap-6 text-sm">
                   <div>
-                    <span className="text-[var(--builder-muted)] block mb-1">Sender Routing</span>
+                    <span className="text-[var(--builder-muted)] block mb-1">Pipeline</span>
+                    <span className="font-medium text-[var(--builder-ink)]">{selectedPipelineTemplate.name}</span>
+                  </div>
+                  <div>
+                    <span className="text-[var(--builder-muted)] block mb-1">Create opportunity</span>
                     <span className="font-medium text-[var(--builder-ink)]">
-                      {senderAssignment === 'list' ? 'Use sender_email column' : 'Random distribution'}
+                      {pipelineConfig.createOn === 'positive'
+                        ? 'Positive replies'
+                        : pipelineConfig.createOn === 'any'
+                        ? 'Any reply'
+                        : 'Manual only'}
                     </span>
                   </div>
+                  <div>
+                    <span className="text-[var(--builder-muted)] block mb-1">Initial stage</span>
+                    <span className="font-medium text-[var(--builder-ink)]">
+                      {selectedPipelineTemplate.stages.find((stage) => stage.id === pipelineConfig.initialStageId)?.name || 'Not set'}
+                    </span>
+                  </div>
+                  <div>
+                    <span className="text-[var(--builder-muted)] block mb-1">Owner rule</span>
+                    <span className="font-medium text-[var(--builder-ink)]">
+                      {pipelineConfig.ownerRule === 'sender'
+                        ? 'Sender who emailed'
+                        : pipelineConfig.ownerRule === 'round_robin'
+                        ? 'Round-robin team'
+                        : pipelineConfig.fixedOwner || 'Fixed owner'}
+                    </span>
+                  </div>
+                </div>
+              ) : (
+                <p className="text-sm text-[var(--builder-muted)]">Pipeline routing is disabled for this campaign.</p>
+              )}
             </div>
-          </div>
 
           <div className="bg-white/90 border border-[var(--builder-border)] rounded-2xl p-6 space-y-4">
             <div className="flex items-center justify-between">

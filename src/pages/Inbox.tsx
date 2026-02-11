@@ -1,13 +1,12 @@
-import React, { useState, useEffect } from 'react';
+import React, { useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { supabase } from '@/integrations/supabase/client';
 import DashboardLayout from '@/components/Layout/DashboardLayout';
-import Mailbox from '@/components/Mailbox';
+import InboxPage from '@/components/inbox/InboxPage';
 import { useAuth } from '@/providers/AuthProvider';
 
 const Inbox = () => {
   const { user, loading } = useAuth();
-  const [emailConfigs, setEmailConfigs] = useState<any[]>([]);
   const navigate = useNavigate();
 
   useEffect(() => {
@@ -15,27 +14,6 @@ const Inbox = () => {
       navigate('/auth');
     }
   }, [loading, user, navigate]);
-
-  useEffect(() => {
-    if (user) {
-      fetchEmailConfigs(user.id);
-    }
-  }, [user]);
-
-  const fetchEmailConfigs = async (userId: string) => {
-    try {
-      const { data, error } = await supabase
-        .from('email_configs')
-        .select('*')
-        .eq('user_id', userId)
-        .order('created_at', { ascending: false });
-
-      if (error) throw error;
-      setEmailConfigs(data || []);
-    } catch (error) {
-      console.error('Error fetching email configs:', error);
-    }
-  };
 
   const handleLogout = async () => {
     await supabase.auth.signOut();
@@ -64,6 +42,8 @@ const Inbox = () => {
           navigate('/campaigns');
         } else if (tab === 'automations') {
           navigate('/automations');
+        } else if (tab === 'pipeline') {
+          navigate('/pipeline');
         } else if (
           tab === 'contacts' ||
           tab === 'segments' ||
@@ -78,17 +58,9 @@ const Inbox = () => {
       }}
       user={user}
       onLogout={handleLogout}
+      contentClassName="max-w-[1400px]"
     >
-      <div className="space-y-6">
-        <div className="flex items-center justify-between">
-          <div>
-            <h1 className="text-3xl font-bold text-gray-900">Inbox</h1>
-            <p className="text-gray-600 mt-1">View and manage your email replies and conversations</p>
-          </div>
-        </div>
-
-        <Mailbox emailConfigs={emailConfigs} />
-      </div>
+      <InboxPage user={user} />
     </DashboardLayout>
   );
 };

@@ -152,9 +152,9 @@ const ProspectListManager: React.FC = () => {
   useEffect(() => { fetchLists(); }, []);
   useEffect(() => {
     if (selectedList) {
-      fetchProspects(selectedList.id, currentPage, pageSize);
+      fetchProspects(selectedList.id, currentPage, pageSize, prospectSearchQuery);
     }
-  }, [selectedList, currentPage, pageSize]);
+  }, [selectedList, currentPage, pageSize, prospectSearchQuery]);
 
   const fetchLists = async () => {
     setLoading(true);
@@ -180,26 +180,40 @@ const ProspectListManager: React.FC = () => {
     setLoading(false);
   };
 
-  const fetchProspects = async (listId: string, page = currentPage, size = pageSize) => {
+  const fetchProspects = async (
+    listId: string,
+    page = currentPage,
+    size = pageSize,
+    search = prospectSearchQuery
+  ) => {
     setLoading(true);
     const from = (page - 1) * size;
     const to = from + size - 1;
+    const trimmedSearch = search.trim();
 
     try {
-      const { data, error, count } = await supabase
-        .from("email_list_prospects")
-        .select("id, prospect_id, prospects (id, name, email, company, job_title, phone, country, industry, sender_name, sender_email)", { count: "exact" })
-        .eq("list_id", listId)
-        .order("created_at", { ascending: false })
+      let query = supabase
+        .from("prospects")
+        .select(
+          "id, name, email, company, job_title, phone, country, industry, sender_name, sender_email, email_list_prospects!inner(list_id, created_at)",
+          { count: "exact" }
+        )
+        .eq("email_list_prospects.list_id", listId);
+
+      if (trimmedSearch) {
+        const pattern = `%${trimmedSearch}%`;
+        query = query.or(
+          `name.ilike.${pattern},email.ilike.${pattern},company.ilike.${pattern},job_title.ilike.${pattern},country.ilike.${pattern},industry.ilike.${pattern}`
+        );
+      }
+
+      const { data, error, count } = await query
+        .order("created_at", { foreignTable: "email_list_prospects", ascending: false })
         .range(from, to);
 
       if (error) throw error;
 
-      setProspects(
-        (data || [])
-          .map((row: any) => row.prospects)
-          .filter((p: any) => !!p)
-      );
+      setProspects((data || []) as Prospect[]);
       setTotalProspects(count ?? 0);
     } catch (error: any) {
       toast({ title: "Error", description: error.message, variant: "destructive" });
@@ -913,14 +927,7 @@ const ProspectListManager: React.FC = () => {
     return name.includes(normalizedListQuery) || description.includes(normalizedListQuery);
   });
 
-  const filteredProspects = prospects.filter(p => 
-    p.name.toLowerCase().includes(prospectSearchQuery.toLowerCase()) ||
-    p.email.toLowerCase().includes(prospectSearchQuery.toLowerCase()) ||
-    (p.company && p.company.toLowerCase().includes(prospectSearchQuery.toLowerCase())) ||
-    (p.job_title && p.job_title.toLowerCase().includes(prospectSearchQuery.toLowerCase())) ||
-    (p.country && p.country.toLowerCase().includes(prospectSearchQuery.toLowerCase())) ||
-    (p.industry && p.industry.toLowerCase().includes(prospectSearchQuery.toLowerCase()))
-  );
+  const filteredProspects = prospects;
 
   const listTotalProspects = lists.reduce((sum, list) => sum + (list.count || 0), 0);
   const averageListSize = lists.length ? Math.round(listTotalProspects / lists.length) : 0;
@@ -1083,7 +1090,7 @@ const ProspectListManager: React.FC = () => {
                 <p className="mt-2 text-sm font-semibold text-[var(--shell-ink)]">
                   Name, email, company, job title, country, industry
                 </p>
-                <p className="text-xs text-[var(--shell-muted)]">Use search to narrow the current page.</p>
+                <p className="text-xs text-[var(--shell-muted)]">Use search to filter the full list.</p>
               </div>
             </div>
           </div>
@@ -1096,7 +1103,7 @@ const ProspectListManager: React.FC = () => {
               <div>
                 <CardTitle className="text-lg font-semibold text-[var(--shell-ink)]">Prospects</CardTitle>
                 <CardDescription className="text-xs text-[var(--shell-muted)]">
-                  Search within the current page of results by name, email, company, job title, country, or industry.
+                  Search across the full list by name, email, company, job title, country, or industry.
                 </CardDescription>
               </div>
               <div className="relative w-full md:w-72">
@@ -1105,7 +1112,11 @@ const ProspectListManager: React.FC = () => {
                   placeholder="Search prospects..."
                   className="h-10 rounded-full border-[var(--shell-border)] bg-white/90 pl-10"
                   value={prospectSearchQuery}
-                  onChange={(e) => setProspectSearchQuery(e.target.value)}
+                  onChange={(e) => {
+                    const nextValue = e.target.value;
+                    setProspectSearchQuery(nextValue);
+                    if (currentPage !== 1) setCurrentPage(1);
+                  }}
                 />
               </div>
             </div>

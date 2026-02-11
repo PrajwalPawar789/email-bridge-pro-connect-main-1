@@ -216,7 +216,7 @@ const LandingPage = () => {
                 Turn outbound email into qualified pipeline, not guesswork.
               </h1>
               <p className="mt-6 text-lg md:text-xl text-[color:var(--lp-muted)] max-w-xl">
-                EmailBridge Pro unifies campaigns, inbox health, and CRM sync so your team can ship high-conversion sequences with confidence.
+                Vintro.io unifies campaigns, inbox health, and CRM sync so your team can ship high-conversion sequences with confidence.
               </p>
 
               <div className="mt-8 flex flex-col sm:flex-row gap-4">
@@ -263,7 +263,7 @@ const LandingPage = () => {
                   <div className="w-3 h-3 rounded-full bg-[#ff6b4a]" />
                   <div className="w-3 h-3 rounded-full bg-[#ffb347]" />
                   <div className="w-3 h-3 rounded-full bg-[#2dd4bf]" />
-                  <div className="ml-4 text-xs text-[color:var(--lp-muted)]">app.emailbridge.pro</div>
+                  <div className="ml-4 text-xs text-[color:var(--lp-muted)]">app.vintro.io</div>
                 </div>
                 <img
                   src="/platform/analytics dashboard.png"

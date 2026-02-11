@@ -5,7 +5,6 @@ import {
   Database,
   Link2,
   Lock,
-  PlugZap,
   RefreshCw,
   ShieldCheck,
   AlertTriangle,
@@ -16,14 +15,23 @@ import {
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle
+} from '@/components/ui/dialog';
+import { Label } from '@/components/ui/label';
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { cn } from '@/lib/utils';
 import { toast } from '@/hooks/use-toast';
+import { addHubSpotCredential, exchangeSalesforceOAuth } from '@/lib/crmApi';
 import {
   addCrmLog,
-  exchangeCrmOAuth,
   loadCrmState,
   runCrmSync,
-  startCrmOAuth,
   updateIntegration,
   updateMapping,
   type CrmProvider,
@@ -35,6 +43,11 @@ const crmProviders = [
     id: 'hubspot',
     name: 'HubSpot',
     accent: '#ff7a59',
+    logo: {
+      src: '/brand/hubspot.svg',
+      alt: 'HubSpot logo',
+      className: 'h-7'
+    },
     summary: 'Sync CRM contacts, lifecycle stages, and engagement activity with EmailBridge.',
     highlights: ['Contacts & Companies', 'Lists/Segments', 'Engagements & Replies'],
     sync: ['One-way CRM -> EmailBridge', 'One-way EmailBridge -> CRM', 'Two-way sync (enterprise)'],
@@ -44,6 +57,11 @@ const crmProviders = [
     id: 'salesforce',
     name: 'Salesforce',
     accent: '#00a1e0',
+    logo: {
+      src: '/brand/salesforce.svg',
+      alt: 'Salesforce logo',
+      className: 'h-8'
+    },
     summary: 'Align campaigns with Salesforce Leads, Contacts, and Opportunities.',
     highlights: ['Leads & Contacts', 'Campaign Members', 'Tasks & Activities'],
     sync: ['One-way CRM -> EmailBridge', 'Engagement-only pushback', 'Two-way sync (enterprise)'],
@@ -88,19 +106,32 @@ const statusLabels = {
   error: 'Action required'
 } as const;
 
+const providerLabels: Record<CrmProvider, string> = {
+  hubspot: 'HubSpot',
+  salesforce: 'Salesforce'
+};
+
 const Integrations = () => {
   const [crmState, setCrmState] = useState(loadCrmState);
   const [activeProvider, setActiveProvider] = useState<CrmProvider>('hubspot');
   const [loadingProvider, setLoadingProvider] = useState<CrmProvider | null>(null);
-  const [pendingProvider, setPendingProvider] = useState<CrmProvider | null>(null);
-  const [authCodes, setAuthCodes] = useState<Record<CrmProvider, string>>({
-    hubspot: '',
-    salesforce: ''
-  });
   const [mappingDrafts, setMappingDrafts] = useState<Record<CrmProvider, CrmMappingRow[]>>({
     hubspot: crmState.integrations.hubspot.mapping,
     salesforce: crmState.integrations.salesforce.mapping
   });
+  const [hubspotDialogOpen, setHubspotDialogOpen] = useState(false);
+  const [salesforceDialogOpen, setSalesforceDialogOpen] = useState(false);
+  const [hsDisplayName, setHsDisplayName] = useState('');
+  const [hsToken, setHsToken] = useState('');
+  const [hsOwnerId, setHsOwnerId] = useState('');
+  const [hsSaving, setHsSaving] = useState(false);
+  const [sfDisplayName, setSfDisplayName] = useState('');
+  const [sfClientId, setSfClientId] = useState('');
+  const [sfClientSecret, setSfClientSecret] = useState('');
+  const [sfRedirectUri, setSfRedirectUri] = useState('');
+  const [sfAuthCode, setSfAuthCode] = useState('');
+  const [sfShowLogin, setSfShowLogin] = useState(false);
+  const [sfSaving, setSfSaving] = useState(false);
 
   const mappingRef = useRef<HTMLDivElement | null>(null);
   const logsRef = useRef<HTMLDivElement | null>(null);
@@ -124,115 +155,177 @@ const Integrations = () => {
     return crmState.logs.filter((entry) => entry.provider === activeProvider).slice(0, 8);
   }, [crmState.logs, activeProvider]);
 
+  const salesforceAuthUrl = useMemo(() => {
+    if (!sfClientId || !sfRedirectUri) return '';
+    const params = new URLSearchParams({
+      response_type: 'code',
+      client_id: sfClientId,
+      redirect_uri: sfRedirectUri,
+      scope: 'api refresh_token offline_access',
+      prompt: 'consent'
+    });
+    return `https://login.salesforce.com/services/oauth2/authorize?${params.toString()}`;
+  }, [sfClientId, sfRedirectUri]);
+
   const updateState = (updater: (prev: typeof crmState) => typeof crmState) => {
     setCrmState((prev) => updater(prev));
   };
 
-  const handleStartOAuth = async (provider: CrmProvider) => {
-    setLoadingProvider(provider);
-    try {
-      const response = await startCrmOAuth(provider);
-      if (response?.authUrl) {
-        window.open(response.authUrl, '_blank', 'noopener,noreferrer');
-      }
-      if (response?.simulatedCode) {
-        setAuthCodes((prev) => ({ ...prev, [provider]: response.simulatedCode || '' }));
-      }
-      updateState((prev) => {
-        let next = updateIntegration(prev, provider, { status: 'pending', error: undefined });
-        next = addCrmLog(next, {
-          provider,
-          status: 'info',
-          message: 'OAuth flow started.',
-          details: response?.mode === 'simulate' ? 'Simulation mode active.' : undefined
-        });
-        return next;
-      });
-      setPendingProvider(provider);
+  const handleHubSpotConnect = async () => {
+    if (!hsDisplayName.trim() || !hsToken.trim() || !hsOwnerId.trim()) {
       toast({
-        title: 'OAuth started',
-        description: 'Finish authorization in the new window, then paste the code.'
-      });
-    } catch (error) {
-      updateState((prev) =>
-        addCrmLog(prev, {
-          provider,
-          status: 'error',
-          message: 'OAuth start failed.',
-          details: error instanceof Error ? error.message : undefined
-        })
-      );
-      updateState((prev) =>
-        updateIntegration(prev, provider, {
-          status: 'error',
-          error: error instanceof Error ? error.message : 'Unable to start OAuth'
-        })
-      );
-      toast({
-        title: 'OAuth failed',
-        description: error instanceof Error ? error.message : 'Unable to start OAuth',
-        variant: 'destructive'
-      });
-    } finally {
-      setLoadingProvider(null);
-    }
-  };
-
-  const handleExchange = async (provider: CrmProvider) => {
-    const code = authCodes[provider];
-    if (!code) {
-      toast({
-        title: 'Authorization code required',
-        description: 'Paste the OAuth code from the CRM redirect URL.',
+        title: 'Missing details',
+        description: 'Add a display name, owner ID, and access token to continue.',
         variant: 'destructive'
       });
       return;
     }
-    setLoadingProvider(provider);
+    setHsSaving(true);
+    updateState((prev) => updateIntegration(prev, 'hubspot', { status: 'pending', error: undefined }));
     try {
-      const response = await exchangeCrmOAuth(provider, code);
+      const response: any = await addHubSpotCredential({
+        owner_id: hsOwnerId.trim(),
+        access_token: hsToken.trim(),
+        display_name: hsDisplayName.trim()
+      });
       updateState((prev) => {
-        let next = updateIntegration(prev, provider, {
+        let next = updateIntegration(prev, 'hubspot', {
           status: 'connected',
-          accountLabel: response.accountLabel || 'Primary workspace',
+          accountLabel: response?.display_name || hsDisplayName.trim(),
           connectedAt: new Date().toISOString(),
           error: undefined
         });
         next = addCrmLog(next, {
-          provider,
+          provider: 'hubspot',
           status: 'success',
-          message: 'CRM connected successfully.',
-          details: response.accountLabel
+          message: 'HubSpot connected successfully.'
         });
         return next;
       });
-      setPendingProvider(null);
       toast({
-        title: 'CRM connected',
-        description: `Connection to ${provider} is active.`
+        title: 'HubSpot connected',
+        description: 'Your HubSpot workspace is now connected.'
       });
+      setHubspotDialogOpen(false);
+      setHsToken('');
+      setHsOwnerId('');
+      setHsDisplayName('');
     } catch (error) {
       updateState((prev) =>
         addCrmLog(prev, {
-          provider,
+          provider: 'hubspot',
           status: 'error',
-          message: 'OAuth exchange failed.',
+          message: 'HubSpot connection failed.',
           details: error instanceof Error ? error.message : undefined
         })
       );
       updateState((prev) =>
-        updateIntegration(prev, provider, {
+        updateIntegration(prev, 'hubspot', {
           status: 'error',
-          error: error instanceof Error ? error.message : 'Unable to exchange OAuth code'
+          error: error instanceof Error ? error.message : 'Unable to connect HubSpot'
         })
       );
       toast({
-        title: 'OAuth exchange failed',
-        description: error instanceof Error ? error.message : 'Unable to exchange OAuth code',
+        title: 'HubSpot connection failed',
+        description: error instanceof Error ? error.message : 'Unable to connect HubSpot',
         variant: 'destructive'
       });
     } finally {
-      setLoadingProvider(null);
+      setHsSaving(false);
+    }
+  };
+
+  const handleSalesforceStart = () => {
+    if (!sfClientId.trim() || !sfRedirectUri.trim()) {
+      toast({
+        title: 'Missing details',
+        description: 'Add a client ID and redirect URI to start Salesforce OAuth.',
+        variant: 'destructive'
+      });
+      return;
+    }
+    if (!salesforceAuthUrl) {
+      toast({
+        title: 'OAuth URL missing',
+        description: 'Unable to build the Salesforce OAuth URL.',
+        variant: 'destructive'
+      });
+      return;
+    }
+    window.open(salesforceAuthUrl, '_blank', 'noopener,noreferrer');
+    setSfShowLogin(true);
+  };
+
+  const handleSalesforceExchange = async () => {
+    if (!sfAuthCode.trim()) {
+      toast({
+        title: 'Authorization code required',
+        description: 'Paste the Salesforce authorization code to continue.',
+        variant: 'destructive'
+      });
+      return;
+    }
+    if (!sfClientId.trim() || !sfClientSecret.trim() || !sfRedirectUri.trim()) {
+      toast({
+        title: 'Missing credentials',
+        description: 'Client ID, client secret, and redirect URI are required.',
+        variant: 'destructive'
+      });
+      return;
+    }
+    setSfSaving(true);
+    updateState((prev) => updateIntegration(prev, 'salesforce', { status: 'pending', error: undefined }));
+    try {
+      const response: any = await exchangeSalesforceOAuth({
+        code: sfAuthCode.trim(),
+        SF_CLIENT_ID: sfClientId.trim(),
+        SF_CLIENT_SECRET: sfClientSecret.trim(),
+        SF_REDIRECT_URI: sfRedirectUri.trim(),
+        display_name: sfDisplayName.trim()
+      });
+      updateState((prev) => {
+        let next = updateIntegration(prev, 'salesforce', {
+          status: 'connected',
+          accountLabel: response?.instance_url || sfDisplayName.trim() || 'Salesforce org',
+          connectedAt: new Date().toISOString(),
+          error: undefined
+        });
+        next = addCrmLog(next, {
+          provider: 'salesforce',
+          status: 'success',
+          message: 'Salesforce connected successfully.'
+        });
+        return next;
+      });
+      toast({
+        title: 'Salesforce connected',
+        description: 'Your Salesforce org is now connected.'
+      });
+      setSalesforceDialogOpen(false);
+      setSfShowLogin(false);
+      setSfAuthCode('');
+    } catch (error) {
+      updateState((prev) =>
+        addCrmLog(prev, {
+          provider: 'salesforce',
+          status: 'error',
+          message: 'Salesforce connection failed.',
+          details: error instanceof Error ? error.message : undefined
+        })
+      );
+      updateState((prev) =>
+        updateIntegration(prev, 'salesforce', {
+          status: 'error',
+          error: error instanceof Error ? error.message : 'Unable to connect Salesforce'
+        })
+      );
+      toast({
+        title: 'Salesforce connection failed',
+        description: error instanceof Error ? error.message : 'Unable to connect Salesforce',
+        variant: 'destructive'
+      });
+    } finally {
+      setSfSaving(false);
     }
   };
 
@@ -294,7 +387,7 @@ const Integrations = () => {
     });
     toast({
       title: 'Mapping saved',
-      description: `Field mapping for ${provider} has been updated.`
+      description: `Field mapping for ${providerLabels[provider]} has been updated.`
     });
   };
 
@@ -435,10 +528,13 @@ const Integrations = () => {
               <div className="flex items-start justify-between gap-4">
                 <div className="flex items-center gap-4">
                   <div
-                    className="flex h-12 w-12 items-center justify-center rounded-2xl text-white shadow-[0_8px_20px_rgba(15,23,42,0.16)]"
-                    style={{ background: provider.accent }}
+                    className="flex h-12 w-24 items-center justify-center rounded-2xl border border-slate-200 bg-white shadow-[0_8px_20px_rgba(15,23,42,0.08)]"
                   >
-                    <PlugZap className="h-6 w-6" />
+                    <img
+                      src={provider.logo.src}
+                      alt={provider.logo.alt}
+                      className={cn('w-auto max-w-[5.5rem]', provider.logo.className)}
+                    />
                   </div>
                   <div>
                     <h3 className="text-lg font-semibold text-[var(--shell-ink)]">{provider.name}</h3>
@@ -502,34 +598,26 @@ const Integrations = () => {
                 </div>
               </div>
 
-              {pendingProvider === provider.id && (
-                <div className="mt-4 rounded-2xl border border-amber-200 bg-amber-50/70 p-4">
-                  <p className="text-xs font-semibold uppercase tracking-[0.22em] text-amber-700">Complete OAuth</p>
-                  <div className="mt-3 flex flex-col gap-3 sm:flex-row sm:items-center">
-                    <Input
-                      placeholder="Paste authorization code"
-                      value={authCodes[provider.id]}
-                      onChange={(event) =>
-                        setAuthCodes((prev) => ({ ...prev, [provider.id]: event.target.value }))
-                      }
-                      className="h-10 rounded-full border-amber-200 bg-white/90 text-sm"
-                    />
-                    <Button
-                      onClick={() => handleExchange(provider.id)}
-                      className="rounded-full bg-amber-600 text-white hover:bg-amber-700"
-                      disabled={loadingProvider === provider.id}
-                    >
-                      Complete connection
-                    </Button>
-                  </div>
-                </div>
-              )}
-
               <div className="mt-6 flex flex-wrap gap-3">
                 <Button
                   className="rounded-full bg-emerald-600 text-white hover:bg-emerald-700"
-                  onClick={() => handleStartOAuth(provider.id)}
-                  disabled={loadingProvider === provider.id}
+                  onClick={() => {
+                    updateState((prev) =>
+                      updateIntegration(prev, provider.id, {
+                        error: undefined,
+                        status: provider.status === 'error' ? 'not_connected' : provider.status
+                      })
+                    );
+                    if (provider.id === 'hubspot') {
+                      setHubspotDialogOpen(true);
+                    } else {
+                      setSalesforceDialogOpen(true);
+                    }
+                  }}
+                  disabled={
+                    loadingProvider === provider.id ||
+                    (provider.id === 'hubspot' ? hsSaving : sfSaving)
+                  }
                 >
                   {provider.status === 'connected' ? `Reconnect ${provider.name}` : `Connect ${provider.name}`}
                 </Button>
@@ -766,6 +854,227 @@ const Integrations = () => {
           ))}
         </div>
       </section>
+
+      <Dialog
+        open={hubspotDialogOpen}
+        onOpenChange={(open) => {
+          setHubspotDialogOpen(open);
+          if (!open) {
+            setHsDisplayName('');
+            setHsOwnerId('');
+            setHsToken('');
+          }
+        }}
+      >
+        <DialogContent className="max-w-2xl">
+          <DialogHeader>
+            <DialogTitle>Connect HubSpot</DialogTitle>
+            <DialogDescription>
+              Add a HubSpot private app token and owner ID to enable CRM sync.
+            </DialogDescription>
+          </DialogHeader>
+
+          <Tabs defaultValue="add">
+            <TabsList className="mt-2 flex flex-wrap gap-3 bg-transparent p-0">
+              <TabsTrigger value="add" className="rounded-full px-4 py-2 text-xs font-semibold uppercase tracking-[0.2em]">
+                Add account
+              </TabsTrigger>
+              <TabsTrigger value="howto" className="rounded-full px-4 py-2 text-xs font-semibold uppercase tracking-[0.2em]">
+                Instructions
+              </TabsTrigger>
+            </TabsList>
+
+            <TabsContent value="add" className="mt-4">
+              <div className="grid gap-4 md:grid-cols-2">
+                <div className="space-y-2">
+                  <Label htmlFor="hs-display-name">Display name</Label>
+                  <Input
+                    id="hs-display-name"
+                    value={hsDisplayName}
+                    onChange={(event) => setHsDisplayName(event.target.value)}
+                    placeholder="e.g., HubSpot Main"
+                  />
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="hs-owner-id">Owner ID</Label>
+                  <Input
+                    id="hs-owner-id"
+                    value={hsOwnerId}
+                    onChange={(event) => setHsOwnerId(event.target.value)}
+                    placeholder="Enter owner ID"
+                  />
+                </div>
+                <div className="space-y-2 md:col-span-2">
+                  <Label htmlFor="hs-token">Private app token</Label>
+                  <Input
+                    id="hs-token"
+                    type="password"
+                    value={hsToken}
+                    onChange={(event) => setHsToken(event.target.value)}
+                    placeholder="Paste HubSpot private app token"
+                  />
+                </div>
+              </div>
+
+              <DialogFooter className="mt-6 gap-2 sm:justify-end">
+                <Button variant="outline" onClick={() => setHubspotDialogOpen(false)}>
+                  Cancel
+                </Button>
+                <Button
+                  className="bg-emerald-600 text-white hover:bg-emerald-700"
+                  onClick={handleHubSpotConnect}
+                  disabled={hsSaving}
+                >
+                  {hsSaving ? 'Saving...' : 'Save connection'}
+                </Button>
+              </DialogFooter>
+            </TabsContent>
+
+            <TabsContent value="howto" className="mt-4">
+              <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4 text-sm text-slate-600">
+                <p className="font-semibold text-slate-700">Create a HubSpot private app token</p>
+                <ol className="mt-3 list-decimal space-y-2 pl-5">
+                  <li>In HubSpot, go to Settings -> Integrations -> Private Apps.</li>
+                  <li>Create a private app and grant CRM scopes.</li>
+                  <li>Copy the token and paste it into the form.</li>
+                  <li>Grab the Owner ID from HubSpot (Users & Teams).</li>
+                </ol>
+              </div>
+            </TabsContent>
+          </Tabs>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog
+        open={salesforceDialogOpen}
+        onOpenChange={(open) => {
+          setSalesforceDialogOpen(open);
+          if (!open) {
+            setSfShowLogin(false);
+            setSfAuthCode('');
+          }
+        }}
+      >
+        <DialogContent className="max-w-2xl">
+          <DialogHeader>
+            <DialogTitle>Connect Salesforce</DialogTitle>
+            <DialogDescription>
+              Use OAuth to authorize Salesforce and finish the connection.
+            </DialogDescription>
+          </DialogHeader>
+
+          <Tabs defaultValue="add">
+            <TabsList className="mt-2 flex flex-wrap gap-3 bg-transparent p-0">
+              <TabsTrigger value="add" className="rounded-full px-4 py-2 text-xs font-semibold uppercase tracking-[0.2em]">
+                Add account
+              </TabsTrigger>
+              <TabsTrigger value="howto" className="rounded-full px-4 py-2 text-xs font-semibold uppercase tracking-[0.2em]">
+                Instructions
+              </TabsTrigger>
+            </TabsList>
+
+            <TabsContent value="add" className="mt-4">
+              {!sfShowLogin ? (
+                <>
+                  <div className="grid gap-4 md:grid-cols-2">
+                    <div className="space-y-2">
+                      <Label htmlFor="sf-display-name">Display name</Label>
+                      <Input
+                        id="sf-display-name"
+                        value={sfDisplayName}
+                        onChange={(event) => setSfDisplayName(event.target.value)}
+                        placeholder="e.g., Salesforce Main"
+                      />
+                    </div>
+                    <div className="space-y-2">
+                      <Label htmlFor="sf-client-id">Client ID</Label>
+                      <Input
+                        id="sf-client-id"
+                        value={sfClientId}
+                        onChange={(event) => setSfClientId(event.target.value)}
+                        placeholder="Enter client ID"
+                      />
+                    </div>
+                    <div className="space-y-2">
+                      <Label htmlFor="sf-client-secret">Client secret</Label>
+                      <Input
+                        id="sf-client-secret"
+                        type="password"
+                        value={sfClientSecret}
+                        onChange={(event) => setSfClientSecret(event.target.value)}
+                        placeholder="Enter client secret"
+                      />
+                    </div>
+                    <div className="space-y-2">
+                      <Label htmlFor="sf-redirect-uri">Redirect URI</Label>
+                      <Input
+                        id="sf-redirect-uri"
+                        value={sfRedirectUri}
+                        onChange={(event) => setSfRedirectUri(event.target.value)}
+                        placeholder="https://your-app.com/oauth/callback"
+                      />
+                    </div>
+                  </div>
+
+                  <DialogFooter className="mt-6 gap-2 sm:justify-end">
+                    <Button variant="outline" onClick={() => setSalesforceDialogOpen(false)}>
+                      Cancel
+                    </Button>
+                    <Button
+                      className="bg-emerald-600 text-white hover:bg-emerald-700"
+                      onClick={handleSalesforceStart}
+                    >
+                      Open Salesforce OAuth
+                    </Button>
+                  </DialogFooter>
+                </>
+              ) : (
+                <>
+                  <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4 text-sm text-slate-600">
+                    <p>
+                      After approving access in the Salesforce tab, paste the authorization code from the callback URL.
+                    </p>
+                  </div>
+                  <div className="mt-4 space-y-2">
+                    <Label htmlFor="sf-auth-code">Authorization code</Label>
+                    <Input
+                      id="sf-auth-code"
+                      value={sfAuthCode}
+                      onChange={(event) => setSfAuthCode(event.target.value)}
+                      placeholder="Paste authorization code"
+                    />
+                  </div>
+
+                  <DialogFooter className="mt-6 gap-2 sm:justify-end">
+                    <Button variant="outline" onClick={() => setSfShowLogin(false)}>
+                      Back
+                    </Button>
+                    <Button
+                      className="bg-emerald-600 text-white hover:bg-emerald-700"
+                      onClick={handleSalesforceExchange}
+                      disabled={sfSaving}
+                    >
+                      {sfSaving ? 'Saving...' : 'Save connection'}
+                    </Button>
+                  </DialogFooter>
+                </>
+              )}
+            </TabsContent>
+
+            <TabsContent value="howto" className="mt-4">
+              <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4 text-sm text-slate-600">
+                <p className="font-semibold text-slate-700">Create Salesforce OAuth credentials</p>
+                <ol className="mt-3 list-decimal space-y-2 pl-5">
+                  <li>Go to Setup -> App Manager -> New Connected App.</li>
+                  <li>Enable OAuth settings and add your redirect URI.</li>
+                  <li>Select scopes: api, refresh_token, offline_access.</li>
+                  <li>Copy the client ID and client secret.</li>
+                </ol>
+              </div>
+            </TabsContent>
+          </Tabs>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 };

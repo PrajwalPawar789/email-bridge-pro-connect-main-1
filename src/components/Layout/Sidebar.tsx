@@ -13,7 +13,8 @@ import {
   ChevronLeft,
   ChevronRight,
   Inbox,
-  PlugZap
+  PlugZap,
+  Kanban
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import Logo from '../Logo';
@@ -40,6 +41,7 @@ const Sidebar = ({ activeTab, onTabChange, isCollapsed, toggleSidebar }: Sidebar
       items: [
         { id: 'automations', label: 'Automations', icon: RefreshCw },
         { id: 'contacts', label: 'Contacts', icon: Users },
+        { id: 'pipeline', label: 'Pipeline', icon: Kanban },
         { id: 'segments', label: 'Segments', icon: Sparkles, badge: 'Beta' }
       ]
     },

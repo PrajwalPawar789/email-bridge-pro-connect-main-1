@@ -25,6 +25,7 @@ const Header = ({ user, onLogout, activeTab }: HeaderProps) => {
     inbox: 'Inbox',
     automations: 'Automations',
     contacts: 'Contacts',
+    pipeline: 'Pipeline',
     segments: 'Segments',
     templates: 'Templates',
     connect: 'Connect',

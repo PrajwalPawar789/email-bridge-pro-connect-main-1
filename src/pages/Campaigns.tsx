@@ -74,6 +74,8 @@ const Campaigns = () => {
           navigate('/inbox');
         } else if (tab === 'automations') {
           navigate('/automations');
+        } else if (tab === 'pipeline') {
+          navigate('/pipeline');
         } else if (
           tab === 'contacts' ||
           tab === 'segments' ||

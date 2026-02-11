@@ -13,6 +13,7 @@ const supabase = createClient(
   Deno.env.get("SUPABASE_URL") ?? "",
   Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? ""
 );
+const SUPABASE_URL = Deno.env.get("SUPABASE_URL") ?? "";
 
 interface EmailConfig {
   host: string;
@@ -231,12 +232,13 @@ const personalizeContent = (
   return personalized;
 };
 
-const generateTrackingPixel = (campaignId: string, recipientId: string) => {
-  const trackingUrl = `${Deno.env.get("SUPABASE_URL")}/functions/v1/track-email-open?campaign_id=${campaignId}&recipient_id=${recipientId}`;
-  return `<img src="${trackingUrl}" width="1" height="1" style="display:none;" alt="">`;
-};
+const buildOpenTrackingUrl = (campaignId: string, recipientId: string, step: number) =>
+  `${SUPABASE_URL}/functions/v1/track-email-open?campaign_id=${campaignId}&recipient_id=${recipientId}&step=${step}`;
 
-const addTrackingToLinks = (htmlContent: string, campaignId: string, recipientId: string) => {
+const generateTrackingPixel = (trackingUrl: string) =>
+  `<img src="${trackingUrl}" width="1" height="1" style="display:none;" alt="">`;
+
+const addTrackingToLinks = (htmlContent: string, campaignId: string, recipientId: string, step: number) => {
   console.log('Processing links for tracking (v2.2)...');
   const trackingUrls: string[] = [];
   let urlCounter = 0;
@@ -255,7 +257,7 @@ const addTrackingToLinks = (htmlContent: string, campaignId: string, recipientId
       if (!originalUrl) return match;
 
       const encodedUrl = encodeURIComponent(originalUrl);
-      const trackingUrl = `${Deno.env.get("SUPABASE_URL")}/functions/v1/track-email-click?campaign_id=${campaignId}&recipient_id=${recipientId}&url=${encodedUrl}`;
+      const trackingUrl = `${SUPABASE_URL}/functions/v1/track-email-click?campaign_id=${campaignId}&recipient_id=${recipientId}&url=${encodedUrl}&step=${step}`;
       trackingUrls.push(trackingUrl);
       
       console.log(`Generated click tracking URL ${urlCounter} for ${hrefUrl ? 'href' : 'text'} URL`);
@@ -333,6 +335,7 @@ const sendEmail = async (
   config: EmailConfig,
   recipient: Recipient,
   campaign: Campaign,
+  step: number,
   extraData: PersonalizationData = {},
   previousMessageId?: string,
   threadId?: string,
@@ -380,29 +383,34 @@ const sendEmail = async (
     ? personalizedContent
     : formatPlainTextToHtml(personalizedContent);
 
-  const { content: contentWithClickTracking, trackingUrls } = addTrackingToLinks(formattedContent, campaign.id, recipient.id);
+  const { content: contentWithClickTracking, trackingUrls } = addTrackingToLinks(formattedContent, campaign.id, recipient.id, step);
   console.log(`Added tracking to ${trackingUrls.length} total URLs for recipient ${recipient.id}`);
 
-  // Store first tracking URL in track_click_link field
-  if (trackingUrls.length > 0) {
-    const { error: trackingError } = await supabase
-      .from('recipients')
-      .update({ track_click_link: trackingUrls[0] })
-      .eq('id', recipient.id);
+  const openTrackingUrl = buildOpenTrackingUrl(campaign.id, recipient.id, step);
+  const trackingPixel = generateTrackingPixel(openTrackingUrl);
+  console.log(`Generated tracking pixel URL: ${openTrackingUrl}`);
 
-    if (trackingError) {
-      console.error('Error storing tracking URL:', trackingError);
-    } else {
-      console.log(`Stored tracking URL for recipient ${recipient.id}`);
-    }
+  const trackingUpdate: Record<string, string> = {
+    track_open_link: openTrackingUrl
+  };
+  if (trackingUrls.length > 0) {
+    trackingUpdate.track_click_link = trackingUrls[0];
   }
 
-  const trackingPixel = generateTrackingPixel(campaign.id, recipient.id);
-  console.log(`Generated tracking pixel URL: ${Deno.env.get("SUPABASE_URL")}/functions/v1/track-email-open?campaign_id=${campaign.id}&recipient_id=${recipient.id}`);
+  const { error: trackingError } = await supabase
+    .from('recipients')
+    .update(trackingUpdate)
+    .eq('id', recipient.id);
+
+  if (trackingError) {
+    console.error('Error storing tracking URLs:', trackingError);
+  } else {
+    console.log(`Stored tracking URLs for recipient ${recipient.id}`);
+  }
 
   // Generate Ghost Link (Honeypot) for Bot Detection
   // This link is invisible to humans but bots will likely follow it
-  const ghostLinkUrl = `${Deno.env.get("SUPABASE_URL")}/functions/v1/track-email-click?campaign_id=${campaign.id}&recipient_id=${recipient.id}&url=${encodeURIComponent('http://example.com/unsubscribe')}&type=ghost`;
+  const ghostLinkUrl = `${SUPABASE_URL}/functions/v1/track-email-click?campaign_id=${campaign.id}&recipient_id=${recipient.id}&url=${encodeURIComponent('http://example.com/unsubscribe')}&type=ghost&step=${step}`;
   const ghostLink = `<a href="${ghostLinkUrl}" style="display:none; visibility:hidden; opacity:0; position:absolute; left:-9999px;">Unsubscribe</a>`;
 
   const finalContent = contentWithClickTracking + trackingPixel + ghostLink;
@@ -887,6 +895,7 @@ const processBatch = async (campaignId: string, batchSize = 3, step = 0, emailCo
           emailConfig,
           recipient,
           campaign,
+          step,
           prospectData,
           recipient.message_id,
           recipient.thread_id,

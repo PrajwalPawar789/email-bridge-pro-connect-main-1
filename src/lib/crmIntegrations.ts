@@ -146,8 +146,21 @@ export const updateMapping = (state: CrmState, provider: CrmProvider, mapping: C
   return nextState;
 };
 
+const normalizeBaseUrl = (value?: string) => {
+  if (!value) return undefined;
+  return value.replace(/\/+$/g, '');
+};
+
+const baseFromSyncUrl = (value?: string) => {
+  if (!value) return undefined;
+  return normalizeBaseUrl(value.replace(/\/sync-mailbox\/?$/i, ''));
+};
+
 export const CRM_API_BASE_URL =
-  import.meta.env.VITE_CRM_API_BASE_URL || 'http://localhost:8787';
+  normalizeBaseUrl(import.meta.env.VITE_MAILBOX_API_URL) ||
+  baseFromSyncUrl(import.meta.env.VITE_MAILBOX_SYNC_URL) ||
+  normalizeBaseUrl(import.meta.env.VITE_CRM_API_BASE_URL) ||
+  'http://localhost:8787';
 
 export type CrmOAuthStartResponse = {
   authUrl?: string;

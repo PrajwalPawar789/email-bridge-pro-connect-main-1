@@ -71,10 +71,10 @@ const Logo: React.FC<LogoProps> = ({
       </div>
       
       {showText && (
-        <span className={`font-semibold tracking-wide ${textClassName}`}>
-          Email
-          <span className={`ml-1 ${accentClassName}`}>
-            Bridge
+        <span className={`font-semibold trackiytng-wide ${textClassName}`}>
+          vintro
+          <span className={` ${accentClassName}`}>
+            .io
           </span>
         </span>
       )}
