@@ -60,7 +60,7 @@ BEGIN
           
           -- Trigger the edge function to start sending
           PERFORM net.http_post(
-            url := 'https://lyerkyijpavilyufcrgb.supabase.co/functions/v1/send-campaign-emails',
+            url := 'https://smwjzloqamtvemljedkv.supabase.co/functions/v1/send-campaign-emails',
             headers := '{"Content-Type": "application/json", "Authorization": "Bearer ' || current_setting('app.settings.service_role_key', true) || '"}'::jsonb,
             body := json_build_object('campaignId', campaign_record.id, 'resume', true)::jsonb
           );

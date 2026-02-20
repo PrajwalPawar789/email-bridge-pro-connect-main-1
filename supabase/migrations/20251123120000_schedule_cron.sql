@@ -17,9 +17,10 @@ select cron.schedule(
   $$
   select
     net.http_post(
-        url:='https://lyerkyijpavilyufcrgb.supabase.co/functions/v1/monitor-campaigns',
+        url:='https://smwjzloqamtvemljedkv.supabase.co/functions/v1/monitor-campaigns',
         headers:='{"Content-Type": "application/json"}'::jsonb,
         body:='{}'::jsonb
     ) as request_id;
   $$
 );
+

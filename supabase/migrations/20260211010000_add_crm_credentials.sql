@@ -16,7 +16,8 @@ CREATE UNIQUE INDEX IF NOT EXISTS crm_credentials_user_provider_idx
 
 ALTER TABLE public.crm_credentials ENABLE ROW LEVEL SECURITY;
 
-CREATE POLICY IF NOT EXISTS "Users manage own crm credentials"
+DROP POLICY IF EXISTS "Users manage own crm credentials" ON public.crm_credentials;
+CREATE POLICY "Users manage own crm credentials"
   ON public.crm_credentials
   FOR ALL
   USING (auth.uid() = user_id)

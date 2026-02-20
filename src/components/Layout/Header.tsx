@@ -30,7 +30,10 @@ const Header = ({ user, onLogout, activeTab }: HeaderProps) => {
     templates: 'Templates',
     connect: 'Connect',
     integrations: 'Integrations',
-    settings: 'Settings'
+    settings: 'Settings',
+    subscription: 'Subscription',
+    billing: 'Billing',
+    spending: 'Spending'
   };
   const activeLabel = activeTab ? tabLabels[activeTab] || 'Workspace' : 'Workspace';
 

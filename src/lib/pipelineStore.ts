@@ -26,6 +26,13 @@ export type DbPipelineStage = {
   is_lost: boolean;
 };
 
+export type DbPipelineStageKeyword = {
+  id: string;
+  pipeline_stage_id: string;
+  keyword: string;
+  created_at?: string | null;
+};
+
 export type DbOpportunity = {
   id: string;
   user_id: string;
@@ -52,6 +59,83 @@ export type PipelineStageSeed = {
   tone?: string | null;
   is_won?: boolean;
   is_lost?: boolean;
+  keywords?: string[];
+};
+
+export type PipelineStageUpdateSeed = PipelineStageSeed & {
+  id?: string;
+};
+
+const slugifyStageId = (value: string) => (
+  value
+    .toLowerCase()
+    .trim()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+);
+
+const sanitizeStageKeywords = (keywords?: string[]) => {
+  const unique = new Set<string>();
+  (keywords || []).forEach((keyword) => {
+    const cleaned = (keyword || '').trim().toLowerCase();
+    if (!cleaned || cleaned.length < 2) return;
+    unique.add(cleaned);
+  });
+  return Array.from(unique);
+};
+
+const normalizeStageSeeds = (stages: PipelineStageSeed[]) => {
+  const usedTemplateIds = new Set<string>();
+  return stages.map((stage, index) => {
+    const trimmedName = stage.name.trim() || `Stage ${index + 1}`;
+    const baseTemplateId =
+      slugifyStageId(stage.templateStageId || '') ||
+      slugifyStageId(trimmedName) ||
+      `stage-${index + 1}`;
+
+    let templateStageId = baseTemplateId;
+    let suffix = 2;
+    while (usedTemplateIds.has(templateStageId)) {
+      templateStageId = `${baseTemplateId}-${suffix}`;
+      suffix += 1;
+    }
+    usedTemplateIds.add(templateStageId);
+
+    return {
+      templateStageId,
+      name: trimmedName,
+      description: stage.description?.trim() || null,
+      tone: stage.tone || 'slate',
+      is_won: !!stage.is_won,
+      is_lost: !!stage.is_lost,
+      keywords: sanitizeStageKeywords(stage.keywords),
+    };
+  });
+};
+
+const replacePipelineStageKeywords = async (rows: Array<{ stageId: string; keywords: string[] }>) => {
+  const stageIds = rows.map((row) => row.stageId).filter(Boolean);
+  if (stageIds.length === 0) return;
+
+  const { error: deleteError } = await supabase
+    .from('pipeline_stage_keywords')
+    .delete()
+    .in('pipeline_stage_id', stageIds);
+  if (deleteError) throw deleteError;
+
+  const keywordRows = rows.flatMap((row) =>
+    row.keywords.map((keyword) => ({
+      pipeline_stage_id: row.stageId,
+      keyword,
+    }))
+  );
+
+  if (keywordRows.length > 0) {
+    const { error: insertError } = await supabase
+      .from('pipeline_stage_keywords')
+      .insert(keywordRows);
+    if (insertError) throw insertError;
+  }
 };
 
 export const ensurePipelineForTemplate = async (userId: string, templateId: string) => {
@@ -116,7 +200,8 @@ export const createPipelineWithStages = async (payload: {
   const pipeline = created as DbPipeline;
 
   if (payload.stages && payload.stages.length > 0) {
-    const stageRows = payload.stages.map((stage, index) => ({
+    const normalizedStages = normalizeStageSeeds(payload.stages);
+    const stageRows = normalizedStages.map((stage, index) => ({
       pipeline_id: pipeline.id,
       template_stage_id: stage.templateStageId ?? null,
       name: stage.name,
@@ -129,6 +214,14 @@ export const createPipelineWithStages = async (payload: {
 
     const { error: stageError } = await supabase.from('pipeline_stages').insert(stageRows);
     if (stageError) throw stageError;
+
+    const stages = await fetchPipelineStages(pipeline.id);
+    const keywordsByStage = stages.map((stage) => ({
+      stageId: stage.id,
+      keywords: normalizedStages[stage.sort_order]?.keywords || [],
+    }));
+    await replacePipelineStageKeywords(keywordsByStage);
+    return { pipeline, stages };
   } else {
     const templateId = payload.templateId || DEFAULT_TEMPLATE.id;
     await ensurePipelineStages(pipeline.id, templateId);
@@ -136,6 +229,146 @@ export const createPipelineWithStages = async (payload: {
 
   const stages = await fetchPipelineStages(pipeline.id);
   return { pipeline, stages };
+};
+
+export const updatePipelineWithStages = async (payload: {
+  pipelineId: string;
+  name: string;
+  description?: string | null;
+  stages: PipelineStageUpdateSeed[];
+}) => {
+  const normalizedName = payload.name.trim() || 'Pipeline';
+  const normalizedStagesInput = payload.stages.filter((stage) => stage.name.trim().length > 0);
+  if (normalizedStagesInput.length === 0) {
+    throw new Error('At least one stage is required.');
+  }
+
+  const normalizedStages = normalizeStageSeeds(normalizedStagesInput);
+  const now = new Date().toISOString();
+
+  const { error: pipelineError } = await supabase
+    .from('pipelines')
+    .update({
+      name: normalizedName,
+      description: payload.description?.trim() || null,
+      updated_at: now,
+    })
+    .eq('id', payload.pipelineId);
+
+  if (pipelineError) throw pipelineError;
+
+  const existingStages = await fetchPipelineStages(payload.pipelineId);
+  const existingById = new Map(existingStages.map((stage) => [stage.id, stage]));
+  const resolvedStages: Array<{ id: string; is_won: boolean; is_lost: boolean; keywords: string[] }> = [];
+
+  for (let index = 0; index < normalizedStages.length; index += 1) {
+    const sourceStage = normalizedStagesInput[index];
+    const normalizedStage = normalizedStages[index];
+    const candidateId = sourceStage.id;
+    const stagePayload = {
+      template_stage_id: normalizedStage.templateStageId,
+      name: normalizedStage.name,
+      description: normalizedStage.description,
+      sort_order: index,
+      tone: normalizedStage.tone,
+      is_won: normalizedStage.is_won,
+      is_lost: normalizedStage.is_lost,
+      updated_at: now,
+    };
+
+    if (candidateId && existingById.has(candidateId)) {
+      const { error: updateError } = await supabase
+        .from('pipeline_stages')
+        .update(stagePayload)
+        .eq('id', candidateId)
+        .eq('pipeline_id', payload.pipelineId);
+      if (updateError) throw updateError;
+      resolvedStages.push({
+        id: candidateId,
+        is_won: normalizedStage.is_won,
+        is_lost: normalizedStage.is_lost,
+        keywords: normalizedStage.keywords || [],
+      });
+      continue;
+    }
+
+    const { data: insertedStage, error: insertError } = await supabase
+      .from('pipeline_stages')
+      .insert({
+        pipeline_id: payload.pipelineId,
+        ...stagePayload,
+      })
+      .select('*')
+      .single();
+
+    if (insertError) throw insertError;
+    resolvedStages.push({
+      id: insertedStage.id,
+      is_won: normalizedStage.is_won,
+      is_lost: normalizedStage.is_lost,
+      keywords: normalizedStage.keywords || [],
+    });
+  }
+
+  const retainedStageIds = new Set(resolvedStages.map((stage) => stage.id));
+  const removedStageIds = existingStages
+    .filter((stage) => !retainedStageIds.has(stage.id))
+    .map((stage) => stage.id);
+
+  if (removedStageIds.length > 0) {
+    const fallback = resolvedStages[0];
+    if (fallback) {
+      const fallbackStatus = fallback.is_won ? 'won' : fallback.is_lost ? 'lost' : 'open';
+      const { error: moveError } = await supabase
+        .from('opportunities')
+        .update({
+          stage_id: fallback.id,
+          status: fallbackStatus,
+          updated_at: now,
+        })
+        .eq('pipeline_id', payload.pipelineId)
+        .in('stage_id', removedStageIds);
+      if (moveError) throw moveError;
+    } else {
+      const { error: clearError } = await supabase
+        .from('opportunities')
+        .update({
+          stage_id: null,
+          status: 'open',
+          updated_at: now,
+        })
+        .eq('pipeline_id', payload.pipelineId)
+        .in('stage_id', removedStageIds);
+      if (clearError) throw clearError;
+    }
+
+    const { error: deleteError } = await supabase
+      .from('pipeline_stages')
+      .delete()
+      .eq('pipeline_id', payload.pipelineId)
+      .in('id', removedStageIds);
+    if (deleteError) throw deleteError;
+  }
+
+  for (const stage of resolvedStages) {
+    const status = stage.is_won ? 'won' : stage.is_lost ? 'lost' : 'open';
+    const { error: statusError } = await supabase
+      .from('opportunities')
+      .update({ status, updated_at: now })
+      .eq('pipeline_id', payload.pipelineId)
+      .eq('stage_id', stage.id);
+    if (statusError) throw statusError;
+  }
+
+  await replacePipelineStageKeywords(
+    resolvedStages.map((stage) => ({
+      stageId: stage.id,
+      keywords: stage.keywords,
+    }))
+  );
+
+  const stages = await fetchPipelineStages(payload.pipelineId);
+  return { stages };
 };
 
 export const ensurePipelineStages = async (pipelineId: string, templateId: string) => {
@@ -194,6 +427,29 @@ export const fetchPipelineStages = async (pipelineId: string) => {
     .order('sort_order', { ascending: true });
   if (error) throw error;
   return data as DbPipelineStage[];
+};
+
+export const fetchPipelineStageKeywords = async (pipelineId: string) => {
+  const stages = await fetchPipelineStages(pipelineId);
+  const stageIds = stages.map((stage) => stage.id);
+  if (stageIds.length === 0) return {} as Record<string, string[]>;
+
+  const { data, error } = await supabase
+    .from('pipeline_stage_keywords')
+    .select('pipeline_stage_id, keyword')
+    .in('pipeline_stage_id', stageIds)
+    .order('keyword', { ascending: true });
+
+  if (error) throw error;
+
+  const map: Record<string, string[]> = {};
+  (data || []).forEach((row) => {
+    const stageId = row.pipeline_stage_id;
+    if (!stageId) return;
+    if (!map[stageId]) map[stageId] = [];
+    map[stageId].push(row.keyword);
+  });
+  return map;
 };
 
 export const fetchOpportunities = async (params: {

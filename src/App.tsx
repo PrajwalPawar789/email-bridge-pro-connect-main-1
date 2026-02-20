@@ -13,6 +13,7 @@ import CampaignTracker from "./pages/CampaignTracker";
 import Inbox from "./pages/Inbox";
 import Automations from "./pages/Automations";
 import Pipeline from "./pages/Pipeline";
+import Subscription from "./pages/Subscription";
 import NotFound from "./pages/NotFound";
 import { AuthProvider } from "./providers/AuthProvider";
 import Onboarding from "./pages/Onboarding";
@@ -38,6 +39,9 @@ const App = () => (
               <Route path="/inbox" element={<Inbox />} />
               <Route path="/automations" element={<Automations />} />
               <Route path="/pipeline" element={<Pipeline />} />
+              <Route path="/subscription" element={<Subscription />} />
+              <Route path="/billing" element={<Subscription />} />
+              <Route path="/spending" element={<Subscription />} />
               <Route path="/campaign/:id" element={<CampaignTracker />} />
             </Route>
             {/* ADD ALL CUSTOM ROUTES ABOVE THE CATCH-ALL "*" ROUTE */}

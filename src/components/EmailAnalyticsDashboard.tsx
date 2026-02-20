@@ -602,6 +602,141 @@ const EmailAnalyticsDashboard = () => {
     }
   };
 
+  const toCsvCell = (value: unknown) => {
+    if (value === null || value === undefined) return '';
+    const serialized = String(value).replace(/"/g, '""');
+    return /[",\n]/.test(serialized) ? `"${serialized}"` : serialized;
+  };
+
+  const toCsvLine = (values: unknown[]) => values.map(toCsvCell).join(',');
+
+  const toIsoOrEmpty = (value: unknown) => {
+    if (!value) return '';
+    const date = new Date(String(value));
+    return Number.isNaN(date.getTime()) ? '' : date.toISOString();
+  };
+
+  const handleExport = () => {
+    try {
+      if (
+        data.totalCampaigns === 0 &&
+        data.totalEmails === 0 &&
+        data.campaigns.length === 0 &&
+        data.dailyStats.length === 0 &&
+        data.senderStats.length === 0
+      ) {
+        toast({
+          title: "No analytics data",
+          description: "There is nothing to export for this date range yet."
+        });
+        return;
+      }
+
+      const rows: unknown[][] = [];
+
+      rows.push(['Analytics Summary']);
+      rows.push(['Metric', 'Value']);
+      rows.push(['Date range (days)', dateRange]);
+      rows.push(['Generated at', new Date().toISOString()]);
+      rows.push(['Total campaigns', data.totalCampaigns]);
+      rows.push(['Total sent', data.totalEmails]);
+      rows.push(['Total opens', data.totalOpens]);
+      rows.push(['Total clicks', data.totalClicks]);
+      rows.push(['Total replies', data.totalReplies]);
+      rows.push(['Total bounced', data.totalBounced]);
+      rows.push(['Total failed', data.totalFailed]);
+      rows.push(['Average open rate (%)', data.avgOpenRate.toFixed(2)]);
+      rows.push(['Average click rate (%)', data.avgClickRate.toFixed(2)]);
+      rows.push(['Average reply rate (%)', data.avgReplyRate.toFixed(2)]);
+      rows.push(['Average bounce rate (%)', data.avgBounceRate.toFixed(2)]);
+      rows.push([]);
+
+      rows.push(['Campaign Performance']);
+      rows.push([
+        'Campaign ID',
+        'Campaign Name',
+        'Status',
+        'Recipients',
+        'Sent',
+        'Opened',
+        'Clicked',
+        'Replied',
+        'Bounced',
+        'Failed',
+        'Created At',
+        'Updated At'
+      ]);
+
+      data.campaigns.forEach((campaign: any) => {
+        rows.push([
+          campaign.id || '',
+          campaign.name || '',
+          campaign.status || '',
+          campaign.total_recipients ?? 0,
+          campaign.sent_count ?? 0,
+          campaign.opened_count ?? 0,
+          campaign.clicked_count ?? 0,
+          campaign.replied_count ?? 0,
+          campaign.bounced_count ?? 0,
+          campaign.failed_count ?? 0,
+          toIsoOrEmpty(campaign.created_at),
+          toIsoOrEmpty(campaign.updated_at)
+        ]);
+      });
+      rows.push([]);
+
+      rows.push(['Daily Trend']);
+      rows.push(['Day', 'Sent', 'Opens', 'Clicks', 'Replies']);
+      data.dailyStats.forEach((day: any) => {
+        rows.push([
+          day.name || '',
+          day.sent ?? 0,
+          day.opens ?? 0,
+          day.clicks ?? 0,
+          day.replies ?? 0
+        ]);
+      });
+      rows.push([]);
+
+      rows.push(['Sender Performance']);
+      rows.push(['Sender', 'Sent', 'Opens', 'Replies', 'Bounces']);
+      data.senderStats.forEach((sender: any) => {
+        rows.push([
+          sender.email || '',
+          sender.sent ?? 0,
+          sender.opens ?? 0,
+          sender.replies ?? 0,
+          sender.bounces ?? 0
+        ]);
+      });
+
+      const csvContent = `\uFEFF${rows.map(toCsvLine).join('\n')}`;
+      const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+      const url = window.URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      const exportTimestamp = format(new Date(), 'yyyyMMdd-HHmmss');
+
+      link.href = url;
+      link.download = `analytics-export-${exportTimestamp}.csv`;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      window.URL.revokeObjectURL(url);
+
+      toast({
+        title: "Export complete",
+        description: `Downloaded ${link.download}`
+      });
+    } catch (error) {
+      console.error('Error exporting analytics:', error);
+      toast({
+        title: "Export failed",
+        description: "Unable to export analytics right now. Please try again.",
+        variant: "destructive"
+      });
+    }
+  };
+
   const benchmarks = {
     general: { open: 21.33, click: 2.62, reply: 1.0, bounce: 0.5 },
     technology: { open: 24.0, click: 3.5, reply: 1.5, bounce: 0.8 },
@@ -943,7 +1078,7 @@ const EmailAnalyticsDashboard = () => {
                 Refresh
               </Button>
 
-              <Button variant="default" className="h-10 rounded-full bg-[var(--dash-ink)] text-xs font-semibold text-white shadow-sm hover:bg-black/90">
+              <Button onClick={handleExport} variant="default" className="h-10 rounded-full bg-[var(--dash-ink)] text-xs font-semibold text-white shadow-sm hover:bg-black/90">
                 <Download className="h-4 w-4 mr-2" />
                 Export
               </Button>

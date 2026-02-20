@@ -903,23 +903,50 @@ const processBatch = async (campaignId: string, batchSize = 3, step = 0, emailCo
         );
 
         // Update recipient status
-        const updateData: any = { 
-            status: 'sent',
-            current_step: step,
-            last_email_sent_at: new Date().toISOString(),
-            message_id: info.messageId,
-            assigned_email_config_id: configIdToUse
+        const sentAt = new Date().toISOString();
+        const updateData: any = {
+          status: 'sent',
+          current_step: step,
+          last_email_sent_at: sentAt,
+          message_id: info.messageId,
+          assigned_email_config_id: configIdToUse
         };
         // If this is the first email (step 0), set the thread_id
         if (step === 0) {
-            updateData.thread_id = info.messageId;
+          updateData.thread_id = info.messageId;
         }
 
         const { error: updateError } = await supabase
           .from('recipients')
           .update(updateData)
-          .eq('id', recipient.id);        if (updateError) {
+          .eq('id', recipient.id);
+
+        if (updateError) {
           console.error(`Error updating recipient ${recipient.id}:`, updateError);
+        }
+
+        const senderName = (emailConfig.sender_name || '').trim();
+        const { error: sentTrackingError } = await supabase
+          .from('tracking_events')
+          .insert({
+            campaign_id: campaignId,
+            recipient_id: recipient.id,
+            event_type: 'sent',
+            created_at: sentAt,
+            step_number: step,
+            is_bot: false,
+            bot_score: 0,
+            metadata: {
+              message_id: info.messageId || null,
+              smtp_response: info.response || null,
+              sender_email: emailConfig.username || null,
+              sender_name: senderName || null,
+              email_config_id: configIdToUse || null
+            }
+          });
+
+        if (sentTrackingError) {
+          console.error(`Error logging sent event for recipient ${recipient.id}:`, sentTrackingError);
         }
 
         emailsSent++;

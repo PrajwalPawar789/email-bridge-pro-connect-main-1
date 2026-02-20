@@ -1,4 +1,4 @@
-project_id = "lyerkyijpavilyufcrgb"
+project_id = "smwjzloqamtvemljedkv"
 
 [functions.track-email-open]
 verify_jwt = false
@@ -20,3 +20,4 @@ verify_jwt = false
 
 [db]
 major_version = 15
+

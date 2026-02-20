@@ -41,7 +41,7 @@ SECURITY DEFINER
 AS $$
 DECLARE
   service_role_key TEXT;
-  url TEXT := 'https://lyerkyijpavilyufcrgb.supabase.co/functions/v1/monitor-campaigns';
+  url TEXT := 'https://smwjzloqamtvemljedkv.supabase.co/functions/v1/monitor-campaigns';
 BEGIN
   -- Retrieve key from the secrets table instead of app.settings
   SELECT value INTO service_role_key FROM public.app_secrets WHERE key = 'service_role_key';
@@ -74,3 +74,4 @@ SELECT cron.schedule(
   '*/10 * * * *',
   'SELECT public.monitor_and_restart_campaigns()'
 );
+

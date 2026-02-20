@@ -2,8 +2,26 @@
 # This creates a deployment package that you can manually upload
 
 $functionName = "send-campaign-batch"
-$projectId = "lyerkyijpavilyufcrgb"
 $functionPath = ".\supabase\functions\$functionName\index.ts"
+
+$projectId = $env:SUPABASE_PROJECT_REF
+if (-not $projectId -and (Test-Path ".\.env")) {
+    $envMap = @{}
+    Get-Content ".\.env" | ForEach-Object {
+        if ($_ -match '^\s*([A-Za-z_][A-Za-z0-9_]*)=(.*)$') {
+            $envMap[$Matches[1]] = $Matches[2].Trim().Trim('"')
+        }
+    }
+    if ($envMap.ContainsKey("SUPABASE_PROJECT_REF") -and $envMap["SUPABASE_PROJECT_REF"]) {
+        $projectId = $envMap["SUPABASE_PROJECT_REF"]
+    } elseif ($envMap.ContainsKey("SUPABASE_URL") -and ($envMap["SUPABASE_URL"] -match 'https://([a-z0-9-]+)\.supabase\.co')) {
+        $projectId = $Matches[1]
+    }
+}
+
+if (-not $projectId) {
+    throw "Missing SUPABASE_PROJECT_REF (or SUPABASE_URL) in .env."
+}
 
 Write-Host "========================================" -ForegroundColor Cyan
 Write-Host "Supabase Function Deployment Helper" -ForegroundColor Cyan

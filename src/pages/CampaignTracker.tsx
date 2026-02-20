@@ -109,6 +109,26 @@ const CampaignTracker = () => {
       navigate(`/${tab}`);
     }
   };
+
+  const chunkStrings = (items: string[], size: number) => {
+    const chunks: string[][] = [];
+    for (let index = 0; index < items.length; index += size) {
+      chunks.push(items.slice(index, index + size));
+    }
+    return chunks;
+  };
+
+  const buildCaseInsensitiveEmailOrFilter = (field: 'from_email', emails: string[]) =>
+    emails
+      .map((email) => {
+        const escaped = email
+          .replace(/\\/g, '\\\\')
+          .replace(/,/g, '\\,')
+          .replace(/%/g, '\\%')
+          .replace(/_/g, '\\_');
+        return `${field}.ilike.${escaped}`;
+      })
+      .join(',');
   
   const [stats, setStats] = useState({
     total: 0,
@@ -249,56 +269,73 @@ const CampaignTracker = () => {
       return;
     }
 
-    const emails = repliedRecipients.map(r => r.email);
+    const emails = [...new Set(
+      repliedRecipients
+        .map((recipient) => (recipient.email || '').trim().toLowerCase())
+        .filter(Boolean)
+    )];
 
-    const { data, error } = await supabase
-      .from('email_messages')
-      .select('*')
-      .in('from_email', emails)
-      .order('date', { ascending: false });
+    const messageRows: any[] = [];
+    const emailChunks = chunkStrings(emails, 40);
 
-    if (error) {
-      console.error('Error fetching replies:', error);
-    } else {
-      // Create a map for faster lookup, normalizing email to lowercase
-      const messageMap = new Map();
-      data.forEach(msg => {
-        if (msg.from_email) {
-          const normalizedEmail = msg.from_email.toLowerCase();
-          // Store the most recent message for each email
-          if (!messageMap.has(normalizedEmail)) {
-            messageMap.set(normalizedEmail, msg);
-          }
+    for (const emailChunk of emailChunks) {
+      const orFilter = buildCaseInsensitiveEmailOrFilter('from_email', emailChunk);
+      const { data, error } = await supabase
+        .from('email_messages')
+        .select('*')
+        .or(orFilter)
+        .order('date', { ascending: false });
+
+      if (error) {
+        console.error('Error fetching replies:', error);
+        continue;
+      }
+
+      messageRows.push(...(data || []));
+    }
+
+    const sortedRows = messageRows
+      .slice()
+      .sort((left, right) => new Date(right.date || 0).getTime() - new Date(left.date || 0).getTime());
+
+    // Create a map for faster lookup, normalizing email to lowercase
+    const messageMap = new Map();
+    sortedRows.forEach(msg => {
+      if (msg.from_email) {
+        const normalizedEmail = msg.from_email.toLowerCase();
+        // Store the most recent message for each email
+        if (!messageMap.has(normalizedEmail)) {
+          messageMap.set(normalizedEmail, msg);
         }
-      });
+      }
+    });
 
-      const repliesList = repliedRecipients.map(recipient => {
-        const normalizedRecipientEmail = recipient.email.toLowerCase();
-        const msg = messageMap.get(normalizedRecipientEmail);
+    const repliesList = repliedRecipients.map(recipient => {
+      const normalizedRecipientEmail = (recipient.email || '').toLowerCase();
+      const msg = messageMap.get(normalizedRecipientEmail);
 
-        if (msg) {
-          return {
-            ...msg,
-            recipientName: recipient.name,
-            recipientId: recipient.id,
-            hasContent: true
-          };
-        }
-        // Fallback for when we know they replied but don't have the message body
+      if (msg) {
         return {
-          id: `placeholder-${recipient.id}`,
-          from_email: recipient.email,
+          ...msg,
           recipientName: recipient.name,
           recipientId: recipient.id,
-          subject: "Reply detected (Content not synced)",
-          body: "<div class='text-gray-500 italic p-4 bg-gray-50 rounded border'>This reply was detected by the system scan, but the full message content has not been synced to the local database yet. <br/><br/>Please go to the <b>Mailbox</b> tab and click <b>Sync Mailbox</b> to download the latest messages.</div>",
-          date: recipient.updated_at || new Date().toISOString(),
-          hasContent: false
+          hasContent: true
         };
-      });
+      }
+      // Fallback for when we know they replied but don't have the message body
+      return {
+        id: `placeholder-${recipient.id}`,
+        from_email: recipient.email,
+        recipientName: recipient.name,
+        recipientId: recipient.id,
+        subject: "Reply detected (Content not synced)",
+        body: "<div class='text-gray-500 italic p-4 bg-gray-50 rounded border'>This reply was detected by the system scan, but the full message content has not been synced to the local database yet. <br/><br/>Please go to the <b>Mailbox</b> tab and click <b>Sync Mailbox</b> to download the latest messages.</div>",
+        date: recipient.updated_at || new Date().toISOString(),
+        hasContent: false
+      };
+    });
 
-      setReplies(repliesList);
-    }
+    setReplies(repliesList);
   };
 
   const fetchCampaignData = async (showLoading = true) => {
@@ -338,9 +375,34 @@ const CampaignTracker = () => {
       resolvedTotal = totalCount;
       setRecipientTotal(totalCount);
 
+      const [replyCountResult, bounceCountResult] = await Promise.all([
+        supabase
+          .from('recipients')
+          .select('id', { count: 'exact', head: true })
+          .eq('campaign_id', id)
+          .eq('replied', true),
+        supabase
+          .from('recipients')
+          .select('id', { count: 'exact', head: true })
+          .eq('campaign_id', id)
+          .eq('bounced', true)
+      ]);
+
+      if (replyCountResult.error) {
+        console.error('Error fetching exact replied count:', replyCountResult.error);
+      }
+      if (bounceCountResult.error) {
+        console.error('Error fetching exact bounced count:', bounceCountResult.error);
+      }
+
       const baseStats = getRecipientStats(campaignData, pageRecipients, totalCount);
+      const exactReplies = replyCountResult.count || 0;
+      const exactBounces = bounceCountResult.count || 0;
+
       setStats({
         ...baseStats,
+        replies: Math.max(baseStats.replies, exactReplies),
+        bounces: Math.max(baseStats.bounces, exactBounces),
         botOpens: (campaignData as any).bot_open_count || 0,
         botClicks: (campaignData as any).bot_click_count || 0
       });
@@ -456,7 +518,42 @@ const CampaignTracker = () => {
       .slice()
       .sort((a: any, b: any) => a.step_number - b.step_number);
 
-    const sentSteps: Array<{ step: number; date: string; time: number; isEstimated: boolean }> = [];
+    const earliestEventByStep = new Map<number, number>();
+    const trackedSentByStep = new Map<number, { id: string; time: number; date: string }>();
+    recipientTimelineEvents.forEach((event) => {
+      const explicitStep = Number.isFinite(event?.step_number) ? event.step_number : null;
+      if (explicitStep === null || !event?.created_at) return;
+      const eventTime = new Date(event.created_at).getTime();
+      if (!Number.isFinite(eventTime)) return;
+      const existing = earliestEventByStep.get(explicitStep);
+      if (existing === undefined || eventTime < existing) {
+        earliestEventByStep.set(explicitStep, eventTime);
+      }
+      if (event.event_type === 'sent') {
+        const existingSent = trackedSentByStep.get(explicitStep);
+        if (!existingSent || eventTime < existingSent.time) {
+          trackedSentByStep.set(explicitStep, {
+            id: event.id,
+            time: eventTime,
+            date: new Date(eventTime).toISOString(),
+          });
+        }
+      }
+    });
+
+    const sentSteps: Array<{ id: string; step: number; date: string; time: number; isEstimated: boolean }> = [];
+    Array.from(trackedSentByStep.entries())
+      .sort((a, b) => a[1].time - b[1].time)
+      .forEach(([step, entry]) => {
+        sentSteps.push({
+          id: entry.id,
+          step,
+          date: entry.date,
+          time: entry.time,
+          isEstimated: false,
+        });
+      });
+
     if (selectedRecipient.last_email_sent_at) {
       const currentStep = selectedRecipient.current_step ?? 0;
       const sentMap = new Map<number, Date>();
@@ -476,24 +573,34 @@ const CampaignTracker = () => {
       Array.from(sentMap.entries())
         .sort((a, b) => a[0] - b[0])
         .forEach(([step, date]) => {
-          const iso = date.toISOString();
+          if (trackedSentByStep.has(step)) return;
+          let sentTime = date.getTime();
+          const firstStepEventTime = earliestEventByStep.get(step);
+          if (typeof firstStepEventTime === 'number' && firstStepEventTime < sentTime) {
+            sentTime = Math.max(firstStepEventTime - 1, 0);
+          }
+          const iso = new Date(sentTime).toISOString();
           sentSteps.push({
+            id: `email-sent-estimated-${step}`,
             step,
             date: iso,
-            time: date.getTime(),
+            time: sentTime,
             isEstimated: step !== currentStep,
           });
         });
     }
 
+    sentSteps.sort((a, b) => a.time - b.time);
+
     sentSteps.forEach((stepEntry) => {
       events.push({
-        id: `email-sent-${stepEntry.step}`,
+        id: stepEntry.id,
         label: `Email Sent (Step ${stepEntry.step})`,
         date: stepEntry.date,
         color: 'bg-blue-500',
         kind: 'sent',
         step: stepEntry.step,
+        details: stepEntry.isEstimated ? 'Estimated from follow-up schedule' : undefined,
       });
     });
 
@@ -511,6 +618,8 @@ const CampaignTracker = () => {
 
     recipientTimelineEvents.forEach((event) => {
       if (!event?.created_at) return;
+      if (event.event_type === 'sent') return;
+      if (event.event_type !== 'open' && event.event_type !== 'click') return;
 
       const explicitStep = Number.isFinite(event.step_number) ? event.step_number : null;
       const resolvedStep = explicitStep ?? resolveStepFromTime(event.created_at);
@@ -524,9 +633,12 @@ const CampaignTracker = () => {
         ? (isBot ? 'bg-slate-400' : 'bg-green-500')
         : (isBot ? 'bg-slate-400' : 'bg-purple-500');
       const detailParts: string[] = [];
+      const metadata = event.metadata && typeof event.metadata === 'object' && !Array.isArray(event.metadata)
+        ? (event.metadata as Record<string, unknown>)
+        : null;
 
-      if (event.event_type === 'click' && event.metadata && typeof event.metadata === 'object') {
-        const targetUrl = (event.metadata as any).target_url;
+      if (event.event_type === 'click' && metadata) {
+        const targetUrl = metadata.target_url;
         if (typeof targetUrl === 'string') {
           let displayTarget = targetUrl;
           try {
@@ -535,6 +647,28 @@ const CampaignTracker = () => {
             displayTarget = targetUrl;
           }
           detailParts.push(`Target: ${displayTarget}`);
+        }
+      }
+
+      if (metadata) {
+        const msSinceSendRaw = metadata.ms_since_send;
+        const msSinceSend = typeof msSinceSendRaw === 'number'
+          ? msSinceSendRaw
+          : typeof msSinceSendRaw === 'string'
+            ? Number(msSinceSendRaw)
+            : NaN;
+        if (Number.isFinite(msSinceSend) && msSinceSend >= 0) {
+          detailParts.push(`Since send: ${Math.round(msSinceSend / 1000)}s`);
+        }
+
+        const msSinceOpenRaw = metadata.ms_since_open;
+        const msSinceOpen = typeof msSinceOpenRaw === 'number'
+          ? msSinceOpenRaw
+          : typeof msSinceOpenRaw === 'string'
+            ? Number(msSinceOpenRaw)
+            : NaN;
+        if (Number.isFinite(msSinceOpen) && msSinceOpen >= 0) {
+          detailParts.push(`Open->click: ${Math.round(msSinceOpen / 1000)}s`);
         }
       }
 

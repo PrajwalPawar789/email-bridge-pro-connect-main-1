@@ -11,12 +11,31 @@ param(
   [int]$ConnectionTimeoutMs,
   [int]$GreetingTimeoutMs,
   [int]$SocketTimeoutMs,
-  [switch]$UseDbScan
+  [switch]$UseDbScan,
+  [string]$Url
 )
 
 $ErrorActionPreference = 'Stop'
 
-$url = "https://lyerkyijpavilyufcrgb.supabase.co/functions/v1/check-email-replies"
+$envPath = Join-Path (Split-Path -Parent $PSScriptRoot) '.env'
+if (Test-Path $envPath) {
+  Get-Content $envPath | ForEach-Object {
+    if ($_ -match '^\s*([A-Za-z_][A-Za-z0-9_]*)=(.*)$') {
+      $name = $Matches[1]
+      $value = $Matches[2].Trim().Trim('"')
+      if (-not [Environment]::GetEnvironmentVariable($name)) {
+        [Environment]::SetEnvironmentVariable($name, $value)
+      }
+    }
+  }
+}
+
+if (-not $Url) {
+  if (-not $env:SUPABASE_URL) {
+    throw "Missing SUPABASE_URL in environment or .env file."
+  }
+  $Url = "$($env:SUPABASE_URL.TrimEnd('/'))/functions/v1/check-email-replies"
+}
 
 $body = @{
   config_id = $ConfigId
@@ -40,7 +59,7 @@ Write-Host "Invoking check-email-replies..." -ForegroundColor Cyan
 Write-Host $json
 
 try {
-  $response = Invoke-RestMethod -Method Post -Uri $url -ContentType "application/json" -Body $json -TimeoutSec 180
+  $response = Invoke-RestMethod -Method Post -Uri $Url -ContentType "application/json" -Body $json -TimeoutSec 180
   $response | ConvertTo-Json -Depth 6
 } catch {
   Write-Host "Request failed:" -ForegroundColor Red

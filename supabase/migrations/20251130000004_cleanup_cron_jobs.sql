@@ -7,7 +7,7 @@ SELECT public.unschedule_job_if_exists('monitor-campaigns-every-minute');
 -- The job name in the logs was "monitor-campaigns-every-minute" (job 9)
 
 -- Let's also make sure we don't have duplicate jobs
-SELECT cron.unschedule('monitor-campaigns-worker'); -- Unschedule to reschedule cleanly
+SELECT public.unschedule_job_if_exists('monitor-campaigns-worker'); -- Unschedule to reschedule cleanly
 SELECT cron.schedule(
   'monitor-campaigns-worker',
   '* * * * *',

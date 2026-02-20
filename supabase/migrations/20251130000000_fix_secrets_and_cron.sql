@@ -11,7 +11,7 @@ SECURITY DEFINER
 AS $$
 DECLARE
   service_role_key TEXT;
-  url TEXT := 'https://lyerkyijpavilyufcrgb.supabase.co/functions/v1/check-email-replies';
+  url TEXT := 'https://smwjzloqamtvemljedkv.supabase.co/functions/v1/check-email-replies';
 BEGIN
   -- Retrieve key from the secrets table
   SELECT value INTO service_role_key FROM public.app_secrets WHERE key = 'service_role_key';
@@ -38,3 +38,4 @@ SELECT cron.schedule(
   '*/10 * * * *', -- Every 10 minutes
   'SELECT public.invoke_check_email_replies()'
 );
+

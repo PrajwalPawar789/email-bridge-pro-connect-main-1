@@ -19,6 +19,26 @@ services:
         value: "false"
       - key: MAILBOX_ALLOWED_ORIGINS
         sync: false
+      - key: MAILBOX_AUTO_CHECK_REPLIES
+        value: "false"
+      - key: MAILBOX_AUTO_CHECK_INTERVAL_MINUTES
+        value: "10"
+      - key: MAILBOX_AUTO_CHECK_LOOKBACK_DAYS
+        value: "7"
+      - key: MAILBOX_AUTO_CHECK_USE_DB_SCAN
+        value: "false"
+      - key: MAILBOX_AUTO_CHECK_CONFIG_ID
+        sync: false
+      - key: MAILBOX_AUTO_SYNC_MAILBOXES
+        value: "true"
+      - key: MAILBOX_AUTO_SYNC_INTERVAL_MINUTES
+        value: "10"
+      - key: MAILBOX_AUTO_SYNC_LIMIT
+        value: "50"
+      - key: MAILBOX_AUTO_SYNC_CONFIG_ID
+        sync: false
+      - key: MAILBOX_LOG_SYNC_SAMPLES
+        value: "false"
       - key: CRM_FRONTEND_URL
         sync: false
       - key: CRM_OAUTH_REDIRECT_URI

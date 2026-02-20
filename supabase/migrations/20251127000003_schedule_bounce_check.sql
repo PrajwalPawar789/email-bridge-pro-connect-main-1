@@ -28,9 +28,10 @@ SELECT cron.schedule(
   $$
   SELECT
     net.http_post(
-      url := 'https://lyerkyijpavilyufcrgb.supabase.co/functions/v1/check-email-replies',
+      url := 'https://smwjzloqamtvemljedkv.supabase.co/functions/v1/check-email-replies',
       headers := '{"Content-Type": "application/json", "Authorization": "Bearer ' || current_setting('app.settings.service_role_key', true) || '"}'::jsonb,
       body := '{}'::jsonb
     );
   $$
 );
+
