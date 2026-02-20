@@ -15,10 +15,9 @@ import EmailService, {
   normalizeReferences,
 } from './services/email-service.js';
 
-const DEFAULT_SUPABASE_URL = 'https://lyerkyijpavilyufcrgb.supabase.co';
-const DEFAULT_SUPABASE_ANON_KEY =
-  'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imx5ZXJreWlqcGF2aWx5dWZjcmdiIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NDg3NTM0NjQsImV4cCI6MjA2NDMyOTQ2NH0.hdh-tzbNBmCusr_ZJBU_K27P-6K9s1kwpBE3PrzXiwc';
-const DEFAULT_SERVICE_ROLE_KEY = 'REDACTED_SUPABASE_SERVICE_ROLE_KEY';
+const DEFAULT_SUPABASE_URL = '';
+const DEFAULT_SUPABASE_ANON_KEY = '';
+const DEFAULT_SERVICE_ROLE_KEY = '';
 const DEFAULT_ALLOWED_ORIGINS = 'http://localhost:5173,http://localhost:8080,http://10.127.57.196:8080';
 const DEFAULT_MAILBOX_PORT = 8787;
 const DEFAULT_BYPASS_AUTH = 'true';
@@ -36,14 +35,19 @@ const DEFAULT_AUTO_CHECK_INTERVAL_MINUTES = '10';
 const DEFAULT_AUTO_CHECK_LOOKBACK_DAYS = DEFAULT_CHECK_LOOKBACK_DAYS;
 const DEFAULT_AUTO_CHECK_USE_DB_SCAN = 'false';
 const DEFAULT_AUTO_CHECK_CONFIG_ID = '';
+const DEFAULT_AUTO_SYNC_MAILBOXES = 'false';
+const DEFAULT_AUTO_SYNC_INTERVAL_MINUTES = '10';
+const DEFAULT_AUTO_SYNC_LIMIT = '50';
+const DEFAULT_AUTO_SYNC_CONFIG_ID = '';
 
 const PORT = Number(process.env.PORT || process.env.MAILBOX_SERVER_PORT || DEFAULT_MAILBOX_PORT);
+const normalizeOrigin = (origin) => String(origin || '').trim().replace(/\/+$/, '');
 const ALLOWED_ORIGINS = (process.env.MAILBOX_ALLOWED_ORIGINS || DEFAULT_ALLOWED_ORIGINS)
   .split(',')
-  .map((origin) => origin.trim())
+  .map((origin) => normalizeOrigin(origin))
   .filter(Boolean);
 
-const SUPABASE_URL = process.env.SUPABASE_URL || DEFAULT_SUPABASE_URL;
+const SUPABASE_URL = process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL || DEFAULT_SUPABASE_URL;
 const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY || DEFAULT_SERVICE_ROLE_KEY;
 const SUPABASE_ANON_KEY =
   process.env.SUPABASE_ANON_KEY ||
@@ -92,10 +96,14 @@ const isPlaceholderValue = (value) => {
   );
 };
 
-const hasServiceRoleKey = !isPlaceholderValue(SUPABASE_SERVICE_ROLE_KEY);
-const hasAnonKey = !isPlaceholderValue(SUPABASE_ANON_KEY);
+const hasSupabaseUrl = typeof SUPABASE_URL === 'string' && SUPABASE_URL.startsWith('http');
+const hasServiceRoleKey = hasSupabaseUrl && !isPlaceholderValue(SUPABASE_SERVICE_ROLE_KEY);
+const hasAnonKey = hasSupabaseUrl && !isPlaceholderValue(SUPABASE_ANON_KEY);
 const supabaseAdmin = hasServiceRoleKey ? createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY) : null;
 
+if (!hasSupabaseUrl) {
+  console.warn('[mailbox] SUPABASE_URL is missing. Set it in .env.');
+}
 if (!hasServiceRoleKey) {
   console.warn('[mailbox] SUPABASE_SERVICE_ROLE_KEY is missing or placeholder. Falling back to anon key.');
 }
@@ -111,7 +119,8 @@ app.use(express.json({ limit: '10mb' }));
 app.use(
   cors({
     origin(origin, callback) {
-      if (!origin || ALLOWED_ORIGINS.includes('*') || ALLOWED_ORIGINS.includes(origin)) {
+      const normalizedOrigin = normalizeOrigin(origin);
+      if (!origin || ALLOWED_ORIGINS.includes('*') || ALLOWED_ORIGINS.includes(normalizedOrigin)) {
         callback(null, true);
       } else {
         callback(new Error('Not allowed by CORS'));
@@ -267,7 +276,7 @@ const syncMailbox = async (config, limit = 50, dbClient) => {
         const row = mapMessageToRow(config, message, parsed, mailbox.path);
         rows.push(row);
 
-        if (processed <= 3) {
+        if (LOG_SYNC_SAMPLES && processed <= 3) {
           console.log('[mailbox] Sample row prepared:', {
             uid: row.uid,
             from: row.from_email,
@@ -385,6 +394,18 @@ const AUTO_CHECK_LOOKBACK_DAYS = (() => {
 })();
 const AUTO_CHECK_USE_DB_SCAN = parseBoolean(process.env.MAILBOX_AUTO_CHECK_USE_DB_SCAN || DEFAULT_AUTO_CHECK_USE_DB_SCAN);
 const AUTO_CHECK_CONFIG_ID = (process.env.MAILBOX_AUTO_CHECK_CONFIG_ID || DEFAULT_AUTO_CHECK_CONFIG_ID || '').trim();
+const LOG_SYNC_SAMPLES = parseBoolean(process.env.MAILBOX_LOG_SYNC_SAMPLES || 'false');
+const AUTO_SYNC_MAILBOXES = parseBoolean(process.env.MAILBOX_AUTO_SYNC_MAILBOXES || DEFAULT_AUTO_SYNC_MAILBOXES);
+const AUTO_SYNC_INTERVAL_MINUTES = (() => {
+  const parsed = Number(process.env.MAILBOX_AUTO_SYNC_INTERVAL_MINUTES || DEFAULT_AUTO_SYNC_INTERVAL_MINUTES);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : Number(DEFAULT_AUTO_SYNC_INTERVAL_MINUTES);
+})();
+const AUTO_SYNC_LIMIT = (() => {
+  const parsed = Number(process.env.MAILBOX_AUTO_SYNC_LIMIT || DEFAULT_AUTO_SYNC_LIMIT);
+  const safe = Number.isFinite(parsed) ? parsed : Number(DEFAULT_AUTO_SYNC_LIMIT);
+  return Math.max(1, Math.min(500, safe));
+})();
+const AUTO_SYNC_CONFIG_ID = (process.env.MAILBOX_AUTO_SYNC_CONFIG_ID || DEFAULT_AUTO_SYNC_CONFIG_ID || '').trim();
 
 const buildCheckOverrides = (body) => {
   const nested = body?.overrides && typeof body.overrides === 'object' ? body.overrides : {};
@@ -435,6 +456,60 @@ const sanitizeBounceEmails = (emails, senderEmail) => {
   }
 
   return [...unique];
+};
+
+const chunk = (items, size) => {
+  const chunks = [];
+  for (let index = 0; index < items.length; index += size) {
+    chunks.push(items.slice(index, index + size));
+  }
+  return chunks;
+};
+
+const buildCaseInsensitiveEmailOrFilter = (emails) =>
+  emails
+    .map((email) => {
+      const escaped = String(email)
+        .replace(/\\/g, '\\\\')
+        .replace(/,/g, '\\,')
+        .replace(/%/g, '\\%')
+        .replace(/_/g, '\\_');
+      return `email.ilike.${escaped}`;
+    })
+    .join(',');
+
+const fetchRecipientsByEmailCaseInsensitive = async (dbClient, emails, selectFields) => {
+  const normalizedEmails = [...new Set(
+    (emails || [])
+      .map((email) => String(email || '').trim().toLowerCase())
+      .filter(Boolean)
+  )];
+
+  if (normalizedEmails.length === 0) {
+    return [];
+  }
+
+  const recipientsById = new Map();
+  const emailChunks = chunk(normalizedEmails, 40);
+
+  for (const emailChunk of emailChunks) {
+    const orFilter = buildCaseInsensitiveEmailOrFilter(emailChunk);
+    const { data, error } = await dbClient
+      .from('recipients')
+      .select(selectFields)
+      .or(orFilter);
+
+    if (error) {
+      console.error('[mailbox] Failed case-insensitive recipient lookup:', error);
+      continue;
+    }
+
+    (data || []).forEach((recipient) => {
+      if (recipient?.id) recipientsById.set(recipient.id, recipient);
+    });
+  }
+
+  return Array.from(recipientsById.values());
 };
 
 const getImapHostCandidates = (config) => {
@@ -636,12 +711,13 @@ const processDbEmails = async (dbClient, config, lookbackDays) => {
     const uniqueBounceEmails = sanitizeBounceEmails(allFoundEmails, senderEmail);
 
     if (uniqueBounceEmails.length > 0) {
-      const { data: potentialBounces, error: bounceError } = await dbClient
-        .from('recipients')
-        .select('id, email, campaign_id, status, bounced')
-        .in('email', uniqueBounceEmails);
+      const potentialBounces = await fetchRecipientsByEmailCaseInsensitive(
+        dbClient,
+        uniqueBounceEmails,
+        'id, email, campaign_id, status, bounced'
+      );
 
-      if (!bounceError && potentialBounces && potentialBounces.length > 0) {
+      if (potentialBounces && potentialBounces.length > 0) {
         const newBounces = potentialBounces.filter((recipient) => !recipient.bounced);
         console.log(
           `[mailbox] [DB Mode] Found ${newBounces.length} new bounces out of ${potentialBounces.length} matches.`
@@ -693,13 +769,13 @@ const processDbEmails = async (dbClient, config, lookbackDays) => {
   const uniqueSenders = [...new Set(senderEmails)];
 
   if (uniqueSenders.length > 0) {
-    const { data: potentialReplies, error: replyError } = await dbClient
-      .from('recipients')
-      .select('id, email, campaign_id, last_email_sent_at, created_at')
-      .in('email', uniqueSenders)
-      .eq('replied', false);
+    const potentialReplies = (await fetchRecipientsByEmailCaseInsensitive(
+      dbClient,
+      uniqueSenders,
+      'id, email, campaign_id, last_email_sent_at, updated_at, replied'
+    )).filter((recipient) => !recipient.replied);
 
-    if (!replyError && potentialReplies && potentialReplies.length > 0) {
+    if (potentialReplies && potentialReplies.length > 0) {
       console.log(`[mailbox] [DB Mode] Found ${potentialReplies.length} potential replies to process.`);
 
       const senderLastMsgDate = new Map();
@@ -718,7 +794,7 @@ const processDbEmails = async (dbClient, config, lookbackDays) => {
 
       for (const recipient of potentialReplies) {
         const replyDate = senderLastMsgDate.get(recipient.email.toLowerCase());
-        const sentDateStr = recipient.last_email_sent_at || recipient.created_at;
+        const sentDateStr = recipient.last_email_sent_at || recipient.updated_at;
 
         if (replyDate && sentDateStr) {
           const sentDate = new Date(sentDateStr);
@@ -998,17 +1074,20 @@ const checkRepliesAndBouncesForConfig = async (dbClient, config, lookbackDays = 
                     const uniqueEmails = sanitizeBounceEmails(foundEmails, senderEmail);
 
                     if (uniqueEmails.length > 0) {
-                      const { data: recipients, error: recipientsError } = await dbClient
-                        .from('recipients')
-                        .select('id, email, campaign_id, bounced')
-                        .in('email', uniqueEmails)
-                        .or('bounced.is.null,bounced.eq.false')
-                        .order('last_email_sent_at', { ascending: false });
+                      const recipients = await fetchRecipientsByEmailCaseInsensitive(
+                        dbClient,
+                        uniqueEmails,
+                        'id, email, campaign_id, bounced, last_email_sent_at'
+                      );
 
-                      if (recipientsError) {
-                        console.error('[mailbox] Error fetching recipients for bounce processing:', recipientsError);
-                      } else if (recipients && recipients.length > 0) {
-                        const recipientsToUpdate = recipients.filter((recipient) => !recipient.bounced);
+                      if (recipients && recipients.length > 0) {
+                        const recipientsToUpdate = recipients
+                          .filter((recipient) => !recipient.bounced)
+                          .sort((a, b) => {
+                            const timeA = a.last_email_sent_at ? new Date(a.last_email_sent_at).getTime() : 0;
+                            const timeB = b.last_email_sent_at ? new Date(b.last_email_sent_at).getTime() : 0;
+                            return timeB - timeA;
+                          });
                         const recipientIds = recipientsToUpdate.map((recipient) => recipient.id);
                         const campaignIds = new Set(recipientsToUpdate.map((recipient) => recipient.campaign_id));
 
@@ -1227,6 +1306,80 @@ const runReplyCheck = async ({ configId, lookbackDays, useDbScan, overrides, sou
 
 let autoCheckInFlight = false;
 let autoCheckTimer = null;
+let autoSyncInFlight = false;
+let autoSyncTimer = null;
+
+const runMailboxSync = async ({ configId, limit, source = 'manual' } = {}) => {
+  if (!supabaseAdmin) {
+    throw new Error('Supabase service role key is required for mailbox sync.');
+  }
+
+  const safeConfigId = configId ? String(configId).trim() : '';
+  const parsedLimit = Number(limit ?? 50);
+  const safeLimit = Math.max(1, Math.min(500, Number.isFinite(parsedLimit) ? parsedLimit : 50));
+
+  let query = supabaseAdmin
+    .from('email_configs')
+    .select('*')
+    .not('imap_host', 'is', null)
+    .not('imap_port', 'is', null)
+    .not('smtp_username', 'is', null)
+    .not('smtp_password', 'is', null);
+
+  if (safeConfigId) {
+    query = query.eq('id', safeConfigId);
+  }
+
+  const { data: configs, error } = await query;
+  if (error) {
+    console.error('[mailbox] Failed to load email configs for mailbox sync:', error);
+    throw new Error('Failed to load email configurations.');
+  }
+
+  const results = [];
+  const safeConfigs = configs ?? [];
+  let totalProcessed = 0;
+  let totalInserted = 0;
+  let totalSkipped = 0;
+  let failed = 0;
+
+  for (const config of safeConfigs) {
+    try {
+      const stats = await syncMailbox(config, safeLimit, supabaseAdmin);
+      totalProcessed += Number(stats?.processed || 0);
+      totalInserted += Number(stats?.inserted || 0);
+      totalSkipped += Number(stats?.skipped || 0);
+      results.push({
+        config_id: config.id,
+        email: config.smtp_username,
+        ...stats,
+      });
+      await new Promise((resolve) => setTimeout(resolve, 1000));
+    } catch (err) {
+      failed++;
+      console.error(`[mailbox] Error syncing ${config.smtp_username}:`, err);
+      results.push({
+        config_id: config.id,
+        email: config.smtp_username,
+        error: err?.message || 'Mailbox sync failed',
+      });
+    }
+  }
+
+  return {
+    success: true,
+    results,
+    limit: safeLimit,
+    configCount: safeConfigs.length,
+    totals: {
+      processed: totalProcessed,
+      inserted: totalInserted,
+      skipped: totalSkipped,
+      failed,
+    },
+    source,
+  };
+};
 
 const startAutoReplyChecks = () => {
   if (!AUTO_CHECK_REPLIES) return;
@@ -1275,6 +1428,53 @@ const startAutoReplyChecks = () => {
   autoCheckTimer = setInterval(run, intervalMs);
   if (typeof autoCheckTimer?.unref === 'function') {
     autoCheckTimer.unref();
+  }
+};
+
+const startAutoMailboxSync = () => {
+  if (!AUTO_SYNC_MAILBOXES) return;
+  if (!supabaseAdmin) {
+    console.warn('[mailbox] Auto mailbox sync disabled: SUPABASE_SERVICE_ROLE_KEY is required.');
+    return;
+  }
+
+  const intervalMs = Math.max(1, AUTO_SYNC_INTERVAL_MINUTES) * 60 * 1000;
+
+  const run = async () => {
+    if (autoSyncInFlight) {
+      console.log('[mailbox] Auto mailbox sync skipped (previous run still in progress).');
+      return;
+    }
+    autoSyncInFlight = true;
+    const startedAt = Date.now();
+    try {
+      const payload = await runMailboxSync({
+        configId: AUTO_SYNC_CONFIG_ID || undefined,
+        limit: AUTO_SYNC_LIMIT,
+        source: 'auto',
+      });
+      const durationSeconds = Math.round((Date.now() - startedAt) / 1000);
+      console.log(
+        `[mailbox] Auto mailbox sync complete in ${durationSeconds}s (${payload.configCount} mailbox${
+          payload.configCount === 1 ? '' : 'es'
+        }, ${payload.totals?.inserted || 0} inserted, ${payload.totals?.failed || 0} failed).`
+      );
+    } catch (error) {
+      console.error('[mailbox] Auto mailbox sync failed:', error?.message || error);
+    } finally {
+      autoSyncInFlight = false;
+    }
+  };
+
+  console.log(
+    `[mailbox] Auto mailbox sync enabled. Interval: ${AUTO_SYNC_INTERVAL_MINUTES} min, limit: ${AUTO_SYNC_LIMIT}${
+      AUTO_SYNC_CONFIG_ID ? `, configId: ${AUTO_SYNC_CONFIG_ID}` : ''
+    }.`
+  );
+  run();
+  autoSyncTimer = setInterval(run, intervalMs);
+  if (typeof autoSyncTimer?.unref === 'function') {
+    autoSyncTimer.unref();
   }
 };
 
@@ -1727,5 +1927,6 @@ app.post('/check-email-replies', async (req, res) => {
 app.listen(PORT, () => {
   console.log(`Mailbox sync server listening on port ${PORT}`);
   console.log('Allowed origins:', ALLOWED_ORIGINS.join(', ') || '*');
+  startAutoMailboxSync();
   startAutoReplyChecks();
 });

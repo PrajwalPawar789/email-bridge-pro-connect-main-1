@@ -36,7 +36,8 @@ const platformBlocks = [
     description:
       'Track inbox health, engagement trends, and pipeline impact without jumping between tools.',
     bullets: ['Live engagement heatmaps', 'Sender-level deliverability scoring', 'Audience quality checks'],
-    image: '/platform/campaign tracker.png'
+    image: '/platform/campaign tracker.png',
+    imagePosition: 'center top'
   },
   {
     tag: 'Campaign Studio',
@@ -44,7 +45,8 @@ const platformBlocks = [
     description:
       'Balance volume, timing, and personalization across teams while staying compliant.',
     bullets: ['Smart send windows', 'Sequence-level QA', 'Follow-up automation'],
-    image: '/platform/create campaign.png'
+    image: '/platform/create campaign.png',
+    imagePosition: 'center top'
   },
   {
     tag: 'Template Library',
@@ -52,7 +54,8 @@ const platformBlocks = [
     description:
       'Build templates once, then reuse across segments with dynamic tokens and approvals.',
     bullets: ['Role-based approvals', 'Reusable blocks', 'Performance-tested variants'],
-    image: '/platform/template creation.png'
+    image: '/platform/template creation.png',
+    imagePosition: 'center'
   },
   {
     tag: 'Prospect Lists',
@@ -60,7 +63,8 @@ const platformBlocks = [
     description:
       'Organize prospects by persona, region, and intent so campaigns launch with the right audience.',
     bullets: ['Persona-based filters', 'List health indicators', 'CRM + CSV imports'],
-    image: '/platform/prospect list.png'
+    image: '/platform/prospect list.png',
+    imagePosition: 'center top'
   }
 ];
 
@@ -401,22 +405,30 @@ const LandingPage = () => {
               </p>
             </motion.div>
 
-            <div className="mt-16 space-y-20">
+            <div className="mt-12">
               {platformBlocks.map((block, index) => (
-                <div
+                <section
                   key={block.title}
-                  className={`grid grid-cols-1 lg:grid-cols-[1fr_1.05fr] gap-12 items-center ${
-                    index % 2 === 1 ? 'lg:grid-cols-[1.05fr_1fr]' : ''
-                  }`}
+                  className="sticky top-0 min-h-screen flex items-center bg-[color:var(--lp-bg)] border-t border-[color:var(--lp-border)] first:border-t-0 py-10 md:py-16"
                 >
+                  <div
+                    className={`w-full grid grid-cols-1 lg:grid-cols-[1fr_1.05fr] gap-12 items-center ${
+                      index % 2 === 1 ? 'lg:grid-cols-[1.05fr_1fr]' : ''
+                    }`}
+                  >
                   <motion.div
                     initial={{ opacity: 0, y: 24 }}
                     whileInView={{ opacity: 1, y: 0 }}
-                    viewport={{ once: true }}
+                    viewport={{ amount: 0.45, once: false }}
                     transition={{ duration: 0.6 }}
                     className={`${index % 2 === 1 ? 'lg:order-2' : ''}`}
                   >
-                    <p className="text-xs uppercase tracking-[0.4em] text-[color:var(--lp-muted)]">{block.tag}</p>
+                    <div className="flex items-center gap-4">
+                      <p className="text-xs uppercase tracking-[0.4em] text-[color:var(--lp-muted)]">{block.tag}</p>
+                      <span className="text-xs text-[color:var(--lp-muted)]">
+                        {String(index + 1).padStart(2, '0')}
+                      </span>
+                    </div>
                     <h3 className="mt-4 text-2xl md:text-3xl font-display font-semibold text-[color:var(--lp-ink-strong)]">
                       {block.title}
                     </h3>
@@ -436,7 +448,7 @@ const LandingPage = () => {
                   <motion.div
                     initial={{ opacity: 0, y: 24 }}
                     whileInView={{ opacity: 1, y: 0 }}
-                    viewport={{ once: true }}
+                    viewport={{ amount: 0.45, once: false }}
                     transition={{ duration: 0.6, delay: 0.1 }}
                     className={`${index % 2 === 1 ? 'lg:order-1' : ''}`}
                   >
@@ -446,14 +458,22 @@ const LandingPage = () => {
                         <div className="w-3 h-3 rounded-full bg-[#ffb347]" />
                         <div className="w-3 h-3 rounded-full bg-[#2dd4bf]" />
                       </div>
-                      <img
-                        src={block.image}
-                        alt={block.title}
-                        className="w-full h-auto object-cover"
-                      />
+                      <div className="relative aspect-[16/10] overflow-hidden bg-[color:var(--lp-bg-strong)]">
+                        <motion.img
+                          src={block.image}
+                          alt={block.title}
+                          initial={{ scale: 1.18, y: 18 }}
+                          whileInView={{ scale: 1, y: 0 }}
+                          viewport={{ amount: 0.55, once: false }}
+                          transition={{ duration: 0.8, ease: 'easeOut' }}
+                          style={{ objectPosition: block.imagePosition }}
+                          className="w-full h-full object-cover"
+                        />
+                      </div>
                     </div>
                   </motion.div>
-                </div>
+                  </div>
+                </section>
               ))}
             </div>
           </div>

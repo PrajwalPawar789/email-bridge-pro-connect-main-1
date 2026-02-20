@@ -26,6 +26,8 @@ import {
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuLabel,
+  DropdownMenuRadioGroup,
+  DropdownMenuRadioItem,
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
@@ -443,6 +445,15 @@ const InboxPage: React.FC<{ user: any }> = ({ user }) => {
       .filter(Boolean)
       .filter((id) => !excludedMailboxIds.includes(id));
   }, [mailboxes, selectedMailboxId, excludedMailboxIds]);
+  const selectedMailboxLabel = useMemo(() => {
+    if (selectedMailboxId === ALL_INBOXES) {
+      if (!mailboxes.length) return "All inboxes";
+      if (includedMailboxIds.length === mailboxes.length) return "All inboxes";
+      return `All inboxes (${includedMailboxIds.length}/${mailboxes.length})`;
+    }
+    const current = mailboxes.find((config) => config.id === selectedMailboxId);
+    return current ? buildMailboxLabel(current) : "Select inbox";
+  }, [selectedMailboxId, mailboxes, includedMailboxIds]);
 
   const mailboxScopeKey =
     selectedMailboxId === ALL_INBOXES
@@ -505,6 +516,10 @@ const InboxPage: React.FC<{ user: any }> = ({ user }) => {
   );
   const filteredMessages = useMemo(() => {
     return messages.filter((message) => {
+      if (savedView === "unread" && message.read) {
+        return false;
+      }
+
       if (savedView === "needsReply") {
         const needsReply = !message.read && !/^re:/i.test(message.subject || "");
         if (!needsReply) return false;
@@ -1420,6 +1435,13 @@ const InboxPage: React.FC<{ user: any }> = ({ user }) => {
   }, [filters]);
 
   const syncSummary = syncState[selectedMailboxId === ALL_INBOXES ? "all" : selectedMailboxId];
+  const isSyncingSelection = useMemo(() => {
+    if (selectedMailboxId === ALL_INBOXES) {
+      if (syncState.all?.status === "syncing") return true;
+      return includedMailboxIds.some((id) => syncState[id]?.status === "syncing");
+    }
+    return syncState[selectedMailboxId]?.status === "syncing";
+  }, [selectedMailboxId, includedMailboxIds, syncState]);
   const syncLabel = syncSummary?.lastSyncedAt
     ? `Synced ${formatDistanceToNow(new Date(syncSummary.lastSyncedAt), { addSuffix: true })}`
     : "Sync status unknown";
@@ -1454,10 +1476,11 @@ const InboxPage: React.FC<{ user: any }> = ({ user }) => {
           <Button
             variant="outline"
             onClick={() => syncMailbox(selectedMailboxId === ALL_INBOXES ? undefined : selectedMailboxId)}
+            disabled={isSyncingSelection}
             className="gap-2"
           >
-            <RefreshCw className="h-4 w-4" />
-            Sync
+            <RefreshCw className={cn("h-4 w-4", isSyncingSelection && "animate-spin")} />
+            {isSyncingSelection ? "Syncing..." : "Sync"}
           </Button>
         </div>
       </div>
@@ -1471,51 +1494,80 @@ const InboxPage: React.FC<{ user: any }> = ({ user }) => {
               <Badge variant="outline" className="text-[10px]">Admin</Badge>
             </div>
 
-            {/* Recognition over recall: mailbox selector shows labels instead of IDs */}
-            <Select value={selectedMailboxId} onValueChange={setSelectedMailboxId}>
-              <SelectTrigger className="h-9 w-[200px] bg-white">
-                <SelectValue placeholder="Select inbox" />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value={ALL_INBOXES}>All inboxes</SelectItem>
-                {mailboxes.map((config) => (
-                  <SelectItem key={config.id} value={config.id}>
-                    {buildMailboxLabel(config)}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
-                <Button variant="outline" size="sm" className="gap-2">
-                  <Filter className="h-4 w-4" />
-                  Filter inboxes
-                  <ChevronDown className="h-3 w-3" />
+                <Button
+                  variant="outline"
+                  className="h-9 w-[220px] justify-between bg-white px-3 font-normal"
+                >
+                  <span className="truncate text-left">{selectedMailboxLabel}</span>
+                  <ChevronDown className="h-3 w-3 text-slate-500" />
                 </Button>
               </DropdownMenuTrigger>
-              <DropdownMenuContent className="w-56" align="start">
-                <DropdownMenuLabel>Included mailboxes</DropdownMenuLabel>
+              <DropdownMenuContent className="w-72" align="start">
+                <DropdownMenuLabel>Mailbox scope</DropdownMenuLabel>
                 <DropdownMenuSeparator />
-                {mailboxes.map((config) => {
-                  const checked = !excludedMailboxIds.includes(config.id);
-                  return (
-                    <DropdownMenuCheckboxItem
-                      key={config.id}
-                      checked={checked}
-                      onCheckedChange={(value) => {
-                        setExcludedMailboxIds((prev) => {
-                          if (value) {
-                            return prev.filter((id) => id !== config.id);
-                          }
-                          return [...prev, config.id];
-                        });
+                <DropdownMenuRadioGroup
+                  value={selectedMailboxId}
+                  onValueChange={setSelectedMailboxId}
+                >
+                  <DropdownMenuRadioItem value={ALL_INBOXES}>
+                    All inboxes
+                  </DropdownMenuRadioItem>
+                  {mailboxes.map((config) => (
+                    <DropdownMenuRadioItem key={config.id} value={config.id}>
+                      {buildMailboxLabel(config)}
+                    </DropdownMenuRadioItem>
+                  ))}
+                </DropdownMenuRadioGroup>
+
+                {selectedMailboxId === ALL_INBOXES && mailboxes.length > 1 && (
+                  <>
+                    <DropdownMenuSeparator />
+                    <DropdownMenuLabel>Filter included inboxes</DropdownMenuLabel>
+                    <DropdownMenuItem
+                      onSelect={(event) => {
+                        event.preventDefault();
+                        setExcludedMailboxIds([]);
                       }}
                     >
-                      {buildMailboxLabel(config)}
-                    </DropdownMenuCheckboxItem>
-                  );
-                })}
+                      Select all
+                    </DropdownMenuItem>
+                    <DropdownMenuItem
+                      onSelect={(event) => {
+                        event.preventDefault();
+                        setExcludedMailboxIds(mailboxes.map((config) => config.id));
+                      }}
+                    >
+                      Clear all
+                    </DropdownMenuItem>
+                    <DropdownMenuSeparator />
+                    {mailboxes.map((config) => {
+                      const checked = !excludedMailboxIds.includes(config.id);
+                      return (
+                        <DropdownMenuCheckboxItem
+                          key={config.id}
+                          checked={checked}
+                          onCheckedChange={(value) => {
+                            setExcludedMailboxIds((prev) => {
+                              const has = prev.includes(config.id);
+                              if (value === true && has) {
+                                return prev.filter((id) => id !== config.id);
+                              }
+                              if (value !== true && !has) {
+                                return [...prev, config.id];
+                              }
+                              return prev;
+                            });
+                          }}
+                          onSelect={(event) => event.preventDefault()}
+                        >
+                          {buildMailboxLabel(config)}
+                        </DropdownMenuCheckboxItem>
+                      );
+                    })}
+                  </>
+                )}
               </DropdownMenuContent>
             </DropdownMenu>
           </div>

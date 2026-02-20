@@ -105,13 +105,13 @@ const PipelineBoard = ({
   const removeLabel = removeTarget?.contactName || removeTarget?.email || 'this opportunity';
 
   return (
-    <div className="rounded-2xl border border-[var(--shell-border)] bg-[var(--shell-surface-strong)]/90 p-4 shadow-[0_16px_32px_rgba(15,23,42,0.08)]">
+    <div className="w-full min-w-0 overflow-hidden rounded-2xl border border-[var(--shell-border)] bg-[var(--shell-surface-strong)]/90 p-4 shadow-[0_16px_32px_rgba(15,23,42,0.08)]">
       {opportunities.length === 0 && (
         <div className="rounded-xl border border-dashed border-[var(--shell-border)] bg-white/70 px-4 py-6 text-center text-sm text-[var(--shell-muted)]">
           {emptyLabel}
         </div>
       )}
-      <div className="mt-4 flex gap-4 overflow-x-auto pb-4" role="list">
+      <div className="mt-4 flex w-full min-w-0 gap-4 overflow-x-auto pb-4" role="list">
         {stages.map((stage) => {
           const items = stageBuckets.get(stage.id) || [];
           const value = items.reduce((sum, opp) => sum + (opp.value || 0), 0);

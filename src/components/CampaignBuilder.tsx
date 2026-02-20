@@ -20,8 +20,12 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 import { Separator } from "@/components/ui/separator";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from '@/components/ui/dialog';
 import { cn } from '@/lib/utils';
-import { PIPELINE_TEMPLATES, getPipelineTemplateById } from '@/lib/pipeline';
-import { ensurePipelineForTemplate } from '@/lib/pipelineStore';
+import {
+  ensureDefaultPipeline,
+  fetchPipelineStages,
+  fetchPipelines,
+} from '@/lib/pipelineStore';
+import type { DbPipeline, DbPipelineStage } from '@/lib/pipelineStore';
 
 interface CampaignBuilderProps {
   emailConfigs: any[];
@@ -35,6 +39,17 @@ interface FollowupStep {
   body: string;
   template_id?: string;
 }
+
+type PipelineConfigState = {
+  enabled: boolean;
+  pipelineId: string;
+  createOn: 'positive' | 'any' | 'manual';
+  initialStageId: string;
+  ownerRule: 'sender' | 'round_robin' | 'fixed';
+  fixedOwner: string;
+  stopOnInterested: boolean;
+  stopOnNotInterested: boolean;
+};
 
 const STEPS = [
   { id: 1, title: 'Setup', description: 'Campaign Details' },
@@ -162,16 +177,18 @@ const CampaignBuilder: React.FC<CampaignBuilderProps> = ({ emailConfigs }) => {
   const [listCount, setListCount] = useState(0);
   const [audienceType, setAudienceType] = useState<'list' | 'manual'>('list');
   const [scheduledAt, setScheduledAt] = useState<string>('');
-  const [pipelineConfig, setPipelineConfig] = useState({
+  const [pipelineConfig, setPipelineConfig] = useState<PipelineConfigState>({
     enabled: false,
-    templateId: PIPELINE_TEMPLATES[0].id,
+    pipelineId: '',
     createOn: 'positive',
-    initialStageId: 'qualified',
+    initialStageId: '',
     ownerRule: 'sender',
     fixedOwner: '',
     stopOnInterested: true,
     stopOnNotInterested: true
   });
+  const [userPipelines, setUserPipelines] = useState<DbPipeline[]>([]);
+  const [pipelineStagesById, setPipelineStagesById] = useState<Record<string, DbPipelineStage[]>>({});
   const contentBodyRef = useRef<HTMLTextAreaElement | null>(null);
   const totalRecipients = audienceType === 'list'
     ? listCount
@@ -179,7 +196,12 @@ const CampaignBuilder: React.FC<CampaignBuilderProps> = ({ emailConfigs }) => {
   const totalDailyLimit = selectedConfigs.reduce((acc, curr) => acc + curr.dailyLimit, 0);
   const estimatedDays = totalDailyLimit > 0 ? Math.ceil(totalRecipients / totalDailyLimit) : 0;
   const scheduleLabel = scheduledAt ? new Date(scheduledAt).toLocaleString() : 'Not scheduled';
-  const selectedPipelineTemplate = getPipelineTemplateById(pipelineConfig.templateId);
+  const selectedPipeline = userPipelines.find((pipeline) => pipeline.id === pipelineConfig.pipelineId) || null;
+  const selectedPipelineStages = selectedPipeline ? (pipelineStagesById[selectedPipeline.id] || []) : [];
+  const selectedInitialStage =
+    selectedPipelineStages.find((stage) => stage.id === pipelineConfig.initialStageId) ||
+    selectedPipelineStages[0] ||
+    null;
   const headerStats = [
     {
       label: 'Recipients',
@@ -214,6 +236,7 @@ const CampaignBuilder: React.FC<CampaignBuilderProps> = ({ emailConfigs }) => {
   useEffect(() => {
     fetchTemplates();
     fetchLists();
+    fetchUserPipelines();
   }, []);
 
   useEffect(() => {
@@ -267,6 +290,49 @@ const CampaignBuilder: React.FC<CampaignBuilderProps> = ({ emailConfigs }) => {
       .eq('user_id', user.id)
       .order('created_at', { ascending: false });
     if (!error && data) setAllLists(data);
+  };
+
+  const fetchUserPipelines = async () => {
+    try {
+      const { data: { user } } = await supabase.auth.getUser();
+      if (!user) return;
+
+      const bootstrap = await ensureDefaultPipeline(user.id);
+      const fetchedPipelines = await fetchPipelines(user.id);
+      const mergedPipelines = fetchedPipelines.some((pipeline) => pipeline.id === bootstrap.pipeline.id)
+        ? fetchedPipelines
+        : [bootstrap.pipeline, ...fetchedPipelines];
+
+      const stagePairs = await Promise.all(
+        mergedPipelines.map(async (pipeline) => {
+          const stages = await fetchPipelineStages(pipeline.id);
+          return [pipeline.id, stages] as const;
+        })
+      );
+      const nextPipelineStagesById = Object.fromEntries(stagePairs) as Record<string, DbPipelineStage[]>;
+
+      setUserPipelines(mergedPipelines);
+      setPipelineStagesById(nextPipelineStagesById);
+      setPipelineConfig((prev) => {
+        const resolvedPipelineId =
+          prev.pipelineId && mergedPipelines.some((pipeline) => pipeline.id === prev.pipelineId)
+            ? prev.pipelineId
+            : mergedPipelines[0]?.id || '';
+        const resolvedStages = resolvedPipelineId ? (nextPipelineStagesById[resolvedPipelineId] || []) : [];
+        const resolvedInitialStageId =
+          prev.initialStageId && resolvedStages.some((stage) => stage.id === prev.initialStageId)
+            ? prev.initialStageId
+            : resolvedStages[0]?.id || '';
+
+        return {
+          ...prev,
+          pipelineId: resolvedPipelineId,
+          initialStageId: resolvedInitialStageId,
+        };
+      });
+    } catch (error: any) {
+      console.error('Error fetching user pipelines:', error);
+    }
   };
 
   const handleTemplateSelect = (templateId: string) => {
@@ -411,17 +477,29 @@ const CampaignBuilder: React.FC<CampaignBuilderProps> = ({ emailConfigs }) => {
       }
 
       if (pipelineConfig.enabled) {
-        const { pipeline, stages } = await ensurePipelineForTemplate(user.id, pipelineConfig.templateId);
-        const initialStage = stages.find((stage) => stage.template_stage_id === pipelineConfig.initialStageId) || stages[0];
+        let resolvedPipelineId = pipelineConfig.pipelineId;
+        let stages = resolvedPipelineId ? (pipelineStagesById[resolvedPipelineId] || []) : [];
+
+        if (!resolvedPipelineId) {
+          const bootstrap = await ensureDefaultPipeline(user.id);
+          resolvedPipelineId = bootstrap.pipeline.id;
+          stages = bootstrap.stages;
+        }
+
+        if (resolvedPipelineId && stages.length === 0) {
+          stages = await fetchPipelineStages(resolvedPipelineId);
+        }
+
+        const initialStage = stages.find((stage) => stage.id === pipelineConfig.initialStageId) || stages[0];
 
         const { error: pipelineSettingsError } = await supabase
           .from('campaign_pipeline_settings')
           .insert({
             campaign_id: campaign.id,
-            pipeline_id: pipeline.id,
+            pipeline_id: resolvedPipelineId || null,
             create_on: pipelineConfig.createOn,
             initial_stage_id: initialStage?.id || null,
-            initial_stage_template_id: pipelineConfig.initialStageId,
+            initial_stage_template_id: initialStage?.template_stage_id || null,
             owner_rule: pipelineConfig.ownerRule,
             fixed_owner: pipelineConfig.ownerRule === 'fixed' ? (pipelineConfig.fixedOwner || null) : null,
             stop_on_interested: pipelineConfig.stopOnInterested,
@@ -591,11 +669,13 @@ const CampaignBuilder: React.FC<CampaignBuilderProps> = ({ emailConfigs }) => {
         setSelectedTemplate('');
         setSelectedListId('');
         setFollowups([]);
+        const resetPipelineId = userPipelines[0]?.id || '';
+        const resetPipelineStages = resetPipelineId ? (pipelineStagesById[resetPipelineId] || []) : [];
         setPipelineConfig({
           enabled: false,
-          templateId: PIPELINE_TEMPLATES[0].id,
+          pipelineId: resetPipelineId,
           createOn: 'positive',
-          initialStageId: 'qualified',
+          initialStageId: resetPipelineStages[0]?.id || '',
           ownerRule: 'sender',
           fixedOwner: '',
           stopOnInterested: true,
@@ -959,32 +1039,34 @@ const CampaignBuilder: React.FC<CampaignBuilderProps> = ({ emailConfigs }) => {
               <div className="space-y-5">
                 <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
                   <div className="space-y-2">
-                    <Label className="text-sm text-[var(--builder-muted)]">Pipeline template</Label>
+                    <Label className="text-sm text-[var(--builder-muted)]">Pipeline</Label>
                     <Select
-                      value={pipelineConfig.templateId}
+                      value={pipelineConfig.pipelineId}
+                      disabled={userPipelines.length === 0}
                       onValueChange={(value) => setPipelineConfig((prev) => ({
                         ...prev,
-                        templateId: value,
-                        initialStageId: getPipelineTemplateById(value).stages[0]?.id || prev.initialStageId
+                        pipelineId: value,
+                        initialStageId: (pipelineStagesById[value] || [])[0]?.id || ''
                       }))}
                     >
                       <SelectTrigger className="h-10 bg-white/90 border-[var(--builder-border)]">
-                        <SelectValue placeholder="Choose pipeline" />
+                        <SelectValue placeholder={userPipelines.length > 0 ? "Choose pipeline" : "No pipelines"} />
                       </SelectTrigger>
                       <SelectContent>
-                        {PIPELINE_TEMPLATES.map((template) => (
-                          <SelectItem key={template.id} value={template.id}>{template.name}</SelectItem>
+                        {userPipelines.map((pipeline) => (
+                          <SelectItem key={pipeline.id} value={pipeline.id}>{pipeline.name}</SelectItem>
                         ))}
                       </SelectContent>
                     </Select>
                     <p className="text-[11px] text-[var(--builder-muted)]">
-                      {selectedPipelineTemplate.description}
+                      {selectedPipeline?.description || "Use one of your pipeline templates from the Pipeline page."}
                     </p>
                   </div>
 
                   <div className="space-y-2">
                     <Label className="text-sm text-[var(--builder-muted)]">Initial stage</Label>
                     <Select
+                      disabled={selectedPipelineStages.length === 0}
                       value={pipelineConfig.initialStageId}
                       onValueChange={(value) => setPipelineConfig((prev) => ({ ...prev, initialStageId: value }))}
                     >
@@ -992,7 +1074,7 @@ const CampaignBuilder: React.FC<CampaignBuilderProps> = ({ emailConfigs }) => {
                         <SelectValue placeholder="Select stage" />
                       </SelectTrigger>
                       <SelectContent>
-                        {selectedPipelineTemplate.stages.map((stage) => (
+                        {selectedPipelineStages.map((stage) => (
                           <SelectItem key={stage.id} value={stage.id}>{stage.name}</SelectItem>
                         ))}
                       </SelectContent>
@@ -1004,7 +1086,12 @@ const CampaignBuilder: React.FC<CampaignBuilderProps> = ({ emailConfigs }) => {
                   <Label className="text-sm text-[var(--builder-muted)]">Create opportunity when</Label>
                   <RadioGroup
                     value={pipelineConfig.createOn}
-                    onValueChange={(value) => setPipelineConfig((prev) => ({ ...prev, createOn: value }))}
+                    onValueChange={(value) =>
+                      setPipelineConfig((prev) => ({
+                        ...prev,
+                        createOn: value as PipelineConfigState['createOn']
+                      }))
+                    }
                     className="grid gap-3 md:grid-cols-3"
                   >
                     {[
@@ -1036,7 +1123,12 @@ const CampaignBuilder: React.FC<CampaignBuilderProps> = ({ emailConfigs }) => {
                     <Label className="text-sm text-[var(--builder-muted)]">Owner assignment</Label>
                     <Select
                       value={pipelineConfig.ownerRule}
-                      onValueChange={(value) => setPipelineConfig((prev) => ({ ...prev, ownerRule: value }))}
+                      onValueChange={(value) =>
+                        setPipelineConfig((prev) => ({
+                          ...prev,
+                          ownerRule: value as PipelineConfigState['ownerRule']
+                        }))
+                      }
                     >
                       <SelectTrigger className="h-10 bg-white/90 border-[var(--builder-border)]">
                         <SelectValue placeholder="Select owner rule" />
@@ -1404,7 +1496,7 @@ const CampaignBuilder: React.FC<CampaignBuilderProps> = ({ emailConfigs }) => {
                 <div className="grid grid-cols-2 gap-6 text-sm">
                   <div>
                     <span className="text-[var(--builder-muted)] block mb-1">Pipeline</span>
-                    <span className="font-medium text-[var(--builder-ink)]">{selectedPipelineTemplate.name}</span>
+                    <span className="font-medium text-[var(--builder-ink)]">{selectedPipeline?.name || 'Not selected'}</span>
                   </div>
                   <div>
                     <span className="text-[var(--builder-muted)] block mb-1">Create opportunity</span>
@@ -1419,7 +1511,7 @@ const CampaignBuilder: React.FC<CampaignBuilderProps> = ({ emailConfigs }) => {
                   <div>
                     <span className="text-[var(--builder-muted)] block mb-1">Initial stage</span>
                     <span className="font-medium text-[var(--builder-ink)]">
-                      {selectedPipelineTemplate.stages.find((stage) => stage.id === pipelineConfig.initialStageId)?.name || 'Not set'}
+                      {selectedInitialStage?.name || 'Not set'}
                     </span>
                   </div>
                   <div>

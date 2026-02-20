@@ -654,6 +654,35 @@ export type Database = {
           },
         ]
       }
+      pipeline_stage_keywords: {
+        Row: {
+          created_at: string | null
+          id: string
+          keyword: string
+          pipeline_stage_id: string
+        }
+        Insert: {
+          created_at?: string | null
+          id?: string
+          keyword: string
+          pipeline_stage_id: string
+        }
+        Update: {
+          created_at?: string | null
+          id?: string
+          keyword?: string
+          pipeline_stage_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "pipeline_stage_keywords_pipeline_stage_id_fkey"
+            columns: ["pipeline_stage_id"]
+            isOneToOne: false
+            referencedRelation: "pipeline_stages"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       pipelines: {
         Row: {
           created_at: string | null

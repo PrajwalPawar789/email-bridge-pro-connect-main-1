@@ -48,9 +48,16 @@ import {
   createOpportunity,
   createPipelineWithStages,
   deleteOpportunity,
+  fetchPipelineStageKeywords,
+  updatePipelineWithStages,
   updateOpportunity,
 } from "@/lib/pipelineStore";
-import type { DbOpportunity, DbPipelineStage } from "@/lib/pipelineStore";
+import type {
+  DbOpportunity,
+  DbPipelineStage,
+  PipelineStageSeed,
+  PipelineStageUpdateSeed,
+} from "@/lib/pipelineStore";
 import {
   formatCurrency,
   isOpportunityStale,
@@ -94,10 +101,179 @@ type NewOpportunityDraft = {
 type NewPipelineDraft = {
   name: string;
   description: string;
-  source: "template" | "clone";
+  source: "template" | "clone" | "custom";
+  templateId: string;
+  stages: EditableStageDraft[];
 };
 
 type BulkActionType = "move" | "assign" | "next" | "tag";
+
+type EditableStageDraft = {
+  draftId: string;
+  id?: string;
+  templateStageId: string;
+  name: string;
+  description: string;
+  keywordsText: string;
+  tone: PipelineStage["tone"];
+  isWon: boolean;
+  isLost: boolean;
+};
+
+type PipelineSettingsDraft = {
+  name: string;
+  description: string;
+  stages: EditableStageDraft[];
+};
+
+const STAGE_TONE_OPTIONS: Array<{ value: PipelineStage["tone"]; label: string }> = [
+  { value: "sky", label: "Sky" },
+  { value: "emerald", label: "Emerald" },
+  { value: "amber", label: "Amber" },
+  { value: "violet", label: "Violet" },
+  { value: "slate", label: "Slate" },
+  { value: "rose", label: "Rose" },
+];
+
+const makeStageDraftId = () => `stage-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+
+const slugifyStageId = (value: string) =>
+  value
+    .toLowerCase()
+    .trim()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "");
+
+const buildUniqueTemplateStageId = (used: Set<string>, candidate: string, index: number) => {
+  const base = slugifyStageId(candidate) || `stage-${index + 1}`;
+  let next = base;
+  let suffix = 2;
+  while (used.has(next)) {
+    next = `${base}-${suffix}`;
+    suffix += 1;
+  }
+  used.add(next);
+  return next;
+};
+
+const normalizeKeywordsText = (value: string) =>
+  Array.from(
+    new Set(
+      (value || "")
+        .split(",")
+        .map((item) => item.trim().toLowerCase())
+        .filter((item) => item.length >= 2)
+    )
+  );
+
+const createBlankStageDraft = (index: number): EditableStageDraft => ({
+  draftId: makeStageDraftId(),
+  templateStageId: `stage-${index + 1}`,
+  name: "",
+  description: "",
+  keywordsText: "",
+  tone: "slate",
+  isWon: false,
+  isLost: false,
+});
+
+const createTemplateStageDrafts = (templateId?: string): EditableStageDraft[] => {
+  const template = PIPELINE_TEMPLATES.find((item) => item.id === templateId) || PIPELINE_TEMPLATES[0];
+  if (!template) return [createBlankStageDraft(0)];
+  return template.stages.map((stage) => ({
+    draftId: makeStageDraftId(),
+    templateStageId: stage.id,
+    name: stage.name,
+    description: stage.description || "",
+    keywordsText: "",
+    tone: stage.tone || "slate",
+    isWon: stage.id === "closed-won",
+    isLost: stage.id === "closed-lost",
+  }));
+};
+
+const createStageDraftsFromRows = (
+  stages: DbPipelineStage[],
+  keywordsByStageId: Record<string, string[]> = {}
+): EditableStageDraft[] => {
+  if (!stages || stages.length === 0) return [createBlankStageDraft(0)];
+  return stages.map((stage, index) => ({
+    draftId: makeStageDraftId(),
+    id: stage.id,
+    templateStageId: stage.template_stage_id || slugifyStageId(stage.name) || `stage-${index + 1}`,
+    name: stage.name,
+    description: stage.description || "",
+    keywordsText: (keywordsByStageId[stage.id] || []).join(", "),
+    tone: (stage.tone as PipelineStage["tone"]) || "slate",
+    isWon: !!stage.is_won,
+    isLost: !!stage.is_lost,
+  }));
+};
+
+const normalizeStageFlags = (stages: EditableStageDraft[]) => {
+  const wonIndex = stages.findIndex((stage) => stage.isWon);
+  const lostIndex = stages.findIndex((stage) => stage.isLost);
+  return stages.map((stage, index) => {
+    const isWon = wonIndex === -1 ? stage.isWon : wonIndex === index;
+    const isLost = lostIndex === -1 ? stage.isLost : lostIndex === index;
+    return {
+      ...stage,
+      isWon,
+      isLost: isWon ? false : isLost,
+    };
+  });
+};
+
+const buildCreateStageSeeds = (stages: EditableStageDraft[]): PipelineStageSeed[] => {
+  const used = new Set<string>();
+  const normalized = normalizeStageFlags(stages)
+    .map((stage, index) => {
+      const name = stage.name.trim();
+      if (!name) return null;
+      return {
+        templateStageId: buildUniqueTemplateStageId(
+          used,
+          stage.templateStageId || name,
+          index
+        ),
+        name,
+        description: stage.description.trim() || null,
+        keywords: normalizeKeywordsText(stage.keywordsText),
+        tone: stage.tone || "slate",
+        is_won: stage.isWon,
+        is_lost: stage.isLost,
+      } as PipelineStageSeed;
+    })
+    .filter(Boolean) as PipelineStageSeed[];
+
+  return normalized;
+};
+
+const buildUpdateStageSeeds = (stages: EditableStageDraft[]): PipelineStageUpdateSeed[] => {
+  const used = new Set<string>();
+  const normalized = normalizeStageFlags(stages)
+    .map((stage, index) => {
+      const name = stage.name.trim();
+      if (!name) return null;
+      return {
+        id: stage.id,
+        templateStageId: buildUniqueTemplateStageId(
+          used,
+          stage.templateStageId || name,
+          index
+        ),
+        name,
+        description: stage.description.trim() || null,
+        keywords: normalizeKeywordsText(stage.keywordsText),
+        tone: stage.tone || "slate",
+        is_won: stage.isWon,
+        is_lost: stage.isLost,
+      } as PipelineStageUpdateSeed;
+    })
+    .filter(Boolean) as PipelineStageUpdateSeed[];
+
+  return normalized;
+};
 
 const Pipeline = () => {
   const { user, loading } = useAuth();
@@ -147,12 +323,21 @@ const Pipeline = () => {
     nextStep: "",
     campaignId: "",
   });
-  const [newPipelineDraft, setNewPipelineDraft] = useState<NewPipelineDraft>({
+  const [newPipelineDraft, setNewPipelineDraft] = useState<NewPipelineDraft>(() => {
+    const defaultTemplateId = PIPELINE_TEMPLATES[0]?.id || "";
+    return {
+      name: "",
+      description: "",
+      source: "template",
+      templateId: defaultTemplateId,
+      stages: createTemplateStageDrafts(defaultTemplateId),
+    };
+  });
+  const [settingsDraft, setSettingsDraft] = useState<PipelineSettingsDraft>({
     name: "",
     description: "",
-    source: "template",
+    stages: [],
   });
-  const [settingsDraft, setSettingsDraft] = useState({ name: "", description: "" });
 
   const debouncedSearch = useDebounce(filters.search, 250);
 
@@ -300,6 +485,126 @@ const Pipeline = () => {
   );
 
   const activePipeline = pipelines.find((pipeline) => pipeline.id === activePipelineId) || null;
+  const defaultTemplateId = PIPELINE_TEMPLATES[0]?.id || "";
+
+  const handleOpenNewPipeline = () => {
+    setNewPipelineDraft({
+      name: "",
+      description: "",
+      source: "template",
+      templateId: defaultTemplateId,
+      stages: createTemplateStageDrafts(defaultTemplateId),
+    });
+    setNewPipelineOpen(true);
+  };
+
+  const patchNewPipelineStage = (index: number, patch: Partial<EditableStageDraft>) => {
+    setNewPipelineDraft((prev) => {
+      const nextStages = prev.stages.map((stage, stageIndex) =>
+        stageIndex === index ? { ...stage, ...patch } : stage
+      );
+      return { ...prev, stages: normalizeStageFlags(nextStages) };
+    });
+  };
+
+  const setNewPipelineStageOutcome = (index: number, outcome: "isWon" | "isLost", checked: boolean) => {
+    setNewPipelineDraft((prev) => {
+      const nextStages = prev.stages.map((stage, stageIndex) => {
+        if (stageIndex !== index) {
+          if (!checked) return stage;
+          return { ...stage, [outcome]: false };
+        }
+        if (outcome === "isWon") {
+          return { ...stage, isWon: checked, isLost: checked ? false : stage.isLost };
+        }
+        return { ...stage, isLost: checked, isWon: checked ? false : stage.isWon };
+      });
+      return { ...prev, stages: normalizeStageFlags(nextStages) };
+    });
+  };
+
+  const moveNewPipelineStage = (index: number, direction: "up" | "down") => {
+    setNewPipelineDraft((prev) => {
+      const targetIndex = direction === "up" ? index - 1 : index + 1;
+      if (targetIndex < 0 || targetIndex >= prev.stages.length) return prev;
+      const nextStages = [...prev.stages];
+      const [current] = nextStages.splice(index, 1);
+      nextStages.splice(targetIndex, 0, current);
+      return { ...prev, stages: normalizeStageFlags(nextStages) };
+    });
+  };
+
+  const removeNewPipelineStage = (index: number) => {
+    setNewPipelineDraft((prev) => {
+      if (prev.stages.length <= 1) return prev;
+      const nextStages = prev.stages.filter((_, stageIndex) => stageIndex !== index);
+      return { ...prev, stages: normalizeStageFlags(nextStages) };
+    });
+  };
+
+  const addNewPipelineStage = () => {
+    setNewPipelineDraft((prev) => ({
+      ...prev,
+      stages: [
+        ...prev.stages,
+        createBlankStageDraft(prev.stages.length),
+      ],
+    }));
+  };
+
+  const patchSettingsStage = (index: number, patch: Partial<EditableStageDraft>) => {
+    setSettingsDraft((prev) => {
+      const nextStages = prev.stages.map((stage, stageIndex) =>
+        stageIndex === index ? { ...stage, ...patch } : stage
+      );
+      return { ...prev, stages: normalizeStageFlags(nextStages) };
+    });
+  };
+
+  const setSettingsStageOutcome = (index: number, outcome: "isWon" | "isLost", checked: boolean) => {
+    setSettingsDraft((prev) => {
+      const nextStages = prev.stages.map((stage, stageIndex) => {
+        if (stageIndex !== index) {
+          if (!checked) return stage;
+          return { ...stage, [outcome]: false };
+        }
+        if (outcome === "isWon") {
+          return { ...stage, isWon: checked, isLost: checked ? false : stage.isLost };
+        }
+        return { ...stage, isLost: checked, isWon: checked ? false : stage.isWon };
+      });
+      return { ...prev, stages: normalizeStageFlags(nextStages) };
+    });
+  };
+
+  const moveSettingsStage = (index: number, direction: "up" | "down") => {
+    setSettingsDraft((prev) => {
+      const targetIndex = direction === "up" ? index - 1 : index + 1;
+      if (targetIndex < 0 || targetIndex >= prev.stages.length) return prev;
+      const nextStages = [...prev.stages];
+      const [current] = nextStages.splice(index, 1);
+      nextStages.splice(targetIndex, 0, current);
+      return { ...prev, stages: normalizeStageFlags(nextStages) };
+    });
+  };
+
+  const removeSettingsStage = (index: number) => {
+    setSettingsDraft((prev) => {
+      if (prev.stages.length <= 1) return prev;
+      const nextStages = prev.stages.filter((_, stageIndex) => stageIndex !== index);
+      return { ...prev, stages: normalizeStageFlags(nextStages) };
+    });
+  };
+
+  const addSettingsStage = () => {
+    setSettingsDraft((prev) => ({
+      ...prev,
+      stages: [
+        ...prev.stages,
+        createBlankStageDraft(prev.stages.length),
+      ],
+    }));
+  };
 
   const openOpportunities = mappedOpportunities.filter((opp) => opp.status === "open");
   const openValue = openOpportunities.reduce((sum, opp) => sum + (opp.value || 0), 0);
@@ -742,32 +1047,35 @@ const Pipeline = () => {
 
   const handleCreatePipeline = async () => {
     if (!user) return;
-    const useTemplate = newPipelineDraft.source === "template";
-
-    const stageSeeds = useTemplate
-      ? undefined
-      : stageRows.map((stage) => ({
-          templateStageId: stage.template_stage_id,
-          name: stage.name,
-          description: stage.description || null,
-          tone: stage.tone || null,
-          is_won: stage.is_won,
-          is_lost: stage.is_lost,
-        }));
+    const stageSeeds = buildCreateStageSeeds(newPipelineDraft.stages);
+    if (stageSeeds.length === 0) {
+      toast({
+        title: "Add at least one stage",
+        description: "Each pipeline needs at least one named stage.",
+        variant: "destructive",
+      });
+      return;
+    }
 
     try {
       const { pipeline } = await createPipelineWithStages({
         userId: user.id,
         name: newPipelineDraft.name || "New pipeline",
         description: newPipelineDraft.description,
-        templateId: useTemplate ? PIPELINE_TEMPLATES[0]?.id : null,
+        templateId: newPipelineDraft.source === "template" ? newPipelineDraft.templateId || null : null,
         stages: stageSeeds,
       });
 
       await pipelinesQuery.refetch();
       setActivePipelineId(pipeline.id);
       setNewPipelineOpen(false);
-      setNewPipelineDraft({ name: "", description: "", source: "template" });
+      setNewPipelineDraft({
+        name: "",
+        description: "",
+        source: "template",
+        templateId: defaultTemplateId,
+        stages: createTemplateStageDrafts(defaultTemplateId),
+      });
       toast({
         title: "Pipeline created",
         description: "The new pipeline is ready for opportunities.",
@@ -783,39 +1091,114 @@ const Pipeline = () => {
 
   const handleUpdateSettings = async () => {
     if (!user || !activePipeline) return;
-    const { error } = await supabase
-      .from("pipelines")
-      .update({
-        name: settingsDraft.name,
-        description: settingsDraft.description || null,
-        updated_at: new Date().toISOString(),
-      })
-      .eq("id", activePipeline.id);
-
-    if (error) {
+    const stageSeeds = buildUpdateStageSeeds(settingsDraft.stages);
+    if (stageSeeds.length === 0) {
       toast({
         title: "Save failed",
-        description: "Could not update pipeline settings.",
+        description: "At least one stage with a name is required.",
         variant: "destructive",
       });
       return;
     }
 
-    await pipelinesQuery.refetch();
-    setSettingsOpen(false);
-    toast({
-      title: "Pipeline updated",
-      description: "Settings saved successfully.",
+    try {
+      await updatePipelineWithStages({
+        pipelineId: activePipeline.id,
+        name: settingsDraft.name,
+        description: settingsDraft.description,
+        stages: stageSeeds,
+      });
+
+      await Promise.all([
+        pipelinesQuery.refetch(),
+        stagesQuery.refetch(),
+        opportunitiesQuery.refetch(),
+      ]);
+
+      setSettingsOpen(false);
+      toast({
+        title: "Pipeline updated",
+        description: "Settings saved successfully.",
+      });
+    } catch (_error) {
+      toast({
+        title: "Save failed",
+        description: "Could not update pipeline settings.",
+        variant: "destructive",
+      });
+    }
+  };
+
+  const handleNewPipelineSourceChange = (source: NewPipelineDraft["source"]) => {
+    setNewPipelineDraft((prev) => {
+      if (source === "template") {
+        const templateId = prev.templateId || defaultTemplateId;
+        return {
+          ...prev,
+          source,
+          templateId,
+          stages: createTemplateStageDrafts(templateId),
+        };
+      }
+      if (source === "clone") {
+        const sourcePipelineId = activePipeline?.id || pipelineId;
+        if (sourcePipelineId) {
+          void fetchPipelineStageKeywords(sourcePipelineId)
+            .then((keywordsByStageId) => {
+              setNewPipelineDraft((draftPrev) => {
+                if (draftPrev.source !== "clone") return draftPrev;
+                return {
+                  ...draftPrev,
+                  stages: createStageDraftsFromRows(stageRows, keywordsByStageId),
+                };
+              });
+            })
+            .catch(() => {});
+        }
+        return {
+          ...prev,
+          source,
+          stages: createStageDraftsFromRows(stageRows),
+        };
+      }
+      return {
+        ...prev,
+        source,
+        stages: [createBlankStageDraft(0)],
+      };
     });
   };
 
-  const handleOpenSettings = () => {
+  const handleNewPipelineTemplateChange = (templateId: string) => {
+    setNewPipelineDraft((prev) => ({
+      ...prev,
+      templateId,
+      stages: createTemplateStageDrafts(templateId),
+    }));
+  };
+
+  const handleOpenSettings = async () => {
     if (!activePipeline) return;
-    setSettingsDraft({
-      name: activePipeline.name,
-      description: activePipeline.description || "",
-    });
-    setSettingsOpen(true);
+    try {
+      const keywordsByStageId = await fetchPipelineStageKeywords(activePipeline.id);
+      setSettingsDraft({
+        name: activePipeline.name,
+        description: activePipeline.description || "",
+        stages: createStageDraftsFromRows(stageRows, keywordsByStageId),
+      });
+      setSettingsOpen(true);
+    } catch (_error) {
+      setSettingsDraft({
+        name: activePipeline.name,
+        description: activePipeline.description || "",
+        stages: createStageDraftsFromRows(stageRows),
+      });
+      setSettingsOpen(true);
+      toast({
+        title: "Keyword load warning",
+        description: "Stage keywords could not be loaded. You can still edit pipeline stages.",
+      });
+    }
   };
 
   const openBulkDialog = (type: BulkActionType) => {
@@ -973,7 +1356,7 @@ const Pipeline = () => {
           pipelines={pipelines}
           onPipelineChange={setActivePipelineId}
           onNewOpportunity={handleNewOpportunity}
-          onNewPipeline={() => setNewPipelineOpen(true)}
+          onNewPipeline={handleOpenNewPipeline}
           onOpenSettings={handleOpenSettings}
         />
 
@@ -1002,7 +1385,7 @@ const Pipeline = () => {
           searchRef={searchInputRef}
         />
 
-        <div className="rounded-2xl border border-dashed border-[var(--shell-border)] bg-white/70 p-4 text-sm text-[var(--shell-muted)]">
+        {/* <div className="rounded-2xl border border-dashed border-[var(--shell-border)] bg-white/70 p-4 text-sm text-[var(--shell-muted)]">
           <div className="flex flex-wrap items-center gap-3">
             <div className="flex h-9 w-9 items-center justify-center rounded-full bg-emerald-50 text-emerald-600">
               <ClipboardCheck className="h-4 w-4" />
@@ -1017,7 +1400,7 @@ const Pipeline = () => {
               View inbox
             </Button>
           </div>
-        </div>
+        </div> */}
 
         {/* Serial position: view + density controls are first in the board toolbar. */}
         <PipelineViewControls
@@ -1074,11 +1457,11 @@ const Pipeline = () => {
         <div
           className={
             detailsOpen
-              ? "grid gap-6 xl:grid-cols-[minmax(0,1fr)_360px]"
-              : "grid gap-6"
+              ? "grid min-w-0 gap-6 xl:grid-cols-[minmax(0,1fr)_360px]"
+              : "grid min-w-0 gap-6"
           }
         >
-          <div className="space-y-6">
+          <div className="min-w-0 space-y-6">
             {opportunitiesQuery.isError ? (
               <div className="rounded-2xl border border-rose-200 bg-rose-50 p-4 text-sm text-rose-700">
                 We could not load opportunities. Please refresh.
@@ -1104,7 +1487,7 @@ const Pipeline = () => {
             ) : (
               <div className="space-y-6">
                 {lanes.map((lane) => (
-                  <div key={lane.id} className="space-y-3">
+                  <div key={lane.id} className="min-w-0 space-y-3">
                     {swimlane !== "none" && (
                       <div className="flex items-center gap-2 text-sm font-semibold text-slate-700">
                         <span>{lane.label}</span>
@@ -1332,48 +1715,213 @@ const Pipeline = () => {
       </Dialog>
 
       <Dialog open={newPipelineOpen} onOpenChange={setNewPipelineOpen}>
-        <DialogContent className="max-w-lg">
+        <DialogContent className="max-w-4xl max-h-[90vh] overflow-y-auto">
           <DialogHeader>
             <DialogTitle>New pipeline</DialogTitle>
-            <DialogDescription>Create a fresh pipeline for a specific motion.</DialogDescription>
+            <DialogDescription>Create a flexible, user-owned pipeline template.</DialogDescription>
           </DialogHeader>
-          <div className="grid gap-4">
-            <div className="grid gap-2">
-              <Label>Pipeline name</Label>
-              <Input
-                value={newPipelineDraft.name}
-                onChange={(event) =>
-                  setNewPipelineDraft((prev) => ({ ...prev, name: event.target.value }))
-                }
-                placeholder="Enterprise outbound pipeline"
-              />
+          <div className="space-y-5">
+            <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+              <div className="grid gap-2">
+                <Label>Pipeline name</Label>
+                <Input
+                  value={newPipelineDraft.name}
+                  onChange={(event) =>
+                    setNewPipelineDraft((prev) => ({ ...prev, name: event.target.value }))
+                  }
+                  placeholder="Enterprise outbound pipeline"
+                />
+              </div>
+              <div className="grid gap-2">
+                <Label>Description</Label>
+                <Input
+                  value={newPipelineDraft.description}
+                  onChange={(event) =>
+                    setNewPipelineDraft((prev) => ({ ...prev, description: event.target.value }))
+                  }
+                  placeholder="Use this pipeline for enterprise accounts."
+                />
+              </div>
             </div>
-            <div className="grid gap-2">
-              <Label>Description</Label>
-              <Input
-                value={newPipelineDraft.description}
-                onChange={(event) =>
-                  setNewPipelineDraft((prev) => ({ ...prev, description: event.target.value }))
-                }
-                placeholder="Use this pipeline for enterprise accounts."
-              />
+
+            <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+              <div className="grid gap-2">
+                <Label>Start from</Label>
+                <Select
+                  value={newPipelineDraft.source}
+                  onValueChange={(value) => handleNewPipelineSourceChange(value as NewPipelineDraft["source"])}
+                >
+                  <SelectTrigger className="h-10">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="template">Built-in template</SelectItem>
+                    {activePipeline && <SelectItem value="clone">Duplicate current pipeline</SelectItem>}
+                    <SelectItem value="custom">Blank pipeline</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+
+              {newPipelineDraft.source === "template" && (
+                <div className="grid gap-2">
+                  <Label>Template</Label>
+                  <Select value={newPipelineDraft.templateId} onValueChange={handleNewPipelineTemplateChange}>
+                    <SelectTrigger className="h-10">
+                      <SelectValue placeholder="Select template" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {PIPELINE_TEMPLATES.map((template) => (
+                        <SelectItem key={template.id} value={template.id}>
+                          {template.name}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+              )}
             </div>
-            <div className="grid gap-2">
-              <Label>Start from</Label>
-              <Select
-                value={newPipelineDraft.source}
-                onValueChange={(value: NewPipelineDraft["source"]) =>
-                  setNewPipelineDraft((prev) => ({ ...prev, source: value }))
-                }
-              >
-                <SelectTrigger className="h-10">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="template">Outbound sales template</SelectItem>
-                  {activePipeline && <SelectItem value="clone">Duplicate current pipeline</SelectItem>}
-                </SelectContent>
-              </Select>
+
+            <div className="space-y-3 rounded-xl border border-slate-200 p-4">
+              <div className="flex items-center justify-between gap-3">
+                <div>
+                  <p className="text-sm font-semibold text-slate-900">Stages</p>
+                  <p className="text-xs text-slate-500">
+                    Fully editable: add, remove, reorder, and control won/lost stages.
+                  </p>
+                </div>
+                <Button type="button" variant="outline" size="sm" onClick={addNewPipelineStage}>
+                  Add stage
+                </Button>
+              </div>
+
+              <div className="space-y-4">
+                {newPipelineDraft.stages.map((stage, index) => (
+                  <div key={stage.draftId} className="space-y-4 rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
+                    <div className="flex flex-wrap items-start justify-between gap-3">
+                      <div>
+                        <p className="text-[11px] uppercase tracking-[0.18em] text-slate-400">Stage {index + 1}</p>
+                        <p className="text-sm font-semibold text-slate-900">{stage.name.trim() || "Untitled stage"}</p>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <Button
+                          type="button"
+                          variant="outline"
+                          size="sm"
+                          onClick={() => moveNewPipelineStage(index, "up")}
+                          disabled={index === 0}
+                        >
+                          Move up
+                        </Button>
+                        <Button
+                          type="button"
+                          variant="outline"
+                          size="sm"
+                          onClick={() => moveNewPipelineStage(index, "down")}
+                          disabled={index === newPipelineDraft.stages.length - 1}
+                        >
+                          Move down
+                        </Button>
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="sm"
+                          onClick={() => removeNewPipelineStage(index)}
+                          disabled={newPipelineDraft.stages.length <= 1}
+                        >
+                          Remove
+                        </Button>
+                      </div>
+                    </div>
+                    <div className="grid grid-cols-1 gap-3 lg:grid-cols-2">
+                      <div className="grid gap-2">
+                        <Label className="text-xs text-slate-600">Stage name</Label>
+                        <Input
+                          value={stage.name}
+                          onChange={(event) => patchNewPipelineStage(index, { name: event.target.value })}
+                          placeholder={`Stage ${index + 1}`}
+                        />
+                      </div>
+                      <div className="grid gap-2">
+                        <Label className="text-xs text-slate-600">Internal key</Label>
+                        <Input
+                          value={stage.templateStageId}
+                          onChange={(event) =>
+                            patchNewPipelineStage(index, { templateStageId: event.target.value })
+                          }
+                          placeholder="qualified"
+                        />
+                      </div>
+                    </div>
+                    <div className="grid gap-3">
+                      <div className="grid gap-2">
+                        <Label className="text-xs text-slate-600">Description</Label>
+                        <Input
+                          value={stage.description}
+                          onChange={(event) =>
+                            patchNewPipelineStage(index, { description: event.target.value })
+                          }
+                          placeholder="Define what this stage means."
+                        />
+                      </div>
+                      <div className="grid gap-2">
+                        <Label className="text-xs text-slate-600">Auto-match keywords</Label>
+                        <Input
+                          value={stage.keywordsText}
+                          onChange={(event) =>
+                            patchNewPipelineStage(index, { keywordsText: event.target.value })
+                          }
+                          placeholder="interested, need more information, pricing"
+                        />
+                        <p className="text-[11px] text-slate-500">
+                          Use comma-separated phrases. Any match moves the lead to this stage.
+                        </p>
+                      </div>
+                    </div>
+                    <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-slate-100 bg-slate-50 px-3 py-2">
+                      <div className="flex flex-wrap items-center gap-4 text-sm">
+                        <label className="flex items-center gap-2">
+                          <Checkbox
+                            checked={stage.isWon}
+                            onCheckedChange={(checked) =>
+                              setNewPipelineStageOutcome(index, "isWon", checked === true)
+                            }
+                          />
+                          Won stage
+                        </label>
+                        <label className="flex items-center gap-2">
+                          <Checkbox
+                            checked={stage.isLost}
+                            onCheckedChange={(checked) =>
+                              setNewPipelineStageOutcome(index, "isLost", checked === true)
+                            }
+                          />
+                          Lost stage
+                        </label>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <Label className="text-xs text-slate-600">Tone</Label>
+                        <Select
+                          value={stage.tone}
+                          onValueChange={(value) =>
+                            patchNewPipelineStage(index, { tone: value as PipelineStage["tone"] })
+                          }
+                        >
+                          <SelectTrigger className="h-9 w-[180px] bg-white">
+                            <SelectValue />
+                          </SelectTrigger>
+                          <SelectContent>
+                            {STAGE_TONE_OPTIONS.map((tone) => (
+                              <SelectItem key={tone.value} value={tone.value}>
+                                {tone.label}
+                              </SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+                      </div>
+                    </div>
+                  </div>
+                ))}
+              </div>
             </div>
           </div>
           <DialogFooter className="gap-2">
@@ -1388,33 +1936,179 @@ const Pipeline = () => {
       </Dialog>
 
       <Dialog open={settingsOpen} onOpenChange={setSettingsOpen}>
-        <DialogContent className="max-w-lg">
+        <DialogContent className="max-w-4xl max-h-[90vh] overflow-y-auto">
           <DialogHeader>
             <DialogTitle>Pipeline settings</DialogTitle>
-            <DialogDescription>Update the pipeline name and description.</DialogDescription>
+            <DialogDescription>Update the pipeline name, description, and stages.</DialogDescription>
           </DialogHeader>
-          <div className="grid gap-4">
-            <div className="grid gap-2">
-              <Label>Name</Label>
-              <Input
-                value={settingsDraft.name}
-                onChange={(event) =>
-                  setSettingsDraft((prev) => ({ ...prev, name: event.target.value }))
-                }
-              />
+          <div className="space-y-5">
+            <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+              <div className="grid gap-2">
+                <Label>Name</Label>
+                <Input
+                  value={settingsDraft.name}
+                  onChange={(event) =>
+                    setSettingsDraft((prev) => ({ ...prev, name: event.target.value }))
+                  }
+                />
+              </div>
+              <div className="grid gap-2">
+                <Label>Description</Label>
+                <Input
+                  value={settingsDraft.description}
+                  onChange={(event) =>
+                    setSettingsDraft((prev) => ({ ...prev, description: event.target.value }))
+                  }
+                  placeholder="Describe who this pipeline is for."
+                />
+              </div>
             </div>
-            <div className="grid gap-2">
-              <Label>Description</Label>
-              <Input
-                value={settingsDraft.description}
-                onChange={(event) =>
-                  setSettingsDraft((prev) => ({ ...prev, description: event.target.value }))
-                }
-                placeholder="Describe who this pipeline is for."
-              />
+
+            <div className="space-y-3 rounded-xl border border-slate-200 p-4">
+              <div className="flex items-center justify-between gap-3">
+                <div>
+                  <p className="text-sm font-semibold text-slate-900">Stages</p>
+                  <p className="text-xs text-slate-500">
+                    Remove, rename, reorder, or add stages. Removed stage opportunities move to the first stage.
+                  </p>
+                </div>
+                <Button type="button" variant="outline" size="sm" onClick={addSettingsStage}>
+                  Add stage
+                </Button>
+              </div>
+
+              <div className="space-y-4">
+                {settingsDraft.stages.map((stage, index) => (
+                  <div key={stage.draftId} className="space-y-4 rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
+                    <div className="flex flex-wrap items-start justify-between gap-3">
+                      <div>
+                        <p className="text-[11px] uppercase tracking-[0.18em] text-slate-400">Stage {index + 1}</p>
+                        <p className="text-sm font-semibold text-slate-900">{stage.name.trim() || "Untitled stage"}</p>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <Button
+                          type="button"
+                          variant="outline"
+                          size="sm"
+                          onClick={() => moveSettingsStage(index, "up")}
+                          disabled={index === 0}
+                        >
+                          Move up
+                        </Button>
+                        <Button
+                          type="button"
+                          variant="outline"
+                          size="sm"
+                          onClick={() => moveSettingsStage(index, "down")}
+                          disabled={index === settingsDraft.stages.length - 1}
+                        >
+                          Move down
+                        </Button>
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="sm"
+                          onClick={() => removeSettingsStage(index)}
+                          disabled={settingsDraft.stages.length <= 1}
+                        >
+                          Remove
+                        </Button>
+                      </div>
+                    </div>
+                    <div className="grid grid-cols-1 gap-3 lg:grid-cols-2">
+                      <div className="grid gap-2">
+                        <Label className="text-xs text-slate-600">Stage name</Label>
+                        <Input
+                          value={stage.name}
+                          onChange={(event) => patchSettingsStage(index, { name: event.target.value })}
+                          placeholder={`Stage ${index + 1}`}
+                        />
+                      </div>
+                      <div className="grid gap-2">
+                        <Label className="text-xs text-slate-600">Internal key</Label>
+                        <Input
+                          value={stage.templateStageId}
+                          onChange={(event) =>
+                            patchSettingsStage(index, { templateStageId: event.target.value })
+                          }
+                          placeholder="qualified"
+                        />
+                      </div>
+                    </div>
+                    <div className="grid gap-3">
+                      <div className="grid gap-2">
+                        <Label className="text-xs text-slate-600">Description</Label>
+                        <Input
+                          value={stage.description}
+                          onChange={(event) =>
+                            patchSettingsStage(index, { description: event.target.value })
+                          }
+                          placeholder="Define what this stage means."
+                        />
+                      </div>
+                      <div className="grid gap-2">
+                        <Label className="text-xs text-slate-600">Auto-match keywords</Label>
+                        <Input
+                          value={stage.keywordsText}
+                          onChange={(event) =>
+                            patchSettingsStage(index, { keywordsText: event.target.value })
+                          }
+                          placeholder="interested, need more information, pricing"
+                        />
+                        <p className="text-[11px] text-slate-500">
+                          Use comma-separated phrases. Any match moves the lead to this stage.
+                        </p>
+                      </div>
+                    </div>
+                    <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-slate-100 bg-slate-50 px-3 py-2">
+                      <div className="flex flex-wrap items-center gap-4 text-sm">
+                        <label className="flex items-center gap-2">
+                          <Checkbox
+                            checked={stage.isWon}
+                            onCheckedChange={(checked) =>
+                              setSettingsStageOutcome(index, "isWon", checked === true)
+                            }
+                          />
+                          Won stage
+                        </label>
+                        <label className="flex items-center gap-2">
+                          <Checkbox
+                            checked={stage.isLost}
+                            onCheckedChange={(checked) =>
+                              setSettingsStageOutcome(index, "isLost", checked === true)
+                            }
+                          />
+                          Lost stage
+                        </label>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <Label className="text-xs text-slate-600">Tone</Label>
+                        <Select
+                          value={stage.tone}
+                          onValueChange={(value) =>
+                            patchSettingsStage(index, { tone: value as PipelineStage["tone"] })
+                          }
+                        >
+                          <SelectTrigger className="h-9 w-[180px] bg-white">
+                            <SelectValue />
+                          </SelectTrigger>
+                          <SelectContent>
+                            {STAGE_TONE_OPTIONS.map((tone) => (
+                              <SelectItem key={tone.value} value={tone.value}>
+                                {tone.label}
+                              </SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+                      </div>
+                    </div>
+                  </div>
+                ))}
+              </div>
             </div>
-            <div className="rounded-xl border border-slate-200 bg-slate-50 p-3 text-xs text-slate-500">
-              Team access and permissions live here (admin-only). This is the hook for role-based access.
+
+            <div className="rounded-xl border border-emerald-200 bg-emerald-50 p-3 text-xs text-emerald-800">
+              Pipeline access is user-level. Every user can create and edit their own pipeline templates.
             </div>
           </div>
           <DialogFooter className="gap-2">

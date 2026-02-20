@@ -17,8 +17,9 @@ const transparentPixel = new Uint8Array([
 ]);
 
 const BOT_SCORE_THRESHOLD = 70;
-const SPEED_TRAP_CRITICAL_MS = 2000;
-const SPEED_TRAP_SUSPICIOUS_MS = 10000;
+const SPEED_TRAP_CRITICAL_MS = 5000;
+const SPEED_TRAP_SUSPICIOUS_MS = 30000;
+const SPEED_TRAP_MILD_MS = 120000;
 const IP_BURST_WINDOW_MS = 60000;
 const IP_BURST_THRESHOLD = 3;
 
@@ -114,6 +115,7 @@ serve(async (req) => {
         let botScore = 0;
         const botReasons: string[] = [];
         let recentIpCount = 0;
+        let msSinceSend: number | null = null;
 
         const addReason = (score: number, reason: string) => {
           botScore += score;
@@ -130,11 +132,14 @@ serve(async (req) => {
           const sentTime = new Date(recipient.last_email_sent_at).getTime();
           const now = Date.now();
           const timeDiff = now - sentTime;
+          msSinceSend = timeDiff;
 
-          if (timeDiff <= SPEED_TRAP_CRITICAL_MS) {
-            addReason(90, 'speed_trap_critical');
-          } else if (timeDiff <= SPEED_TRAP_SUSPICIOUS_MS) {
-            addReason(40, 'speed_trap_suspicious');
+          if (timeDiff >= 0 && timeDiff <= SPEED_TRAP_CRITICAL_MS) {
+            addReason(95, 'speed_trap_critical');
+          } else if (timeDiff >= 0 && timeDiff <= SPEED_TRAP_SUSPICIOUS_MS) {
+            addReason(50, 'speed_trap_suspicious');
+          } else if (timeDiff >= 0 && timeDiff <= SPEED_TRAP_MILD_MS) {
+            addReason(20, 'speed_trap_mild');
           }
         }
 
@@ -193,6 +198,7 @@ serve(async (req) => {
             sec_fetch_site: secFetchSite,
             sec_fetch_mode: secFetchMode,
             sec_fetch_dest: secFetchDest,
+            ms_since_send: msSinceSend,
             ip_burst_count: recentIpCount
           }
         });

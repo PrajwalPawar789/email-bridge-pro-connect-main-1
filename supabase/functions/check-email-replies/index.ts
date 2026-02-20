@@ -16,6 +16,238 @@ const supabase = createClient(
   Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? ""
 );
 
+const parseBoolean = (value: unknown) => {
+    if (typeof value === 'boolean') return value;
+    if (typeof value === 'string') {
+        return ['true', '1', 'yes', 'y', 'on'].includes(value.trim().toLowerCase());
+    }
+    return false;
+};
+
+const resolveDelegatedReplyCheckUrl = () => {
+    const raw =
+        (Deno.env.get("MAILBOX_REPLY_CHECK_URL") ||
+            Deno.env.get("MAILBOX_CHECK_REPLIES_URL") ||
+            Deno.env.get("MAILBOX_API_URL") ||
+            Deno.env.get("VITE_MAILBOX_API_URL") ||
+            "").trim();
+
+    if (!raw) return null;
+
+    const normalized = raw.replace(/\/+$/, "");
+    if (/\/check-email-replies$/i.test(normalized)) {
+        return normalized;
+    }
+
+    return `${normalized}/check-email-replies`;
+};
+
+const invokeDelegatedReplyCheck = async (body: Record<string, any>, delegatedUrl: string) => {
+    const timeoutRaw = Number(Deno.env.get("MAILBOX_REPLY_CHECK_TIMEOUT_MS") || "90000");
+    const timeoutMs = Number.isFinite(timeoutRaw) && timeoutRaw > 0 ? timeoutRaw : 90000;
+    const adminSecret = (Deno.env.get("MAILBOX_REPLY_CHECK_SECRET") || Deno.env.get("MAILBOX_ADMIN_SECRET") || "").trim();
+
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort("timeout"), timeoutMs);
+
+    try {
+        const headers: Record<string, string> = {
+            "Content-Type": "application/json"
+        };
+
+        if (adminSecret) {
+            headers.Authorization = `Bearer ${adminSecret}`;
+            headers["x-mailbox-admin-secret"] = adminSecret;
+        }
+
+        const response = await fetch(delegatedUrl, {
+            method: "POST",
+            headers,
+            body: JSON.stringify(body || {}),
+            signal: controller.signal
+        });
+
+        const raw = await response.text();
+        let payload: any = {};
+
+        if (raw) {
+            try {
+                payload = JSON.parse(raw);
+            } catch {
+                payload = { raw };
+            }
+        }
+
+        if (!response.ok) {
+            throw new Error(payload?.error || `Delegated reply check failed with status ${response.status}`);
+        }
+
+        if (payload && typeof payload === "object") {
+            return {
+                ...payload,
+                delegated: true,
+                delegated_to: delegatedUrl
+            };
+        }
+
+        return {
+            success: true,
+            delegated: true,
+            delegated_to: delegatedUrl,
+            payload
+        };
+    } finally {
+        clearTimeout(timeoutId);
+    }
+};
+
+const resolveMailboxSyncUrl = () => {
+    const raw =
+        (Deno.env.get("MAILBOX_SYNC_URL") ||
+            Deno.env.get("VITE_MAILBOX_SYNC_URL") ||
+            Deno.env.get("MAILBOX_API_URL") ||
+            Deno.env.get("VITE_MAILBOX_API_URL") ||
+            "").trim();
+
+    if (!raw) return null;
+
+    const normalized = raw.replace(/\/+$/, "");
+    if (/\/sync-mailbox$/i.test(normalized)) {
+        return normalized;
+    }
+
+    return `${normalized}/sync-mailbox`;
+};
+
+const resolveMailboxSyncTargets = async (configId: string | null) => {
+    let query = supabase
+        .from("email_configs")
+        .select("id, smtp_username")
+        .not("imap_host", "is", null)
+        .not("imap_port", "is", null);
+
+    if (configId) {
+        query = query.eq("id", configId);
+    }
+
+    const { data, error } = await query;
+    if (error) throw error;
+
+    return data || [];
+};
+
+const invokeMailboxSyncViaApi = async (configId: string | null, body: Record<string, any>) => {
+    const syncUrl = resolveMailboxSyncUrl();
+    if (!syncUrl) {
+        return { attempted: false, skipped: true, reason: "MAILBOX_SYNC_URL is not configured" };
+    }
+
+    const authToken =
+        (Deno.env.get("MAILBOX_SYNC_AUTH_TOKEN") ||
+            Deno.env.get("MAILBOX_SYNC_BEARER_TOKEN") ||
+            "").trim();
+    const adminSecret = (Deno.env.get("MAILBOX_SYNC_SECRET") || Deno.env.get("MAILBOX_ADMIN_SECRET") || "").trim();
+
+    const timeoutRaw = Number(Deno.env.get("MAILBOX_SYNC_TIMEOUT_MS") || "90000");
+    const timeoutMs = Number.isFinite(timeoutRaw) && timeoutRaw > 0 ? timeoutRaw : 90000;
+
+    const rawLimit = body.sync_limit ?? body.syncLimit ?? Deno.env.get("MAILBOX_SYNC_LIMIT") ?? 50;
+    const parsedLimit = Number(rawLimit);
+    const syncLimit = Number.isFinite(parsedLimit) ? Math.max(1, Math.min(500, parsedLimit)) : 50;
+
+    const targets = await resolveMailboxSyncTargets(configId);
+    if (targets.length === 0) {
+        return {
+            attempted: true,
+            success: true,
+            sync_url: syncUrl,
+            configCount: 0,
+            limit: syncLimit,
+            results: []
+        };
+    }
+
+    const results: any[] = [];
+    let succeeded = 0;
+    let failed = 0;
+
+    for (const target of targets) {
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort("timeout"), timeoutMs);
+
+        try {
+            const headers: Record<string, string> = {
+                "Content-Type": "application/json"
+            };
+
+            if (authToken) {
+                headers.Authorization = authToken.startsWith("Bearer ")
+                    ? authToken
+                    : `Bearer ${authToken}`;
+            }
+
+            if (adminSecret) {
+                headers["x-mailbox-admin-secret"] = adminSecret;
+            }
+
+            const response = await fetch(syncUrl, {
+                method: "POST",
+                headers,
+                body: JSON.stringify({
+                    configId: target.id,
+                    limit: syncLimit
+                }),
+                signal: controller.signal
+            });
+
+            const raw = await response.text();
+            let payload: any = {};
+            if (raw) {
+                try {
+                    payload = JSON.parse(raw);
+                } catch {
+                    payload = { raw };
+                }
+            }
+
+            if (!response.ok) {
+                throw new Error(payload?.error || `sync-mailbox failed with status ${response.status}`);
+            }
+
+            succeeded++;
+            results.push({
+                config_id: target.id,
+                email: target.smtp_username,
+                success: true,
+                ...(payload && typeof payload === "object" ? payload : { payload })
+            });
+        } catch (error: any) {
+            failed++;
+            results.push({
+                config_id: target.id,
+                email: target.smtp_username,
+                success: false,
+                error: error?.message || "sync-mailbox failed"
+            });
+        } finally {
+            clearTimeout(timeoutId);
+        }
+
+        await new Promise((resolve) => setTimeout(resolve, 500));
+    }
+
+    return {
+        attempted: true,
+        success: failed === 0,
+        sync_url: syncUrl,
+        configCount: targets.length,
+        limit: syncLimit,
+        succeeded,
+        failed,
+        results
+    };
+};
+
 const updateCampaignBounceCount = async (campaignId: string) => {
     if (!campaignId) return;
 
@@ -80,6 +312,60 @@ const sanitizeBounceEmails = (emails: string[], senderEmail: string) => {
     }
 
     return [...unique];
+};
+
+const chunk = <T>(items: T[], size: number) => {
+    const chunks: T[][] = [];
+    for (let index = 0; index < items.length; index += size) {
+        chunks.push(items.slice(index, index + size));
+    }
+    return chunks;
+};
+
+const buildCaseInsensitiveEmailOrFilter = (emails: string[]) =>
+    emails
+        .map((email) => {
+            const escaped = email
+                .replace(/\\/g, '\\\\')
+                .replace(/,/g, '\\,')
+                .replace(/%/g, '\\%')
+                .replace(/_/g, '\\_');
+            return `email.ilike.${escaped}`;
+        })
+        .join(',');
+
+const fetchRecipientsByEmailCaseInsensitive = async (emails: string[], selectFields: string) => {
+    const normalizedEmails = [...new Set(
+        (emails || [])
+            .map((email) => (email || '').trim().toLowerCase())
+            .filter(Boolean)
+    )];
+
+    if (normalizedEmails.length === 0) {
+        return [];
+    }
+
+    const recipientsById = new Map<string, any>();
+    const emailChunks = chunk(normalizedEmails, 40);
+
+    for (const emailChunk of emailChunks) {
+        const orFilter = buildCaseInsensitiveEmailOrFilter(emailChunk);
+        const { data, error } = await supabase
+            .from('recipients')
+            .select(selectFields)
+            .or(orFilter);
+
+        if (error) {
+            console.error('[ReplyCheck] Failed case-insensitive recipient lookup:', error);
+            continue;
+        }
+
+        (data || []).forEach((recipient: any) => {
+            if (recipient?.id) recipientsById.set(recipient.id, recipient);
+        });
+    }
+
+    return Array.from(recipientsById.values());
 };
 
 const getImapHostCandidates = (config: any) => {
@@ -258,12 +544,12 @@ const processDbEmails = async (config: any, lookbackDays: number) => {
         if (uniqueBounceEmails.length > 0) {
              // Fetch ALL recipients matching these emails, regardless of current status
              // We want to mark them as bounced even if they are 'sent' or 'completed'
-             const { data: potentialBounces, error: bounceError } = await supabase
-                .from('recipients')
-                .select('id, email, campaign_id, status, bounced')
-                .in('email', uniqueBounceEmails);
-                
-             if (!bounceError && potentialBounces && potentialBounces.length > 0) {
+             const potentialBounces = await fetchRecipientsByEmailCaseInsensitive(
+                uniqueBounceEmails,
+                'id, email, campaign_id, status, bounced'
+             );
+
+             if (potentialBounces && potentialBounces.length > 0) {
                 // Filter for those that are NOT YET marked as bounced
                 const newBounces = potentialBounces.filter(r => !r.bounced);
                 
@@ -319,13 +605,12 @@ const processDbEmails = async (config: any, lookbackDays: number) => {
     if (uniqueSenders.length > 0) {
         // Find all recipients that match these senders and haven't replied yet
         // Also fetch last_email_sent_at to ensure the reply is NEWER than the sent email
-        const { data: potentialReplies, error: replyError } = await supabase
-            .from('recipients')
-            .select('id, email, campaign_id, last_email_sent_at, created_at')
-            .in('email', uniqueSenders)
-            .eq('replied', false);
-            
-        if (!replyError && potentialReplies && potentialReplies.length > 0) {
+        const potentialReplies = (await fetchRecipientsByEmailCaseInsensitive(
+            uniqueSenders,
+            'id, email, campaign_id, last_email_sent_at, updated_at, replied'
+        )).filter((recipient: any) => !recipient.replied);
+
+        if (potentialReplies && potentialReplies.length > 0) {
             console.log(`[DB Mode] Found ${potentialReplies.length} potential replies to process.`);
             
             // Create a map of sender email -> latest message date
@@ -346,7 +631,7 @@ const processDbEmails = async (config: any, lookbackDays: number) => {
             
             for (const recipient of potentialReplies) {
                 const replyDate = senderLastMsgDate.get(recipient.email.toLowerCase());
-                const sentDateStr = recipient.last_email_sent_at || recipient.created_at;
+                const sentDateStr = recipient.last_email_sent_at || recipient.updated_at;
                 
                 if (replyDate && sentDateStr) {
                     const sentDate = new Date(sentDateStr);
@@ -627,17 +912,19 @@ const checkRepliesAndBouncesForConfig = async (config: any, lookbackDays: number
                             const uniqueEmails = sanitizeBounceEmails(foundEmails, senderEmail);
 
                             if (uniqueEmails.length > 0) {
-                                const { data: recipients, error: recipientsError } = await supabase
-                                    .from('recipients')
-                                    .select('id, email, campaign_id, bounced')
-                                    .in('email', uniqueEmails)
-                                    .or('bounced.is.null,bounced.eq.false')
-                                    .order('last_email_sent_at', { ascending: false });
+                                const recipients = await fetchRecipientsByEmailCaseInsensitive(
+                                    uniqueEmails,
+                                    'id, email, campaign_id, bounced, last_email_sent_at'
+                                );
 
-                                if (recipientsError) {
-                                    console.error('Error fetching recipients for bounce processing:', recipientsError);
-                                } else if (recipients && recipients.length > 0) {
-                                    const recipientsToUpdate = recipients.filter(r => !r.bounced);
+                                if (recipients && recipients.length > 0) {
+                                    const recipientsToUpdate = recipients
+                                        .filter(r => !r.bounced)
+                                        .sort((a, b) => {
+                                            const timeA = a.last_email_sent_at ? new Date(a.last_email_sent_at).getTime() : 0;
+                                            const timeB = b.last_email_sent_at ? new Date(b.last_email_sent_at).getTime() : 0;
+                                            return timeB - timeA;
+                                        });
                                     const recipientIds = recipientsToUpdate.map(r => r.id);
                                     const campaignIds = new Set(recipientsToUpdate.map(r => r.campaign_id));
 
@@ -707,33 +994,106 @@ serve(async (req) => {
         return new Response(null, { headers: corsHeaders });
     }
 
-    console.log("Starting check-email-replies v3.4 (Legacy Hostinger override support)...");
+    console.log("Starting check-email-replies v3.5 (Delegated mailbox support)...");
 
     try {
-        let configId = null;
+        let body: Record<string, any> = {};
+        try {
+            body = await req.json();
+        } catch {
+            // Body might be empty or not JSON.
+        }
+
+        let configId = body.config_id || body.configId || null;
         let lookbackDays = 7;
         let useDbScan = false;
-        let overrides: any = {};
+        if (body.lookback_days !== undefined && body.lookback_days !== null && body.lookback_days !== "") {
+            lookbackDays = Number(body.lookback_days);
+        } else if (body.lookbackDays !== undefined && body.lookbackDays !== null && body.lookbackDays !== "") {
+            lookbackDays = Number(body.lookbackDays);
+        }
+        if (!Number.isFinite(lookbackDays) || lookbackDays <= 0) {
+            lookbackDays = 7;
+        }
+        if (body.use_db_scan !== undefined) {
+            useDbScan = parseBoolean(body.use_db_scan);
+        } else if (body.useDbScan !== undefined) {
+            useDbScan = parseBoolean(body.useDbScan);
+        }
+        let overrides: any = {
+            force_legacy_hostinger: body.force_legacy_hostinger,
+            force_direct_tls: body.force_direct_tls,
+            force_starttls: body.force_starttls,
+            force_port: body.force_port,
+            imap_host_override: body.imap_host_override,
+            imap_host_candidates: body.imap_host_candidates,
+            max_attempts: body.max_attempts,
+            connection_timeout_ms: body.connection_timeout_ms,
+            greeting_timeout_ms: body.greeting_timeout_ms,
+            socket_timeout_ms: body.socket_timeout_ms
+        };
 
-        try {
-            const body = await req.json();
-            configId = body.config_id;
-            if (body.lookback_days) lookbackDays = body.lookback_days;
-            if (body.use_db_scan) useDbScan = body.use_db_scan;
-            overrides = {
-                force_legacy_hostinger: body.force_legacy_hostinger,
-                force_direct_tls: body.force_direct_tls,
-                force_starttls: body.force_starttls,
-                force_port: body.force_port,
-                imap_host_override: body.imap_host_override,
-                imap_host_candidates: body.imap_host_candidates,
-                max_attempts: body.max_attempts,
-                connection_timeout_ms: body.connection_timeout_ms,
-                greeting_timeout_ms: body.greeting_timeout_ms,
-                socket_timeout_ms: body.socket_timeout_ms
+        const syncMailboxBeforeReplyCheck =
+            body.sync_mailbox !== undefined
+                ? parseBoolean(body.sync_mailbox)
+                : body.syncMailbox !== undefined
+                    ? parseBoolean(body.syncMailbox)
+                    : parseBoolean(Deno.env.get("MAILBOX_SYNC_BEFORE_REPLY_CHECK") || "true");
+
+        let mailboxSync: any = null;
+        if (syncMailboxBeforeReplyCheck) {
+            try {
+                console.log("[Mailbox Sync] Triggering sync-mailbox API before reply checks...");
+                mailboxSync = await invokeMailboxSyncViaApi(configId, body);
+                if (mailboxSync?.attempted) {
+                    console.log(
+                        `[Mailbox Sync] Completed. Configs: ${mailboxSync.configCount || 0}, succeeded: ${mailboxSync.succeeded || 0}, failed: ${mailboxSync.failed || 0}`
+                    );
+                } else {
+                    console.log(`[Mailbox Sync] Skipped: ${mailboxSync?.reason || "disabled"}`);
+                }
+            } catch (syncError: any) {
+                console.error(`[Mailbox Sync] Failed: ${syncError?.message || syncError}`);
+                mailboxSync = {
+                    attempted: true,
+                    success: false,
+                    error: syncError?.message || "sync-mailbox invocation failed"
+                };
+                const strictSync = parseBoolean(Deno.env.get("MAILBOX_SYNC_STRICT") || "false");
+                if (strictSync) {
+                    throw syncError;
+                }
+            }
+        }
+
+        const delegatedUrl = resolveDelegatedReplyCheckUrl();
+        if (delegatedUrl) {
+            const delegatedPayload = {
+                ...body,
+                config_id: configId || undefined,
+                lookback_days: lookbackDays,
+                use_db_scan: useDbScan,
+                overrides
             };
-        } catch (e) {
-            // Body might be empty or not JSON
+
+            try {
+                console.log(`[Delegated Reply Check] Forwarding to ${delegatedUrl}`);
+                const payload = await invokeDelegatedReplyCheck(delegatedPayload, delegatedUrl);
+                return new Response(
+                    JSON.stringify({
+                        ...payload,
+                        mailbox_sync: mailboxSync
+                    }),
+                    { headers: { "Content-Type": "application/json", ...corsHeaders } }
+                );
+            } catch (delegatedError: any) {
+                console.error(`[Delegated Reply Check] Failed: ${delegatedError?.message || delegatedError}`);
+                const strictDelegation = parseBoolean(Deno.env.get("MAILBOX_REPLY_CHECK_STRICT") || "false");
+                if (strictDelegation) {
+                    throw delegatedError;
+                }
+                console.warn("[Delegated Reply Check] Falling back to local IMAP flow.");
+            }
         }
 
         let query = supabase
@@ -773,7 +1133,7 @@ serve(async (req) => {
         }
 
         return new Response(
-            JSON.stringify({ success: true, results }),
+            JSON.stringify({ success: true, results, mailbox_sync: mailboxSync }),
             { headers: { "Content-Type": "application/json", ...corsHeaders } }
         );
 

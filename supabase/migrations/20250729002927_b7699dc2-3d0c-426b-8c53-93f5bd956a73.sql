@@ -1,4 +1,4 @@
--- Fix the timestamp comparison issue in trigger_next_batch function
+-- Create the trigger function for next batch without attempting to unschedule non-existent job
 CREATE OR REPLACE FUNCTION public.trigger_next_batch()
 RETURNS void
 LANGUAGE plpgsql
@@ -7,7 +7,6 @@ DECLARE
   campaign_record RECORD;
   pending_count INTEGER;
   current_time TIMESTAMP WITH TIME ZONE := NOW();
-  two_minutes_ago TIMESTAMP WITH TIME ZONE := NOW() - INTERVAL '2 minutes';
 BEGIN
   -- Find campaigns that need to continue sending
   FOR campaign_record IN 
@@ -16,7 +15,7 @@ BEGIN
     INNER JOIN recipients r ON c.id = r.campaign_id
     WHERE c.status = 'sending'
       AND r.status = 'pending'
-      AND (c.last_batch_sent_at IS NULL OR c.last_batch_sent_at < two_minutes_ago)
+      AND (c.last_batch_sent_at IS NULL OR c.last_batch_sent_at < current_time - INTERVAL '2 minutes')
   LOOP
     -- Count pending recipients
     SELECT COUNT(*) INTO pending_count
@@ -31,7 +30,7 @@ BEGIN
       
       -- Use the new batch function
       PERFORM net.http_post(
-        url := 'https://lyerkyijpavilyufcrgb.supabase.co/functions/v1/send-campaign-batch',
+        url := 'https://smwjzloqamtvemljedkv.supabase.co/functions/v1/send-campaign-batch',
         headers := '{"Content-Type": "application/json", "Authorization": "Bearer ' || current_setting('app.settings.service_role_key', true) || '"}'::jsonb,
         body := json_build_object('campaignId', campaign_record.id, 'batchSize', 3)::jsonb
       );
@@ -41,3 +40,12 @@ BEGIN
   END LOOP;
 END;
 $function$;
+
+-- Create cron job for triggering batches every 2 minutes
+SELECT cron.schedule(
+  'trigger-email-batches',
+  '*/2 * * * *', -- every 2 minutes
+  $$
+  SELECT public.trigger_next_batch();
+  $$
+);

@@ -8,8 +8,12 @@ const supabase = createClient(
 );
 
 const BOT_SCORE_THRESHOLD = 70;
-const SPEED_TRAP_CRITICAL_MS = 2000;
-const SPEED_TRAP_SUSPICIOUS_MS = 10000;
+const SPEED_TRAP_CRITICAL_MS = 5000;
+const SPEED_TRAP_SUSPICIOUS_MS = 30000;
+const SPEED_TRAP_MILD_MS = 120000;
+const OPEN_CLICK_CRITICAL_MS = 15000;
+const OPEN_CLICK_SUSPICIOUS_MS = 45000;
+const OPEN_CLICK_BURST_AFTER_SEND_MS = 60000;
 const IP_BURST_WINDOW_MS = 60000;
 const IP_BURST_THRESHOLD = 3;
 
@@ -89,7 +93,7 @@ serve(async (req) => {
       // Check if already clicked (prevent duplicate tracking)
       const { data: existing } = await supabase
         .from('recipients')
-        .select('clicked_at, last_email_sent_at')
+        .select('clicked_at, opened_at, last_email_sent_at')
         .eq('id', recipientId)
         .single();
 
@@ -97,6 +101,16 @@ serve(async (req) => {
         let botScore = 0;
         const botReasons: string[] = [];
         let recentIpCount = 0;
+        let msSinceSend: number | null = null;
+        let msSinceOpen: number | null = null;
+        let latestOpenEvent: {
+          id: string;
+          created_at: string | null;
+          is_bot: boolean | null;
+          bot_score: number | null;
+          bot_reasons: string[] | null;
+          metadata: Record<string, unknown> | null;
+        } | null = null;
 
         const addReason = (score: number, reason: string) => {
           botScore += score;
@@ -109,25 +123,94 @@ serve(async (req) => {
           addReason(80, 'head_request');
         }
 
-        // 1. Speed Trap
+        // 1. Speed Trap relative to send time
         if (existing.last_email_sent_at) {
             const sentTime = new Date(existing.last_email_sent_at).getTime();
             const now = new Date().getTime();
             const timeDiff = now - sentTime;
-            
-            if (timeDiff <= SPEED_TRAP_CRITICAL_MS) {
-                addReason(90, 'speed_trap_critical');
-            } else if (timeDiff <= SPEED_TRAP_SUSPICIOUS_MS) {
-                addReason(40, 'speed_trap_suspicious');
+            msSinceSend = timeDiff;
+
+            if (timeDiff >= 0 && timeDiff <= SPEED_TRAP_CRITICAL_MS) {
+                addReason(95, 'speed_trap_critical');
+            } else if (timeDiff >= 0 && timeDiff <= SPEED_TRAP_SUSPICIOUS_MS) {
+                addReason(50, 'speed_trap_suspicious');
+            } else if (timeDiff >= 0 && timeDiff <= SPEED_TRAP_MILD_MS) {
+                addReason(20, 'speed_trap_mild');
             }
         }
 
-        // 2. Honeypot
+        // 2. Open->click burst signal for per-recipient bot scans
+        const { data: recentOpen, error: recentOpenError } = await supabase
+          .from('tracking_events')
+          .select('id, created_at, is_bot, bot_score, bot_reasons, metadata')
+          .eq('recipient_id', recipientId)
+          .eq('event_type', 'open')
+          .order('created_at', { ascending: false })
+          .limit(1)
+          .maybeSingle();
+
+        if (recentOpenError) {
+          console.error('Error fetching recent open event:', recentOpenError);
+        } else if (recentOpen) {
+          const openMetadata =
+            recentOpen.metadata &&
+            typeof recentOpen.metadata === 'object' &&
+            !Array.isArray(recentOpen.metadata)
+              ? (recentOpen.metadata as Record<string, unknown>)
+              : null;
+
+          latestOpenEvent = {
+            id: recentOpen.id,
+            created_at: recentOpen.created_at,
+            is_bot: recentOpen.is_bot,
+            bot_score: recentOpen.bot_score,
+            bot_reasons: recentOpen.bot_reasons,
+            metadata: openMetadata
+          };
+
+          if (recentOpen.created_at) {
+            const openTime = new Date(recentOpen.created_at).getTime();
+            const now = Date.now();
+            const gapMs = now - openTime;
+            msSinceOpen = gapMs;
+
+            if (gapMs >= 0 && gapMs <= OPEN_CLICK_CRITICAL_MS) {
+              addReason(60, 'open_click_gap_critical');
+            } else if (gapMs >= 0 && gapMs <= OPEN_CLICK_SUSPICIOUS_MS) {
+              addReason(35, 'open_click_gap_suspicious');
+            }
+          }
+        } else if (existing.opened_at) {
+          // Fallback to recipient opened_at if no open event row is available yet.
+          const openTime = new Date(existing.opened_at).getTime();
+          const now = Date.now();
+          const gapMs = now - openTime;
+          msSinceOpen = gapMs;
+
+          if (gapMs >= 0 && gapMs <= OPEN_CLICK_CRITICAL_MS) {
+            addReason(60, 'open_click_gap_critical');
+          } else if (gapMs >= 0 && gapMs <= OPEN_CLICK_SUSPICIOUS_MS) {
+            addReason(35, 'open_click_gap_suspicious');
+          }
+        }
+
+        if (
+          msSinceSend !== null &&
+          msSinceOpen !== null &&
+          msSinceSend >= 0 &&
+          msSinceOpen >= 0 &&
+          msSinceSend <= OPEN_CLICK_BURST_AFTER_SEND_MS &&
+          msSinceOpen <= OPEN_CLICK_SUSPICIOUS_MS
+        ) {
+          addReason(45, 'open_click_burst_after_send');
+        }
+
+        // 3. Honeypot
         if (isGhost) {
             addReason(100, 'honeypot_clicked');
         }
 
-        // 3. User Agent
+        // 4. User Agent
         const ua = userAgent.toLowerCase();
         if (!ua) {
             addReason(100, 'empty_user_agent');
@@ -187,12 +270,95 @@ serve(async (req) => {
               sec_fetch_site: secFetchSite,
               sec_fetch_mode: secFetchMode,
               sec_fetch_dest: secFetchDest,
+              ms_since_send: msSinceSend,
+              ms_since_open: msSinceOpen,
+              open_event_id: latestOpenEvent?.id || null,
               ip_burst_count: recentIpCount
             }
         });
 
         if (isBot) {
-            console.log(`Bot click detected! Score: ${botScore}`);
+            console.log(`Bot click detected! Score: ${botScore}, Reasons: ${botReasons.join(', ')}`);
+
+            const shouldReclassifyOpenAsBot =
+              !!latestOpenEvent &&
+              latestOpenEvent.is_bot === false &&
+              msSinceOpen !== null &&
+              msSinceOpen >= 0 &&
+              msSinceOpen <= OPEN_CLICK_SUSPICIOUS_MS &&
+              botReasons.includes('open_click_burst_after_send');
+
+            if (shouldReclassifyOpenAsBot && latestOpenEvent) {
+              const existingOpenReasons = Array.isArray(latestOpenEvent.bot_reasons)
+                ? [...latestOpenEvent.bot_reasons]
+                : [];
+              if (!existingOpenReasons.includes('retroactive_open_click_burst')) {
+                existingOpenReasons.push('retroactive_open_click_burst');
+              }
+
+              const existingOpenMetadata =
+                latestOpenEvent.metadata &&
+                typeof latestOpenEvent.metadata === 'object' &&
+                !Array.isArray(latestOpenEvent.metadata)
+                  ? latestOpenEvent.metadata
+                  : {};
+
+              const { data: reclassifiedOpenRows, error: reclassifyOpenError } = await supabase
+                .from('tracking_events')
+                .update({
+                  is_bot: true,
+                  bot_score: Math.max(latestOpenEvent.bot_score || 0, BOT_SCORE_THRESHOLD),
+                  bot_reasons: existingOpenReasons,
+                  metadata: {
+                    ...existingOpenMetadata,
+                    retro_classified_by_click: true,
+                    retro_classified_at: new Date().toISOString(),
+                    retro_classified_click_gap_ms: msSinceOpen,
+                    retro_classified_click_reasons: botReasons
+                  }
+                })
+                .eq('id', latestOpenEvent.id)
+                .eq('is_bot', false)
+                .select('id');
+
+              if (reclassifyOpenError) {
+                console.error('Error reclassifying open event as bot:', reclassifyOpenError);
+              } else if ((reclassifiedOpenRows || []).length > 0) {
+                await supabase.rpc('increment_bot_open_count', { campaign_id: campaignId });
+
+                const { data: firstHumanOpenAfterReclass, error: firstHumanOpenError } = await supabase
+                  .from('tracking_events')
+                  .select('created_at')
+                  .eq('recipient_id', recipientId)
+                  .eq('event_type', 'open')
+                  .eq('is_bot', false)
+                  .order('created_at', { ascending: true })
+                  .limit(1)
+                  .maybeSingle();
+
+                if (firstHumanOpenError) {
+                  console.error('Error fetching first human open after reclassification:', firstHumanOpenError);
+                } else {
+                  const nextHumanOpenedAt = firstHumanOpenAfterReclass?.created_at || null;
+                  const { error: recipientOpenUpdateError } = await supabase
+                    .from('recipients')
+                    .update({ opened_at: nextHumanOpenedAt })
+                    .eq('id', recipientId);
+
+                  if (recipientOpenUpdateError) {
+                    console.error('Error updating recipient opened_at after reclassification:', recipientOpenUpdateError);
+                  } else {
+                    const { error: recountOpenError } = await supabase.rpc('increment_opened_count', {
+                      campaign_id: campaignId
+                    });
+                    if (recountOpenError) {
+                      console.error('Error recalculating opened_count after reclassification:', recountOpenError);
+                    }
+                  }
+                }
+              }
+            }
+
             await supabase.rpc('increment_bot_click_count', { campaign_id: campaignId });
             // Redirect but don't count as human click
             if (targetUrl && targetUrl !== "") {

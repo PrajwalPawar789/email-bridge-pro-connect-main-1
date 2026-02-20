@@ -30,7 +30,7 @@ BEGIN
       
       -- Use the new batch function instead of the old one
       PERFORM net.http_post(
-        url := 'https://lyerkyijpavilyufcrgb.supabase.co/functions/v1/send-campaign-batch',
+        url := 'https://smwjzloqamtvemljedkv.supabase.co/functions/v1/send-campaign-batch',
         headers := '{"Content-Type": "application/json", "Authorization": "Bearer ' || current_setting('app.settings.service_role_key', true) || '"}'::jsonb,
         body := json_build_object('campaignId', campaign_record.id, 'batchSize', 3)::jsonb
       );
@@ -42,7 +42,12 @@ END;
 $function$;
 
 -- Update the cron job to trigger batches more frequently (every 2 minutes)
-SELECT cron.unschedule('monitor-campaigns-job');
+DO $$
+BEGIN
+  PERFORM cron.unschedule('monitor-campaigns-job');
+EXCEPTION WHEN OTHERS THEN
+  NULL;
+END $$;
 
 SELECT cron.schedule(
   'trigger-email-batches',

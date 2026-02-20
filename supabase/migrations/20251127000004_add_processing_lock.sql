@@ -92,7 +92,7 @@ BEGIN
 
           IF auth_headers IS NOT NULL THEN
             PERFORM net.http_post(
-              url := 'https://lyerkyijpavilyufcrgb.supabase.co/functions/v1/send-campaign-emails',
+              url := 'https://smwjzloqamtvemljedkv.supabase.co/functions/v1/send-campaign-emails',
               headers := auth_headers,
               body := jsonb_build_object('campaignId', campaign_record.id, 'resume', true)
             );
@@ -110,3 +110,4 @@ BEGIN
   RAISE NOTICE 'Campaign monitoring completed at %', NOW();
 END;
 $function$;
+

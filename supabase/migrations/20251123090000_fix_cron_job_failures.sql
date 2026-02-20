@@ -63,7 +63,7 @@ BEGIN
 
           IF auth_headers IS NOT NULL THEN
             PERFORM net.http_post(
-              url := 'https://lyerkyijpavilyufcrgb.supabase.co/functions/v1/send-campaign-emails',
+              url := 'https://smwjzloqamtvemljedkv.supabase.co/functions/v1/send-campaign-emails',
               headers := auth_headers,
               body := jsonb_build_object('campaignId', campaign_record.id, 'resume', true)
             );
@@ -122,7 +122,7 @@ BEGIN
 
       IF auth_headers IS NOT NULL THEN
         PERFORM net.http_post(
-          url := 'https://lyerkyijpavilyufcrgb.supabase.co/functions/v1/send-campaign-batch',
+          url := 'https://smwjzloqamtvemljedkv.supabase.co/functions/v1/send-campaign-batch',
           headers := auth_headers,
           body := jsonb_build_object('campaignId', campaign_record.id, 'batchSize', 3)
         );
@@ -136,3 +136,4 @@ BEGIN
   END LOOP;
 END;
 $function$;
+
