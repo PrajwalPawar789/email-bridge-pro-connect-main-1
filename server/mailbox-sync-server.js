@@ -1240,13 +1240,27 @@ const loadMessageForUser = async (dbClient, user, messageId, canBypassAuth) => {
 };
 
 const loadConfigForUser = async (dbClient, user, configId, canBypassAuth) => {
-  let query = dbClient.from('email_configs').select('*').eq('id', configId);
-  if (!canBypassAuth) {
-    query = query.eq('user_id', user.id);
+  const normalizedConfigId = String(configId || '').trim();
+  if (!normalizedConfigId) return null;
+
+  const runQuery = async (client) => {
+    let query = client.from('email_configs').select('*').eq('id', normalizedConfigId);
+    if (!canBypassAuth) {
+      query = query.eq('user_id', user.id);
+    }
+    return query.maybeSingle();
+  };
+
+  const primary = await runQuery(dbClient);
+  if (!primary.error) return primary.data;
+
+  if (supabaseAdmin && dbClient !== supabaseAdmin) {
+    const fallback = await runQuery(supabaseAdmin);
+    if (!fallback.error) return fallback.data;
+    throw fallback.error;
   }
-  const { data, error } = await query.maybeSingle();
-  if (error) throw error;
-  return data;
+
+  throw primary.error;
 };
 
 const runReplyCheck = async ({ configId, lookbackDays, useDbScan, overrides, source = 'manual' } = {}) => {
@@ -1846,6 +1860,90 @@ app.post('/api/inbox/messages/:id/reply', async (req, res) => {
   }
 });
 
+app.post('/api/inbox/compose', async (req, res) => {
+  try {
+    const authHeader = req.headers.authorization || '';
+    const canBypassAuth = MAILBOX_BYPASS_AUTH && hasServiceRoleKey;
+    const user = await authenticateRequest(authHeader);
+    if (!user) {
+      return res.status(401).json({ error: 'Unauthorized' });
+    }
+
+    const dbClient = supabaseAdmin || buildUserSupabaseClient(authHeader);
+    if (!dbClient) {
+      return res.status(500).json({ error: 'Supabase keys are not configured.' });
+    }
+
+    const payload = req.body || {};
+    const configId = payload.configId || payload.config_id;
+    if (!configId) {
+      return res.status(400).json({ error: 'configId is required.' });
+    }
+
+    const config = await loadConfigForUser(dbClient, user, configId, canBypassAuth);
+    if (!config) {
+      return res.status(404).json({ error: 'Email configuration not found' });
+    }
+
+    if (!config.smtp_host || !config.smtp_username || !config.smtp_password) {
+      return res.status(400).json({ error: 'SMTP credentials are missing for this inbox.' });
+    }
+
+    if (!payload.text && !payload.html) {
+      return res.status(400).json({ error: 'Message body is required.' });
+    }
+
+    const result = await emailService.sendCompose({
+      config,
+      payload: {
+        subject: payload.subject,
+        text: payload.text,
+        html: payload.html,
+        to: payload.to,
+        cc: payload.cc,
+        bcc: payload.bcc,
+        attachments: payload.attachments,
+      },
+    });
+
+    const sentAt = new Date().toISOString();
+    const sentRow = {
+      user_id: config.user_id || user.id,
+      config_id: config.id,
+      uid: null,
+      from_email: config.smtp_username,
+      to_email: result.to?.[0] || '',
+      to_emails: result.to,
+      cc_emails: result.cc,
+      subject: result.subject,
+      body: result.html || result.text || '',
+      date: sentAt,
+      folder: 'Sent',
+      read: true,
+      message_id: result.messageId,
+      in_reply_to: null,
+      references: null,
+      attachments: result.attachmentsMeta || [],
+      thread_id: result.threadId,
+      direction: 'outbound',
+    };
+
+    const { error: insertError } = await dbClient.from('email_messages').insert(sentRow);
+    if (insertError) {
+      console.error('[mailbox] Failed to store sent compose message:', insertError?.message || insertError);
+    }
+
+    return res.json({
+      success: true,
+      messageId: result.messageId,
+      threadId: result.threadId,
+    });
+  } catch (error) {
+    console.error('[mailbox] Compose send failed:', error?.message || error);
+    return res.status(500).json({ error: error?.message || 'Failed to send message' });
+  }
+});
+
 app.post('/sync-mailbox', async (req, res) => {
   try {
     const authHeader = req.headers.authorization || '';
@@ -1862,25 +1960,22 @@ app.post('/sync-mailbox', async (req, res) => {
       });
     }
 
-    const { configId, limit = 50 } = req.body || {};
+    const body = req.body || {};
+    const configId = body.configId || body.config_id || body.mailboxId || null;
+    const limit = body.limit ?? 50;
     if (!configId) {
       return res.status(400).json({ error: 'configId is required' });
     }
 
-    let configQuery = dbClient
-      .from('email_configs')
-      .select('*')
-      .eq('id', configId);
-
-    if (!canBypassAuth) {
-      configQuery = configQuery.eq('user_id', user.id);
-    }
-
-    const { data: config, error: configError } = await configQuery.maybeSingle();
-
-    if (configError) {
+    let config = null;
+    try {
+      config = await loadConfigForUser(dbClient, user, configId, canBypassAuth);
+    } catch (configError) {
       console.error('[mailbox] Failed to load email configuration:', configError);
-      return res.status(500).json({ error: 'Failed to load email configuration' });
+      return res.status(500).json({
+        error: 'Failed to load email configuration',
+        details: configError?.message || String(configError),
+      });
     }
 
     if (!config) {

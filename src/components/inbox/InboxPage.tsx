@@ -116,8 +116,12 @@ import {
 } from "lucide-react";
 
 const DEFAULT_MAILBOX_SYNC_URL = "http://localhost:8787/sync-mailbox";
+const DEFAULT_MAILBOX_API_URL = "http://localhost:8787";
 const MAILBOX_SYNC_URL =
   import.meta.env.VITE_MAILBOX_SYNC_URL || DEFAULT_MAILBOX_SYNC_URL;
+const MAILBOX_API_URL =
+  import.meta.env.VITE_MAILBOX_API_URL ||
+  (MAILBOX_SYNC_URL ? MAILBOX_SYNC_URL.replace(/\/sync-mailbox\/?$/i, "") : DEFAULT_MAILBOX_API_URL);
 
 const PAGE_SIZE = 50;
 const ALL_INBOXES = "all";
@@ -134,6 +138,9 @@ interface EmailMessage {
   config_id: string;
   from_email: string;
   to_email: string;
+  thread_id?: string | null;
+  message_id?: string | null;
+  in_reply_to?: string | null;
   subject: string | null;
   body: string | null;
   date: string;
@@ -179,6 +186,26 @@ interface ListItem {
   threadCount: number;
   mailboxId: string;
   needsReply: boolean;
+}
+
+interface ReplyDraft {
+  to: string[];
+  cc: string[];
+  subject: string;
+  text: string;
+  html: string;
+  includeOriginalAttachmentsAvailable?: boolean;
+  originalAttachments?: Array<{
+    filename?: string;
+    contentType?: string;
+    size?: number | null;
+  }>;
+  threadingLimited?: boolean;
+}
+
+interface ReplyAttachment {
+  id: string;
+  file: File;
 }
 
 const HTML_TAG_REGEX =
@@ -262,8 +289,16 @@ const normalizeSubject = (subject: string | null) =>
     .trim()
     .toLowerCase();
 
-const buildThreadKey = (message: EmailMessage) =>
-  `${normalizeSubject(message.subject)}::${message.from_email}`;
+const normalizeEmail = (value: string | null | undefined) => (value || "").trim().toLowerCase();
+
+const buildThreadKey = (message: EmailMessage) => {
+  if (message.thread_id) return `thread:${message.thread_id}`;
+  const participants = [normalizeEmail(message.from_email), normalizeEmail(message.to_email)]
+    .filter(Boolean)
+    .sort()
+    .join("|");
+  return `${normalizeSubject(message.subject)}::${participants || normalizeEmail(message.from_email)}`;
+};
 
 const getInitials = (value: string) =>
   value
@@ -300,6 +335,57 @@ const buildForwardBody = (email: EmailMessage) => {
   const toEmail = email.to_email || "";
   return `\n\n---------- Forwarded message ----------\nFrom: ${email.from_email}\nDate: ${dateLabel}\nSubject: ${subject}\nTo: ${toEmail}\n\n${plain}`;
 };
+
+const buildMailtoLink = (to: string | null, subject: string, body: string) => {
+  const params = new URLSearchParams();
+  if (subject) params.set("subject", subject);
+  if (body) params.set("body", body);
+  const query = params.toString();
+  const address = to ? encodeURIComponent(to) : "";
+  return `mailto:${address}${query ? `?${query}` : ""}`;
+};
+
+const parseAddressInput = (value: string) =>
+  value
+    .split(/[,;]+/)
+    .map((entry) => entry.trim())
+    .filter(Boolean);
+
+const buildHtmlFromText = (value: string) =>
+  value
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/\"/g, "&quot;")
+    .replace(/'/g, "&#39;")
+    .replace(/\r?\n/g, "<br />");
+
+const readFileAsBase64 = (file: File) =>
+  new Promise<string>((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onerror = () => reject(reader.error);
+    reader.onload = () => {
+      const result = typeof reader.result === "string" ? reader.result : "";
+      resolve(result.includes("base64,") ? result.split("base64,").pop() || "" : result);
+    };
+    reader.readAsDataURL(file);
+  });
+
+const formatBytes = (bytes: number) => {
+  if (!Number.isFinite(bytes) || bytes <= 0) return "0 B";
+  const units = ["B", "KB", "MB", "GB"];
+  const idx = Math.min(Math.floor(Math.log(bytes) / Math.log(1024)), units.length - 1);
+  const value = bytes / Math.pow(1024, idx);
+  return `${value.toFixed(value >= 10 || idx === 0 ? 0 : 1)} ${units[idx]}`;
+};
+
+const createLocalId = () => {
+  if (typeof crypto !== "undefined" && "randomUUID" in crypto) {
+    return crypto.randomUUID();
+  }
+  return `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+};
+
 const useMediaQuery = (query: string) => {
   const [matches, setMatches] = useState(() => {
     if (typeof window === "undefined") return false;
@@ -340,7 +426,7 @@ const buildMailboxLabel = (config: MailboxConfig) =>
 
 // Aesthetic-usability effect: soft surfaces + consistent depth reduce perceived complexity.
 const inboxAccentClasses =
-  "bg-white/80 border border-slate-200 shadow-[0_12px_40px_-28px_rgba(15,23,42,0.45)]";
+  "bg-[var(--shell-surface-strong)]/90 border border-[var(--shell-border)] shadow-[0_12px_40px_-28px_rgba(15,23,42,0.45)]";
 
 const InboxPage: React.FC<{ user: any }> = ({ user }) => {
   const queryClient = useQueryClient();
@@ -353,16 +439,31 @@ const InboxPage: React.FC<{ user: any }> = ({ user }) => {
   const [filters, setFilters] = useState<InboxSearchFilters>({});
   const [selectedMailboxId, setSelectedMailboxId] = useState(ALL_INBOXES);
   const [excludedMailboxIds, setExcludedMailboxIds] = useState<string[]>([]);
+  const [mailboxMenuSearch, setMailboxMenuSearch] = useState("");
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [selectedMessageId, setSelectedMessageId] = useState<string | null>(null);
   const [contextOpen, setContextOpen] = useState(true);
   const [commandOpen, setCommandOpen] = useState(false);
   const [composeOpen, setComposeOpen] = useState(false);
   const [composerMode, setComposerMode] = useState<ComposerMode>("compose");
+  const [composerConfigId, setComposerConfigId] = useState("");
+  const [composerMessageId, setComposerMessageId] = useState<string | null>(null);
   const [composerTo, setComposerTo] = useState("");
   const [composerCc, setComposerCc] = useState("");
+  const [composerBcc, setComposerBcc] = useState("");
   const [composerSubject, setComposerSubject] = useState("");
   const [composerBody, setComposerBody] = useState("");
+  const [composerQuotedText, setComposerQuotedText] = useState("");
+  const [composerQuotedHtml, setComposerQuotedHtml] = useState("");
+  const [composerLoadingDraft, setComposerLoadingDraft] = useState(false);
+  const [composerSending, setComposerSending] = useState(false);
+  const [composerThreadingLimited, setComposerThreadingLimited] = useState(false);
+  const [composerIncludeOriginalAttachments, setComposerIncludeOriginalAttachments] = useState(false);
+  const [composerIncludeOriginalAttachmentsAvailable, setComposerIncludeOriginalAttachmentsAvailable] = useState(false);
+  const [composerOriginalAttachments, setComposerOriginalAttachments] = useState<
+    NonNullable<ReplyDraft["originalAttachments"]>
+  >([]);
+  const [composerAttachments, setComposerAttachments] = useState<ReplyAttachment[]>([]);
   const [pipelineId, setPipelineId] = useState<string | null>(null);
   const [pipelineStages, setPipelineStages] = useState<DbPipelineStage[]>([]);
   const [selectedOpportunity, setSelectedOpportunity] = useState<DbOpportunity | null>(null);
@@ -377,6 +478,7 @@ const InboxPage: React.FC<{ user: any }> = ({ user }) => {
   const [syncState, setSyncState] = useState<Record<string, { status: string; lastSyncedAt?: string; error?: string }>>({});
 
   const searchInputRef = useRef<HTMLInputElement | null>(null);
+  const composerFileInputRef = useRef<HTMLInputElement | null>(null);
   const listRef = useRef<List>(null);
   const { ref: listContainerRef, bounds: listBounds } = useMeasure<HTMLDivElement>();
   const debouncedSearch = useDebounce(searchQuery, 300);
@@ -454,6 +556,25 @@ const InboxPage: React.FC<{ user: any }> = ({ user }) => {
     const current = mailboxes.find((config) => config.id === selectedMailboxId);
     return current ? buildMailboxLabel(current) : "Select inbox";
   }, [selectedMailboxId, mailboxes, includedMailboxIds]);
+  const mailboxSearchTerm = mailboxMenuSearch.trim().toLowerCase();
+  const filteredMailboxOptions = useMemo(() => {
+    if (!mailboxSearchTerm) return mailboxes;
+    return mailboxes.filter((config) =>
+      buildMailboxLabel(config).toLowerCase().includes(mailboxSearchTerm)
+    );
+  }, [mailboxes, mailboxSearchTerm]);
+  const allInboxesIncluded = useMemo(
+    () => mailboxes.length > 0 && includedMailboxIds.length === mailboxes.length,
+    [mailboxes.length, includedMailboxIds.length]
+  );
+
+  const resolveDefaultComposerConfigId = useCallback(() => {
+    if (selectedMailboxId !== ALL_INBOXES && mailboxes.some((config) => config.id === selectedMailboxId)) {
+      return selectedMailboxId;
+    }
+    if (includedMailboxIds.length > 0) return includedMailboxIds[0];
+    return mailboxes[0]?.id || "";
+  }, [includedMailboxIds, mailboxes, selectedMailboxId]);
 
   const mailboxScopeKey =
     selectedMailboxId === ALL_INBOXES
@@ -924,6 +1045,12 @@ const InboxPage: React.FC<{ user: any }> = ({ user }) => {
   }, [mailboxes, selectedMailboxId]);
 
   useEffect(() => {
+    if (!composeOpen || composerMode !== "compose") return;
+    if (composerConfigId && mailboxes.some((config) => config.id === composerConfigId)) return;
+    setComposerConfigId(resolveDefaultComposerConfigId());
+  }, [composeOpen, composerConfigId, composerMode, mailboxes, resolveDefaultComposerConfigId]);
+
+  useEffect(() => {
     if (!isWide) {
       setContextOpen(false);
     }
@@ -1042,9 +1169,33 @@ const InboxPage: React.FC<{ user: any }> = ({ user }) => {
     [bulkActionMutation, messagesQueryKey, queryClient, updateCachedMessages]
   );
 
-  const handleSelectMessage = (messageId: string) => {
-    setSelectedMessageId(messageId);
-  };
+  const handleSelectMessage = useCallback(
+    (messageId: string) => {
+      setSelectedMessageId(messageId);
+
+      const message = messages.find((item) => item.id === messageId);
+      if (!message || message.read) return;
+
+      updateCachedMessages(
+        (item) => (item.id === messageId ? { ...item, read: true } : item),
+        messagesQueryKey
+      );
+
+      void supabase
+        .from("email_messages")
+        .update({ read: true })
+        .eq("id", messageId)
+        .then(({ error }) => {
+          if (!error) return;
+          updateCachedMessages(
+            (item) => (item.id === messageId ? { ...item, read: false } : item),
+            messagesQueryKey
+          );
+          console.error("Failed to mark message as read", error);
+        });
+    },
+    [messages, messagesQueryKey, updateCachedMessages]
+  );
 
   const toggleStar = (messageId: string) => {
     setStarredIds((prev) => {
@@ -1072,26 +1223,147 @@ const InboxPage: React.FC<{ user: any }> = ({ user }) => {
       return next;
     });
   };
-  const openComposer = useCallback((mode: ComposerMode, message?: EmailMessage | null) => {
-    setComposerMode(mode);
-    if (mode === "compose" || !message) {
-      setComposerTo("");
-      setComposerCc("");
-      setComposerSubject("");
-      setComposerBody("");
-    } else if (mode === "reply" || mode === "replyAll") {
+  const resetComposerState = useCallback(() => {
+    setComposerConfigId("");
+    setComposerMessageId(null);
+    setComposerTo("");
+    setComposerCc("");
+    setComposerBcc("");
+    setComposerSubject("");
+    setComposerBody("");
+    setComposerQuotedText("");
+    setComposerQuotedHtml("");
+    setComposerLoadingDraft(false);
+    setComposerSending(false);
+    setComposerThreadingLimited(false);
+    setComposerIncludeOriginalAttachments(false);
+    setComposerIncludeOriginalAttachmentsAvailable(false);
+    setComposerOriginalAttachments([]);
+    setComposerAttachments([]);
+    if (composerFileInputRef.current) {
+      composerFileInputRef.current.value = "";
+    }
+  }, []);
+
+  const openComposer = useCallback(
+    async (mode: ComposerMode, message?: EmailMessage | null) => {
+      setComposerMode(mode);
+      setComposeOpen(true);
+      setComposerSending(false);
+
+      if (mode === "compose") {
+        resetComposerState();
+        setComposerConfigId(resolveDefaultComposerConfigId());
+        return;
+      }
+
+      if (!message) {
+        toast({
+          title: "Composer unavailable",
+          description: "Select a message first.",
+          variant: "destructive",
+        });
+        setComposeOpen(false);
+        resetComposerState();
+        return;
+      }
+
+      if (mode === "forward") {
+        setComposerConfigId(message.config_id || "");
+        setComposerMessageId(null);
+        setComposerTo("");
+        setComposerCc("");
+        setComposerBcc("");
+        setComposerSubject(buildForwardSubject(message.subject));
+        setComposerBody(buildForwardBody(message));
+        setComposerQuotedText("");
+        setComposerQuotedHtml("");
+        setComposerLoadingDraft(false);
+        setComposerThreadingLimited(false);
+        setComposerIncludeOriginalAttachments(false);
+        setComposerIncludeOriginalAttachmentsAvailable(false);
+        setComposerOriginalAttachments([]);
+        setComposerAttachments([]);
+        return;
+      }
+
+      setComposerConfigId(message.config_id || "");
+      setComposerMessageId(message.id);
+      setComposerLoadingDraft(true);
       setComposerTo(message.from_email);
       setComposerCc("");
+      setComposerBcc("");
       setComposerSubject(buildReplySubject(message.subject));
-      setComposerBody(buildReplyBody(message));
-    } else if (mode === "forward") {
-      setComposerTo("");
-      setComposerCc("");
-      setComposerSubject(buildForwardSubject(message.subject));
-      setComposerBody(buildForwardBody(message));
-    }
+      setComposerBody("");
+      setComposerQuotedText(buildReplyBody(message));
+      setComposerQuotedHtml("");
+      setComposerThreadingLimited(false);
+      setComposerIncludeOriginalAttachments(false);
+      setComposerIncludeOriginalAttachmentsAvailable(false);
+      setComposerOriginalAttachments([]);
+      setComposerAttachments([]);
 
-    setComposeOpen(true);
+      try {
+        const {
+          data: { session },
+        } = await supabase.auth.getSession();
+        if (!session?.access_token) throw new Error("Not authenticated");
+
+        const response = await fetch(
+          `${MAILBOX_API_URL}/api/inbox/messages/${message.id}/reply-draft?mode=${mode}`,
+          {
+            headers: {
+              Authorization: `Bearer ${session.access_token}`,
+            },
+          }
+        );
+
+        let payload: ReplyDraft | { error?: string } = {};
+        try {
+          payload = await response.json();
+        } catch (error) {
+          payload = {};
+        }
+
+        if (!response.ok) {
+          throw new Error((payload as { error?: string }).error || "Failed to build reply draft");
+        }
+
+        const draft = payload as ReplyDraft;
+        setComposerTo((draft.to || []).join(", "));
+        setComposerCc((draft.cc || []).join(", "));
+        setComposerBcc("");
+        setComposerSubject(draft.subject || buildReplySubject(message.subject));
+        setComposerQuotedText(draft.text || buildReplyBody(message));
+        setComposerQuotedHtml(draft.html || "");
+        setComposerThreadingLimited(Boolean(draft.threadingLimited));
+        setComposerIncludeOriginalAttachmentsAvailable(Boolean(draft.includeOriginalAttachmentsAvailable));
+        setComposerOriginalAttachments(Array.isArray(draft.originalAttachments) ? draft.originalAttachments : []);
+      } catch (error: any) {
+        toast({
+          title: "Reply draft unavailable",
+          description: error?.message || "Using fallback recipients for this reply.",
+          variant: "destructive",
+        });
+      } finally {
+        setComposerLoadingDraft(false);
+      }
+    },
+    [resetComposerState, resolveDefaultComposerConfigId]
+  );
+
+  const handleComposerAttachmentChange = useCallback((event: React.ChangeEvent<HTMLInputElement>) => {
+    const files = Array.from(event.target.files || []);
+    if (files.length === 0) return;
+    setComposerAttachments((prev) => [
+      ...prev,
+      ...files.map((file) => ({ id: createLocalId(), file })),
+    ]);
+    event.target.value = "";
+  }, []);
+
+  const handleRemoveComposerAttachment = useCallback((id: string) => {
+    setComposerAttachments((prev) => prev.filter((attachment) => attachment.id !== id));
   }, []);
 
   const handleKeyboardShortcut = useCallback(
@@ -1120,7 +1392,7 @@ const InboxPage: React.FC<{ user: any }> = ({ user }) => {
         event.preventDefault();
         const nextIndex = Math.min(listItems.length - 1, selectedIndex + 1);
         if (listItems[nextIndex]) {
-          setSelectedMessageId(listItems[nextIndex].messageId);
+          handleSelectMessage(listItems[nextIndex].messageId);
         }
       }
 
@@ -1128,7 +1400,7 @@ const InboxPage: React.FC<{ user: any }> = ({ user }) => {
         event.preventDefault();
         const prevIndex = Math.max(0, selectedIndex - 1);
         if (listItems[prevIndex]) {
-          setSelectedMessageId(listItems[prevIndex].messageId);
+          handleSelectMessage(listItems[prevIndex].messageId);
         }
       }
 
@@ -1160,6 +1432,7 @@ const InboxPage: React.FC<{ user: any }> = ({ user }) => {
     [
       listItems,
       selectedIndex,
+      handleSelectMessage,
       selectedMessageId,
       selectedMessage,
       performBulkAction,
@@ -1173,34 +1446,213 @@ const InboxPage: React.FC<{ user: any }> = ({ user }) => {
     return () => window.removeEventListener("keydown", handleKeyboardShortcut);
   }, [handleKeyboardShortcut]);
 
-  const handleSend = useCallback(() => {
-    setComposeOpen(false);
-    // Peak-End rule: positive completion moment + undo option.
-    toast({
-      title: "Sent",
-      description: "Message delivered. Undo send is available for 10 seconds.",
-      action: (
-        <ToastAction
-          altText="Undo send"
-          onClick={() =>
-            toast({
-              title: "Send canceled",
-              description: "Message moved back to drafts.",
-            })
-          }
-        >
-          Undo send
-        </ToastAction>
-      ),
-    });
-  }, []);
+  const handleSend = useCallback(async () => {
+    if (composerSending) return;
+
+    if (composerMode === "forward") {
+      const mailto = buildMailtoLink(composerTo || null, composerSubject, composerBody);
+      window.open(mailto, "_blank", "noopener,noreferrer");
+      setComposeOpen(false);
+      resetComposerState();
+      toast({
+        title: "Forward opened",
+        description: "Your default mail app was opened for sending.",
+      });
+      return;
+    }
+
+    if (composerMode === "compose") {
+      const to = parseAddressInput(composerTo);
+      if (!to.length) {
+        toast({
+          title: "Recipient required",
+          description: "Add at least one recipient in the To field.",
+          variant: "destructive",
+        });
+        return;
+      }
+      if (!composerBody.trim()) {
+        toast({
+          title: "Message required",
+          description: "Write your message before sending.",
+          variant: "destructive",
+        });
+        return;
+      }
+      if (!composerConfigId) {
+        toast({
+          title: "Inbox required",
+          description: "Choose which inbox to send from.",
+          variant: "destructive",
+        });
+        return;
+      }
+
+      setComposerSending(true);
+      try {
+        const {
+          data: { session },
+        } = await supabase.auth.getSession();
+        if (!session?.access_token) throw new Error("Not authenticated");
+
+        const attachmentPayload = await Promise.all(
+          composerAttachments.map(async (attachment) => ({
+            filename: attachment.file.name,
+            contentType: attachment.file.type || "application/octet-stream",
+            size: attachment.file.size,
+            content: await readFileAsBase64(attachment.file),
+          }))
+        );
+
+        const response = await fetch(`${MAILBOX_API_URL}/api/inbox/compose`, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${session.access_token}`,
+          },
+          body: JSON.stringify({
+            configId: composerConfigId,
+            to,
+            cc: parseAddressInput(composerCc),
+            bcc: parseAddressInput(composerBcc),
+            subject: composerSubject,
+            text: composerBody,
+            html: buildHtmlFromText(composerBody),
+            attachments: attachmentPayload,
+          }),
+        });
+
+        let payload: { success?: boolean; error?: string } = {};
+        try {
+          payload = await response.json();
+        } catch (error) {
+          payload = {};
+        }
+
+        if (!response.ok || !payload?.success) {
+          throw new Error(payload?.error || "Failed to send message");
+        }
+
+        await queryClient.invalidateQueries({ queryKey: messagesQueryKey });
+        setComposeOpen(false);
+        resetComposerState();
+        toast({
+          title: "Message sent",
+          description: "Your email was sent successfully.",
+        });
+      } catch (error: any) {
+        toast({
+          title: "Send failed",
+          description: error?.message || "Unable to send message.",
+          variant: "destructive",
+        });
+      } finally {
+        setComposerSending(false);
+      }
+      return;
+    }
+
+    if (!composerMessageId) {
+      toast({
+        title: "Reply unavailable",
+        description: "No message selected for this reply.",
+        variant: "destructive",
+      });
+      return;
+    }
+
+    setComposerSending(true);
+    try {
+      const {
+        data: { session },
+      } = await supabase.auth.getSession();
+      if (!session?.access_token) throw new Error("Not authenticated");
+
+      const attachmentPayload = await Promise.all(
+        composerAttachments.map(async (attachment) => ({
+          filename: attachment.file.name,
+          contentType: attachment.file.type || "application/octet-stream",
+          size: attachment.file.size,
+          content: await readFileAsBase64(attachment.file),
+        }))
+      );
+
+      const replyText = composerBody.trim();
+      const text = [replyText, composerQuotedText].filter(Boolean).join("\n\n");
+      const html = [replyText ? buildHtmlFromText(replyText) : "", composerQuotedHtml].filter(Boolean).join("");
+
+      const response = await fetch(`${MAILBOX_API_URL}/api/inbox/messages/${composerMessageId}/reply`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${session.access_token}`,
+        },
+        body: JSON.stringify({
+          mode: composerMode,
+          text,
+          html,
+          ccOverride: parseAddressInput(composerCc),
+          bcc: parseAddressInput(composerBcc),
+          attachments: attachmentPayload,
+          includeOriginalAttachments: composerIncludeOriginalAttachments,
+        }),
+      });
+
+      let payload: { success?: boolean; error?: string; threadingLimited?: boolean } = {};
+      try {
+        payload = await response.json();
+      } catch (error) {
+        payload = {};
+      }
+
+      if (!response.ok || !payload?.success) {
+        throw new Error(payload?.error || "Failed to send reply");
+      }
+
+      await queryClient.invalidateQueries({ queryKey: messagesQueryKey });
+      setComposeOpen(false);
+      resetComposerState();
+
+      toast({
+        title: "Reply sent",
+        description: payload.threadingLimited
+          ? "Sent, but threading may be limited because the original message has no Message-ID."
+          : "Your reply was sent successfully.",
+      });
+    } catch (error: any) {
+      toast({
+        title: "Reply failed",
+        description: error?.message || "Unable to send reply.",
+        variant: "destructive",
+      });
+    } finally {
+      setComposerSending(false);
+    }
+  }, [
+    composerAttachments,
+    composerBcc,
+    composerBody,
+    composerCc,
+    composerConfigId,
+    composerIncludeOriginalAttachments,
+    composerMessageId,
+    composerMode,
+    composerQuotedHtml,
+    composerQuotedText,
+    composerSending,
+    composerSubject,
+    composerTo,
+    messagesQueryKey,
+    queryClient,
+    resetComposerState,
+  ]);
 
   useEffect(() => {
     const handleComposerKeys = (event: KeyboardEvent) => {
       if (!composeOpen) return;
       if ((event.metaKey || event.ctrlKey) && event.key === "Enter") {
         event.preventDefault();
-        handleSend();
+        void handleSend();
       }
     };
     window.addEventListener("keydown", handleComposerKeys);
@@ -1214,7 +1666,12 @@ const InboxPage: React.FC<{ user: any }> = ({ user }) => {
         "Content-Type": "application/json",
         Authorization: `Bearer ${accessToken}`,
       },
-      body: JSON.stringify({ configId, limit: 50 }),
+      body: JSON.stringify({
+        configId,
+        config_id: configId,
+        mailboxId: configId,
+        limit: 50,
+      }),
     });
 
     let payload: any = null;
@@ -1225,7 +1682,9 @@ const InboxPage: React.FC<{ user: any }> = ({ user }) => {
     }
 
     if (!response.ok || payload?.success === false) {
-      throw new Error(payload?.error || "Sync failed");
+      const baseMessage = payload?.error || payload?.message || "Sync failed";
+      const detailMessage = payload?.details || payload?.hint || "";
+      throw new Error(detailMessage ? `${baseMessage}: ${detailMessage}` : baseMessage);
     }
 
     return payload;
@@ -1469,7 +1928,10 @@ const InboxPage: React.FC<{ user: any }> = ({ user }) => {
 
         <div className="flex flex-wrap items-center gap-3">
           {/* Von Restorff + Fitts: primary action is distinct, large, and near top-right */}
-          <Button onClick={() => openComposer("compose")} className="gap-2">
+          <Button
+            onClick={() => openComposer("compose")}
+            className="gap-2 bg-[var(--shell-accent)] text-white hover:bg-emerald-700"
+          >
             <MailPlus className="h-4 w-4" />
             Compose
           </Button>
@@ -1504,7 +1966,18 @@ const InboxPage: React.FC<{ user: any }> = ({ user }) => {
                   <ChevronDown className="h-3 w-3 text-slate-500" />
                 </Button>
               </DropdownMenuTrigger>
-              <DropdownMenuContent className="w-72" align="start">
+              <DropdownMenuContent className="w-80 max-h-[70vh] overflow-y-auto" align="start">
+                <div className="px-2 pb-2">
+                  <div className="relative">
+                    <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
+                    <Input
+                      value={mailboxMenuSearch}
+                      onChange={(event) => setMailboxMenuSearch(event.target.value)}
+                      placeholder="Search inboxes..."
+                      className="h-9 border-slate-200 bg-white pl-9 text-sm"
+                    />
+                  </div>
+                </div>
                 <DropdownMenuLabel>Mailbox scope</DropdownMenuLabel>
                 <DropdownMenuSeparator />
                 <DropdownMenuRadioGroup
@@ -1514,7 +1987,7 @@ const InboxPage: React.FC<{ user: any }> = ({ user }) => {
                   <DropdownMenuRadioItem value={ALL_INBOXES}>
                     All inboxes
                   </DropdownMenuRadioItem>
-                  {mailboxes.map((config) => (
+                  {filteredMailboxOptions.map((config) => (
                     <DropdownMenuRadioItem key={config.id} value={config.id}>
                       {buildMailboxLabel(config)}
                     </DropdownMenuRadioItem>
@@ -1524,48 +1997,63 @@ const InboxPage: React.FC<{ user: any }> = ({ user }) => {
                 {selectedMailboxId === ALL_INBOXES && mailboxes.length > 1 && (
                   <>
                     <DropdownMenuSeparator />
-                    <DropdownMenuLabel>Filter included inboxes</DropdownMenuLabel>
+                    <DropdownMenuLabel>Included inboxes</DropdownMenuLabel>
                     <DropdownMenuItem
                       onSelect={(event) => {
                         event.preventDefault();
                         setExcludedMailboxIds([]);
                       }}
                     >
+                      <Check
+                        className={cn(
+                          "mr-2 h-4 w-4",
+                          allInboxesIncluded ? "opacity-100" : "opacity-0"
+                        )}
+                      />
                       Select all
                     </DropdownMenuItem>
                     <DropdownMenuItem
                       onSelect={(event) => {
                         event.preventDefault();
-                        setExcludedMailboxIds(mailboxes.map((config) => config.id));
+                        setExcludedMailboxIds(
+                          mailboxes
+                            .map((config) => config.id)
+                            .filter((id): id is string => Boolean(id))
+                        );
                       }}
                     >
-                      Clear all
+                      Deselect all
                     </DropdownMenuItem>
                     <DropdownMenuSeparator />
-                    {mailboxes.map((config) => {
-                      const checked = !excludedMailboxIds.includes(config.id);
-                      return (
-                        <DropdownMenuCheckboxItem
-                          key={config.id}
-                          checked={checked}
-                          onCheckedChange={(value) => {
-                            setExcludedMailboxIds((prev) => {
-                              const has = prev.includes(config.id);
-                              if (value === true && has) {
-                                return prev.filter((id) => id !== config.id);
-                              }
-                              if (value !== true && !has) {
-                                return [...prev, config.id];
-                              }
-                              return prev;
-                            });
-                          }}
-                          onSelect={(event) => event.preventDefault()}
-                        >
-                          {buildMailboxLabel(config)}
-                        </DropdownMenuCheckboxItem>
-                      );
-                    })}
+                    <div className="max-h-56 overflow-y-auto">
+                      {filteredMailboxOptions.map((config) => {
+                        const checked = !excludedMailboxIds.includes(config.id);
+                        return (
+                          <DropdownMenuCheckboxItem
+                            key={config.id}
+                            checked={checked}
+                            onCheckedChange={(value) => {
+                              setExcludedMailboxIds((prev) => {
+                                const has = prev.includes(config.id);
+                                if (value === true && has) {
+                                  return prev.filter((id) => id !== config.id);
+                                }
+                                if (value !== true && !has) {
+                                  return [...prev, config.id];
+                                }
+                                return prev;
+                              });
+                            }}
+                            onSelect={(event) => event.preventDefault()}
+                          >
+                            {buildMailboxLabel(config)}
+                          </DropdownMenuCheckboxItem>
+                        );
+                      })}
+                      {filteredMailboxOptions.length === 0 && (
+                        <DropdownMenuItem disabled>No inboxes found</DropdownMenuItem>
+                      )}
+                    </div>
                   </>
                 )}
               </DropdownMenuContent>
@@ -1708,26 +2196,26 @@ const InboxPage: React.FC<{ user: any }> = ({ user }) => {
             type="single"
             value={viewMode}
             onValueChange={(value) => value && setViewMode(value as ViewMode)}
-            className="rounded-full border border-slate-200 bg-white px-1"
+            className="rounded-full border border-[var(--shell-border)] bg-white px-1"
           >
             <ToggleGroupItem
               value="split"
               aria-label="Split view"
-              className="data-[state=on]:bg-slate-900 data-[state=on]:text-white"
+              className="data-[state=on]:bg-[var(--shell-accent)] data-[state=on]:text-white"
             >
               <LayoutPanelLeft className="h-4 w-4" />
             </ToggleGroupItem>
             <ToggleGroupItem
               value="list"
               aria-label="List view"
-              className="data-[state=on]:bg-slate-900 data-[state=on]:text-white"
+              className="data-[state=on]:bg-[var(--shell-accent)] data-[state=on]:text-white"
             >
               <LayoutList className="h-4 w-4" />
             </ToggleGroupItem>
             <ToggleGroupItem
               value="detail"
               aria-label="Detail view"
-              className="data-[state=on]:bg-slate-900 data-[state=on]:text-white"
+              className="data-[state=on]:bg-[var(--shell-accent)] data-[state=on]:text-white"
             >
               <LayoutPanelTop className="h-4 w-4" />
             </ToggleGroupItem>
@@ -1737,7 +2225,7 @@ const InboxPage: React.FC<{ user: any }> = ({ user }) => {
             type="single"
             value={density}
             onValueChange={(value) => value && setDensity(value as Density)}
-            className="rounded-full border border-slate-200 bg-white px-1"
+            className="rounded-full border border-[var(--shell-border)] bg-white px-1"
           >
             <ToggleGroupItem value="compact" aria-label="Compact density">
               <ArrowDownNarrowWide className="h-4 w-4" />
@@ -1825,10 +2313,10 @@ const InboxPage: React.FC<{ user: any }> = ({ user }) => {
             <Button className="mt-6">Connect mailbox</Button>
           </div>
         ) : (
-          <div className="h-[calc(100vh-22rem)] min-h-[520px] rounded-3xl bg-white/80 shadow-[0_18px_50px_-32px_rgba(15,23,42,0.5)]">
+          <div className="h-[calc(100vh-22rem)] min-h-[520px] rounded-3xl bg-[var(--shell-surface)]/95 shadow-[0_18px_50px_-32px_rgba(15,23,42,0.5)]">
             {effectiveViewMode === "split" && (
               <ResizablePanelGroup direction="horizontal" className="h-full">
-                <ResizablePanel defaultSize={36} minSize={25} className="border-r border-slate-200">
+                <ResizablePanel defaultSize={36} minSize={25} className="border-r border-[var(--shell-border)]">
                   <InboxListPanel
                     listData={listData}
                     listBounds={listBounds}
@@ -1846,7 +2334,7 @@ const InboxPage: React.FC<{ user: any }> = ({ user }) => {
                   />
                 </ResizablePanel>
                 <ResizableHandle />
-                <ResizablePanel defaultSize={44} minSize={30} className="border-r border-slate-200">
+                <ResizablePanel defaultSize={44} minSize={30} className="border-r border-[var(--shell-border)]">
                   <MessageDetailPanel
                     message={selectedMessage}
                     threadMessages={threadMessages}
@@ -1963,9 +2451,15 @@ const InboxPage: React.FC<{ user: any }> = ({ user }) => {
         }}
       />
 
-      <Dialog open={composeOpen} onOpenChange={setComposeOpen}>
-        <DialogContent className="max-w-2xl">
-          <DialogHeader>
+      <Dialog
+        open={composeOpen}
+        onOpenChange={(open) => {
+          setComposeOpen(open);
+          if (!open) resetComposerState();
+        }}
+      >
+        <DialogContent className="w-[min(96vw,50rem)] max-w-3xl max-h-[90vh] overflow-hidden border border-[var(--shell-border)] bg-[var(--shell-surface-strong)] p-0 text-[var(--shell-ink)] shadow-[0_20px_48px_rgba(15,23,42,0.18)]">
+          <DialogHeader className="bg-[var(--shell-surface-strong)] px-6 py-5 pr-12">
             <DialogTitle>
               {composerMode === "compose" && "Compose"}
               {composerMode === "reply" && "Reply"}
@@ -1974,37 +2468,206 @@ const InboxPage: React.FC<{ user: any }> = ({ user }) => {
             </DialogTitle>
           </DialogHeader>
 
-          <div className="space-y-4">
+          <div className="max-h-[calc(90vh-144px)] overflow-y-auto px-6 py-2 pb-4">
+            <div className="space-y-4">
+            {(composerMode === "reply" || composerMode === "replyAll") && composerLoadingDraft && (
+              <div className="rounded-lg border border-[var(--shell-border)] bg-white/70 px-3 py-2 text-xs text-[var(--shell-muted)]">
+                Preparing draft recipients and threading headers...
+              </div>
+            )}
+
+            {composerMode === "compose" && mailboxes.length > 1 && (
+              <div className="space-y-2">
+                <Label className="text-xs text-[var(--shell-muted)]">From inbox</Label>
+                <Select value={composerConfigId} onValueChange={setComposerConfigId}>
+                  <SelectTrigger className="border-[var(--shell-border)] bg-white/90">
+                    <SelectValue placeholder="Select inbox" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {mailboxes.map((config) => (
+                      <SelectItem key={config.id} value={config.id}>
+                        {buildMailboxLabel(config)}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+            )}
+
             <div className="space-y-2">
-              <Label className="text-xs text-slate-500">To</Label>
-              <Input value={composerTo} onChange={(event) => setComposerTo(event.target.value)} />
+              <Label className="text-xs text-[var(--shell-muted)]">To</Label>
+              <Input
+                value={composerTo}
+                onChange={(event) => setComposerTo(event.target.value)}
+                readOnly={composerMode === "reply" || composerMode === "replyAll"}
+                className="border-[var(--shell-border)] bg-white/90"
+              />
             </div>
             <div className="space-y-2">
-              <Label className="text-xs text-slate-500">Cc</Label>
-              <Input value={composerCc} onChange={(event) => setComposerCc(event.target.value)} />
+              <Label className="text-xs text-[var(--shell-muted)]">Cc</Label>
+              <Input
+                value={composerCc}
+                onChange={(event) => setComposerCc(event.target.value)}
+                placeholder="Add Cc recipients"
+                className="border-[var(--shell-border)] bg-white/90"
+              />
+            </div>
+            {(composerMode === "reply" || composerMode === "replyAll") && (
+              <div className="space-y-2">
+              <Label className="text-xs text-[var(--shell-muted)]">Bcc</Label>
+              <Input
+                value={composerBcc}
+                onChange={(event) => setComposerBcc(event.target.value)}
+                placeholder="Add Bcc recipients"
+                className="border-[var(--shell-border)] bg-white/90"
+              />
+            </div>
+            )}
+            <div className="space-y-2">
+              <Label className="text-xs text-[var(--shell-muted)]">Subject</Label>
+              <Input
+                value={composerSubject}
+                onChange={(event) => setComposerSubject(event.target.value)}
+                className="border-[var(--shell-border)] bg-white/90"
+              />
             </div>
             <div className="space-y-2">
-              <Label className="text-xs text-slate-500">Subject</Label>
-              <Input value={composerSubject} onChange={(event) => setComposerSubject(event.target.value)} />
-            </div>
-            <div className="space-y-2">
-              <Label className="text-xs text-slate-500">Message</Label>
+              <Label className="text-xs text-[var(--shell-muted)]">Message</Label>
               <Textarea
                 value={composerBody}
                 onChange={(event) => setComposerBody(event.target.value)}
                 rows={8}
-                placeholder="Write your reply..."
+                placeholder={composerMode === "compose" ? "Write your message..." : "Write your reply..."}
+                className="border-[var(--shell-border)] bg-white/95"
               />
+            </div>
+
+            {(composerMode === "reply" || composerMode === "replyAll") && (
+              <>
+                {(composerMode === "reply" || composerMode === "replyAll") && composerQuotedText && (
+                  <div className="max-h-52 overflow-auto rounded-lg border border-[var(--shell-border)] bg-white/70 p-3 text-xs text-[var(--shell-muted)] whitespace-pre-wrap">
+                    {composerQuotedText}
+                  </div>
+                )}
+
+                <div className="space-y-2">
+                  <Label className="text-xs text-[var(--shell-muted)]">Attachments</Label>
+                  <div className="flex flex-wrap items-center gap-2">
+                    <input
+                      ref={composerFileInputRef}
+                      type="file"
+                      multiple
+                      className="hidden"
+                      onChange={handleComposerAttachmentChange}
+                    />
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      className="h-9 border-[var(--shell-border)] bg-white/90"
+                      onClick={() => composerFileInputRef.current?.click()}
+                    >
+                      <Paperclip className="mr-2 h-4 w-4" />
+                      Add files
+                    </Button>
+                    {composerAttachments.length > 0 && (
+                      <span className="text-xs text-[var(--shell-muted)]">
+                        {composerAttachments.length} attachment{composerAttachments.length === 1 ? "" : "s"}
+                      </span>
+                    )}
+                  </div>
+                  {composerAttachments.length > 0 && (
+                    <div className="space-y-2">
+                      {composerAttachments.map((attachment) => (
+                        <div
+                          key={attachment.id}
+                          className="flex items-center justify-between rounded-md border border-[var(--shell-border)] bg-white px-3 py-2 text-xs"
+                        >
+                          <div className="min-w-0">
+                            <p className="truncate font-medium text-[var(--shell-ink)]">{attachment.file.name}</p>
+                            <p className="text-[11px] text-[var(--shell-muted)]">{formatBytes(attachment.file.size)}</p>
+                          </div>
+                          <Button
+                            type="button"
+                            variant="ghost"
+                            size="icon"
+                            className="h-7 w-7"
+                            onClick={() => handleRemoveComposerAttachment(attachment.id)}
+                          >
+                            <X className="h-4 w-4" />
+                          </Button>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+
+                {(composerMode === "reply" || composerMode === "replyAll") && composerIncludeOriginalAttachmentsAvailable && (
+                  <div className="rounded-lg border border-[var(--shell-border)] bg-white/70 p-3 text-xs text-[var(--shell-muted)]">
+                    <div className="flex items-center gap-2">
+                      <Checkbox
+                        checked={composerIncludeOriginalAttachments}
+                        onCheckedChange={(value) => setComposerIncludeOriginalAttachments(value === true)}
+                      />
+                      <span>
+                        Include original attachments ({composerOriginalAttachments.length})
+                      </span>
+                    </div>
+                    {composerOriginalAttachments.length > 0 && (
+                      <div className="mt-2 flex flex-wrap gap-2">
+                        {composerOriginalAttachments.map((attachment, index) => (
+                          <span
+                            key={`${attachment.filename || "attachment"}-${index}`}
+                            className="rounded-full border border-[var(--shell-border)] bg-white px-2 py-1 text-[11px]"
+                          >
+                            {attachment.filename || "attachment"}
+                          </span>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                )}
+
+                {(composerMode === "reply" || composerMode === "replyAll") && composerThreadingLimited && (
+                  <p className="text-xs text-amber-700">
+                    This message is missing a Message-ID. Reply threading may be limited in Gmail or Outlook.
+                  </p>
+                )}
+              </>
+            )}
             </div>
           </div>
 
-          <DialogFooter>
-            <Button variant="outline" onClick={() => setComposeOpen(false)}>
+          <DialogFooter className="bg-[var(--shell-surface-strong)] px-6 py-5">
+            <Button
+              variant="outline"
+              className="h-10 border-[var(--shell-border)] bg-white/90 px-6"
+              onClick={() => {
+                setComposeOpen(false);
+                resetComposerState();
+              }}
+              disabled={composerSending}
+            >
               Cancel
             </Button>
-            <Button onClick={handleSend} className="gap-2">
+            <Button
+              onClick={() => void handleSend()}
+              className="h-10 gap-2 bg-[#0b1735] px-6 text-white hover:bg-[#0a142d]"
+              disabled={
+                composerLoadingDraft ||
+                composerSending ||
+                (composerMode === "compose" && !composerConfigId)
+              }
+            >
               <Send className="h-4 w-4" />
-              Send
+              {composerSending
+                ? "Sending..."
+                : composerMode === "reply"
+                  ? "Send reply"
+                  : composerMode === "replyAll"
+                    ? "Send reply all"
+                    : composerMode === "compose"
+                      ? "Send"
+                      : "Open in mail app"}
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -2225,6 +2888,9 @@ const MessageDetailPanel = ({
   compact?: boolean;
 }) => {
   const [showQuoted, setShowQuoted] = useState(false);
+  useEffect(() => {
+    setShowQuoted(false);
+  }, [message?.id]);
 
   if (!message) {
     return (
@@ -2239,29 +2905,48 @@ const MessageDetailPanel = ({
   return (
     <div className="flex h-full flex-col">
       {/* Fitts + consistency: sticky action bar keeps primary actions in reach */}
-      <div className="sticky top-0 z-10 border-b border-slate-200 bg-white/95 px-4 py-3">
+      <div className="sticky top-0 z-10 border-b border-[var(--shell-border)] bg-[var(--shell-surface-strong)]/95 px-4 py-3">
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div>
-            <h2 className="text-lg font-semibold text-slate-900">{message.subject || "(No Subject)"}</h2>
+            <h2 className="text-lg font-semibold text-[var(--shell-ink)]">{message.subject || "(No Subject)"}</h2>
             <div className="mt-1 flex flex-wrap items-center gap-2 text-xs text-slate-500">
               <span>Received {format(new Date(message.date), "PPP p")}</span>
               {!message.read && <Badge variant="secondary">Unread</Badge>}
             </div>
           </div>
           <div className="flex flex-wrap items-center gap-2">
-            <Button size="sm" onClick={onReply} className="gap-1">
+            <Button
+              size="sm"
+              onClick={onReply}
+              className="gap-1 bg-[var(--shell-accent)] text-white hover:bg-emerald-700"
+            >
               <Reply className="h-4 w-4" />
               Reply
             </Button>
-            <Button size="sm" variant="outline" onClick={onReplyAll} className="gap-1">
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={onReplyAll}
+              className="gap-1 border-[var(--shell-border)] bg-white/90"
+            >
               <ReplyAll className="h-4 w-4" />
               Reply all
             </Button>
-            <Button size="sm" variant="outline" onClick={onForward} className="gap-1">
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={onForward}
+              className="gap-1 border-[var(--shell-border)] bg-white/90"
+            >
               <Forward className="h-4 w-4" />
               Forward
             </Button>
-            <Button size="sm" variant="outline" onClick={onArchive} className="gap-1">
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={onArchive}
+              className="gap-1 border-[var(--shell-border)] bg-white/90"
+            >
               <Archive className="h-4 w-4" />
               Archive
             </Button>
@@ -2274,7 +2959,7 @@ const MessageDetailPanel = ({
       </div>
 
       <ScrollArea className={cn("flex-1 px-4", compact ? "pb-6" : "pb-8")}> 
-        <div className="mt-4 rounded-2xl border border-slate-200 bg-white p-4">
+        <div className="mt-4 rounded-2xl border border-[var(--shell-border)] bg-white p-4">
           <div className="flex items-start justify-between gap-4">
             <div className="flex items-start gap-3">
               <Avatar className="h-10 w-10">
@@ -2284,7 +2969,7 @@ const MessageDetailPanel = ({
                 </AvatarFallback>
               </Avatar>
               <div>
-                <p className="text-sm font-semibold text-slate-900">{message.from_email}</p>
+                <p className="text-sm font-semibold text-[var(--shell-ink)]">{message.from_email}</p>
                 <p className="text-xs text-slate-500">to {message.to_email}</p>
               </div>
             </div>
@@ -2320,10 +3005,10 @@ const MessageDetailPanel = ({
         </div>
 
         <div className="mt-6">
-          <h3 className="text-sm font-semibold text-slate-900">Thread timeline</h3>
+          <h3 className="text-sm font-semibold text-[var(--shell-ink)]">Thread timeline</h3>
           <div className="mt-3 space-y-3">
             {threadMessages.map((item) => (
-              <div key={item.id} className="rounded-2xl border border-slate-200 bg-white p-3">
+              <div key={item.id} className="rounded-2xl border border-[var(--shell-border)] bg-white p-3">
                 <div className="flex items-center justify-between text-xs text-slate-500">
                   <span>{item.from_email}</span>
                   <span>{format(new Date(item.date), "PP p")}</span>

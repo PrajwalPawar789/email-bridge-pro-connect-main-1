@@ -1,4 +1,4 @@
-﻿import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { supabase } from '@/integrations/supabase/client';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -15,7 +15,7 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { toast } from '@/hooks/use-toast';
-import { ChevronDown, ChevronLeft, ChevronRight, MoreHorizontal, Search } from 'lucide-react';
+import { ChevronDown, ChevronLeft, ChevronRight, Download, FileSpreadsheet, Loader2, MoreHorizontal, Search } from 'lucide-react';
 import {
   AlertDialog,
   AlertDialogAction,
@@ -51,6 +51,14 @@ type FormState = {
   imap_host: string;
   imap_port: number;
   security: 'SSL' | 'TLS';
+};
+
+type BulkImportSummary = {
+  total: number;
+  inserted: number;
+  skipped: number;
+  errors: number;
+  failedRows: number[];
 };
 
 const providerPresets: ProviderPreset[] = [
@@ -121,6 +129,35 @@ const emptyForm: FormState = {
   security: 'SSL'
 };
 
+const normalizeCell = (value: unknown) => String(value ?? '').trim();
+
+const normalizeHeader = (value: unknown) =>
+  normalizeCell(value)
+    .toLowerCase()
+    .replace(/\s+/g, '_')
+    .replace(/-/g, '_');
+
+const parsePort = (value: string) => {
+  if (!value) return null;
+  const parsed = Number(value);
+  if (!Number.isInteger(parsed) || parsed <= 0) return null;
+  return parsed;
+};
+
+const resolvePresetFromProvider = (value: string) => {
+  const normalized = value.trim().toLowerCase();
+  if (!normalized) return undefined;
+
+  if (normalized.includes('gmail')) return providerPresets.find((preset) => preset.id === 'gmail');
+  if (normalized.includes('outlook') || normalized.includes('office365') || normalized.includes('microsoft')) {
+    return providerPresets.find((preset) => preset.id === 'outlook');
+  }
+  if (normalized.includes('titan')) return providerPresets.find((preset) => preset.id === 'titan');
+  if (normalized.includes('hostinger')) return providerPresets.find((preset) => preset.id === 'hostinger');
+
+  return providerPresets.find((preset) => preset.id === normalized);
+};
+
 const EmailConfig: React.FC<EmailConfigProps> = ({ onConfigAdded }) => {
   const [form, setForm] = useState<FormState>({ ...emptyForm });
   const [loading, setLoading] = useState(false);
@@ -133,6 +170,9 @@ const EmailConfig: React.FC<EmailConfigProps> = ({ onConfigAdded }) => {
   const [isGuidanceOpen, setIsGuidanceOpen] = useState(true);
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
   const [deleteTarget, setDeleteTarget] = useState<any | null>(null);
+  const [bulkImporting, setBulkImporting] = useState(false);
+  const [bulkImportSummary, setBulkImportSummary] = useState<BulkImportSummary | null>(null);
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
   const itemsPerPage = 8;
 
   useEffect(() => {
@@ -326,6 +366,240 @@ const EmailConfig: React.FC<EmailConfigProps> = ({ onConfigAdded }) => {
     }
   };
 
+  const downloadSampleWorkbook = () => {
+    const link = document.createElement('a');
+    link.href = '/templates/email-accounts-sample.xlsx';
+    link.download = 'email-accounts-sample.xlsx';
+    link.click();
+  };
+
+  const handleBulkFileUpload = async (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    if (!file) return;
+
+    setBulkImporting(true);
+    setBulkImportSummary(null);
+
+    try {
+      const { data: { user } } = await supabase.auth.getUser();
+      if (!user) throw new Error('Not authenticated');
+
+      const XLSX = await import('xlsx');
+      const workbook = XLSX.read(await file.arrayBuffer(), { type: 'array' });
+      const firstSheetName = workbook.SheetNames[0];
+      if (!firstSheetName) throw new Error('No worksheet found in file.');
+
+      const sheet = workbook.Sheets[firstSheetName];
+      const rows = XLSX.utils.sheet_to_json(sheet, {
+        header: 1,
+        defval: '',
+        blankrows: false
+      }) as unknown[][];
+
+      const headerRowIndex = rows.findIndex(
+        (row) => Array.isArray(row) && row.some((cell) => normalizeCell(cell) !== '')
+      );
+
+      if (headerRowIndex === -1) {
+        throw new Error('Could not find a header row in the uploaded file.');
+      }
+
+      const headers = (rows[headerRowIndex] || []).map((value) => normalizeHeader(value));
+      const findColumnIndex = (aliases: string[]) => headers.findIndex((header) => aliases.includes(header));
+
+      const columnMap = {
+        sender_name: findColumnIndex(['sender_name', 'sender', 'sender_display_name', 'display_name', 'name']),
+        smtp_username: findColumnIndex(['smtp_username', 'smtp_email', 'email', 'email_address', 'username']),
+        smtp_password: findColumnIndex(['smtp_password', 'password', 'app_password', 'app_pass']),
+        provider: findColumnIndex(['provider', 'preset']),
+        smtp_host: findColumnIndex(['smtp_host']),
+        smtp_port: findColumnIndex(['smtp_port']),
+        imap_host: findColumnIndex(['imap_host']),
+        imap_port: findColumnIndex(['imap_port']),
+        security: findColumnIndex(['security', 'encryption', 'ssl_tls'])
+      };
+
+      const missingRequiredColumns: string[] = [];
+      if (columnMap.sender_name === -1) missingRequiredColumns.push('sender_name');
+      if (columnMap.smtp_username === -1) missingRequiredColumns.push('smtp_username');
+      if (columnMap.smtp_password === -1) missingRequiredColumns.push('smtp_password');
+
+      if (missingRequiredColumns.length > 0) {
+        throw new Error(`Missing required column(s): ${missingRequiredColumns.join(', ')}`);
+      }
+
+      const dataRows = rows.slice(headerRowIndex + 1);
+      const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+      const { data: existingConfigs, error: existingError } = await supabase
+        .from('email_configs')
+        .select('smtp_username')
+        .eq('user_id', user.id);
+
+      if (existingError) throw existingError;
+
+      const existingEmails = new Set(
+        (existingConfigs || [])
+          .map((config) => normalizeCell(config.smtp_username).toLowerCase())
+          .filter(Boolean)
+      );
+
+      const seenInFile = new Set<string>();
+      const failedRows: number[] = [];
+      const parsedRows: Array<{ rowNumber: number; payload: FormState }> = [];
+      let skipped = 0;
+      let total = 0;
+
+      const getValue = (row: unknown[], index: number) => {
+        if (index === -1) return '';
+        return normalizeCell(row[index]);
+      };
+
+      for (let index = 0; index < dataRows.length; index += 1) {
+        const row = dataRows[index] || [];
+        const rowNumber = headerRowIndex + index + 2;
+
+        if (!row.some((cell) => normalizeCell(cell) !== '')) {
+          continue;
+        }
+
+        total += 1;
+
+        const senderName = getValue(row, columnMap.sender_name);
+        const smtpUsername = getValue(row, columnMap.smtp_username).toLowerCase();
+        const smtpPassword = getValue(row, columnMap.smtp_password);
+        const providerValue = getValue(row, columnMap.provider);
+        const smtpHostValue = getValue(row, columnMap.smtp_host);
+        const imapHostValue = getValue(row, columnMap.imap_host);
+        const securityValue = getValue(row, columnMap.security).toUpperCase();
+
+        if (!senderName || !smtpUsername || !smtpPassword) {
+          failedRows.push(rowNumber);
+          continue;
+        }
+
+        if (!emailRegex.test(smtpUsername)) {
+          failedRows.push(rowNumber);
+          continue;
+        }
+
+        if (existingEmails.has(smtpUsername) || seenInFile.has(smtpUsername)) {
+          skipped += 1;
+          continue;
+        }
+
+        const providerPreset = resolvePresetFromProvider(providerValue) || presetByHost[smtpHostValue];
+        const smtpHost = smtpHostValue || providerPreset?.smtp_host || '';
+        const imapHost = imapHostValue || providerPreset?.imap_host || '';
+
+        const smtpPort =
+          parsePort(getValue(row, columnMap.smtp_port)) ??
+          providerPreset?.smtp_port ??
+          null;
+        const imapPort =
+          parsePort(getValue(row, columnMap.imap_port)) ??
+          providerPreset?.imap_port ??
+          null;
+
+        const normalizedSecurity = securityValue || providerPreset?.security || '';
+
+        if (
+          !smtpHost ||
+          !imapHost ||
+          !smtpPort ||
+          !imapPort ||
+          (normalizedSecurity !== 'SSL' && normalizedSecurity !== 'TLS')
+        ) {
+          failedRows.push(rowNumber);
+          continue;
+        }
+
+        const security: 'SSL' | 'TLS' = normalizedSecurity;
+
+        parsedRows.push({
+          rowNumber,
+          payload: {
+            sender_name: senderName,
+            smtp_username: smtpUsername,
+            smtp_password: smtpPassword,
+            smtp_host: smtpHost,
+            smtp_port: smtpPort,
+            imap_host: imapHost,
+            imap_port: imapPort,
+            security
+          }
+        });
+        seenInFile.add(smtpUsername);
+      }
+
+      let inserted = 0;
+      const dbFailedRows: number[] = [];
+
+      if (parsedRows.length > 0) {
+        const batchPayload = parsedRows.map((row) => ({
+          user_id: user.id,
+          ...row.payload
+        }));
+
+        const { error: batchError } = await supabase.from('email_configs').insert(batchPayload);
+
+        if (!batchError) {
+          inserted = parsedRows.length;
+        } else {
+          for (const row of parsedRows) {
+            const { error } = await supabase.from('email_configs').insert({
+              user_id: user.id,
+              ...row.payload
+            });
+
+            if (error) {
+              dbFailedRows.push(row.rowNumber);
+            } else {
+              inserted += 1;
+            }
+          }
+        }
+      }
+
+      const allFailedRows = [...failedRows, ...dbFailedRows].sort((a, b) => a - b);
+      const summary: BulkImportSummary = {
+        total,
+        inserted,
+        skipped,
+        errors: allFailedRows.length,
+        failedRows: allFailedRows
+      };
+
+      setBulkImportSummary(summary);
+
+      if (inserted > 0) {
+        await fetchConfigs();
+        if (onConfigAdded) onConfigAdded();
+      }
+
+      const failurePreview = allFailedRows.slice(0, 6).join(', ');
+      const failureSuffix = allFailedRows.length > 6 ? ', ...' : '';
+
+      toast({
+        title: inserted > 0 ? 'Bulk import completed' : 'Bulk import finished',
+        description:
+          allFailedRows.length > 0
+            ? `Added ${inserted}, skipped ${skipped}, failed ${allFailedRows.length} (rows: ${failurePreview}${failureSuffix}).`
+            : `Added ${inserted} account(s). Skipped ${skipped} duplicate row(s).`,
+        variant: inserted === 0 && allFailedRows.length > 0 ? 'destructive' : 'default'
+      });
+    } catch (error: any) {
+      toast({
+        title: 'Import failed',
+        description: error.message || 'Could not process this file.',
+        variant: 'destructive'
+      });
+    } finally {
+      setBulkImporting(false);
+      event.target.value = '';
+    }
+  };
+
   const helpTitle = mode === 'edit' ? 'Edit sender configuration' : 'Add a new sender';
   const helpBody = mode === 'edit'
     ? 'Update the sender name, credentials, or provider settings. Leave password empty to keep the current one.'
@@ -391,9 +665,40 @@ const EmailConfig: React.FC<EmailConfigProps> = ({ onConfigAdded }) => {
                 </p>
               </div>
               <div className="flex flex-wrap items-center gap-2">
+                <input
+                  ref={fileInputRef}
+                  type="file"
+                  accept=".xlsx,.xls,.csv"
+                  className="hidden"
+                  onChange={handleBulkFileUpload}
+                />
                 <Badge className="border border-emerald-200 bg-emerald-50 text-emerald-700">
                   {configs.length.toLocaleString()} total
                 </Badge>
+                <Button
+                  type="button"
+                  variant="outline"
+                  className="rounded-full"
+                  onClick={downloadSampleWorkbook}
+                  disabled={bulkImporting}
+                >
+                  <Download className="mr-2 h-4 w-4" />
+                  Sample Excel
+                </Button>
+                <Button
+                  type="button"
+                  variant="outline"
+                  className="rounded-full"
+                  onClick={() => fileInputRef.current?.click()}
+                  disabled={bulkImporting}
+                >
+                  {bulkImporting ? (
+                    <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                  ) : (
+                    <FileSpreadsheet className="mr-2 h-4 w-4" />
+                  )}
+                  {bulkImporting ? 'Importing...' : 'Bulk Upload Excel'}
+                </Button>
                 <Button onClick={openCreateForm} className="rounded-full shadow-sm">
                   Add email account
                 </Button>
@@ -415,6 +720,19 @@ const EmailConfig: React.FC<EmailConfigProps> = ({ onConfigAdded }) => {
             </div>
           </CardHeader>
           <CardContent className="space-y-4">
+            {bulkImportSummary && (
+              <div className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-600">
+                <p className="font-medium text-slate-800">
+                  Last import: {bulkImportSummary.inserted} added, {bulkImportSummary.skipped} skipped, {bulkImportSummary.errors} failed.
+                </p>
+                <p className="text-xs text-slate-500">
+                  Processed {bulkImportSummary.total} rows.
+                  {bulkImportSummary.failedRows.length > 0
+                    ? ` Failed row numbers: ${bulkImportSummary.failedRows.slice(0, 10).join(', ')}${bulkImportSummary.failedRows.length > 10 ? ', ...' : ''}.`
+                    : ''}
+                </p>
+              </div>
+            )}
             {configs.length === 0 ? (
               <div className="rounded-2xl border border-dashed border-slate-200 bg-white/70 p-6 text-sm text-slate-500">
                 No email accounts yet. Add one to start sending campaigns.
