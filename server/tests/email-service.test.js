@@ -98,3 +98,31 @@ test('sendReply uses injected transport', async () => {
   assert.equal(sent.length, 1);
   assert.ok(sent[0].headers['In-Reply-To']);
 });
+
+test('sendCompose uses injected transport and normalizes recipients', async () => {
+  const sent = [];
+  const transportFactory = () => ({
+    sendMail: async (options) => {
+      sent.push(options);
+      return { messageId: '<compose-message-id@example.com>' };
+    },
+  });
+
+  const service = new EmailService({ transportFactory });
+  const result = await service.sendCompose({
+    config: baseConfig,
+    payload: {
+      to: ['alice@example.com', 'alice@example.com'],
+      cc: ['cc@example.com', 'alice@example.com'],
+      bcc: ['bcc@example.com', 'cc@example.com'],
+      subject: 'Compose subject',
+      text: 'Hello from compose',
+    },
+  });
+
+  assert.equal(result.messageId, '<compose-message-id@example.com>');
+  assert.equal(sent.length, 1);
+  assert.equal(sent[0].to, 'alice@example.com');
+  assert.equal(sent[0].cc, 'cc@example.com');
+  assert.equal(sent[0].bcc, 'bcc@example.com');
+});

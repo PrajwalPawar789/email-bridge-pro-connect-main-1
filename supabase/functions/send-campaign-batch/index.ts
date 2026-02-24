@@ -74,6 +74,7 @@ const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 const generateUniqueId = () => crypto.randomUUID();
 
 const STEP0_DAILY_QUOTA_RATIO = 0.5;
+const CREDIT_COST_PER_OUTBOUND_EMAIL = 1;
 
 const getDailyQuotaForStep = (dailyLimit: number, step: number) => {
   if (dailyLimit <= 0) return 0;
@@ -94,6 +95,57 @@ const getErrorMessage = (error: unknown) => {
   } catch (_) {
     return 'Unknown error';
   }
+};
+
+const consumeUserCredits = async (
+  userId: string,
+  amount: number,
+  eventType: string,
+  referenceId: string,
+  metadata: Record<string, unknown> = {}
+) => {
+  const { data, error } = await supabase.rpc('consume_user_credits', {
+    p_amount: amount,
+    p_event_type: eventType,
+    p_reference_id: referenceId,
+    p_metadata: metadata,
+    p_user_id: userId,
+  });
+
+  if (error) {
+    throw new Error(`Credit consumption failed: ${error.message}`);
+  }
+
+  const row = Array.isArray(data) ? data[0] : data;
+  return {
+    allowed: Boolean(row?.allowed),
+    creditsRemaining: Number(row?.credits_remaining ?? 0),
+    message: String(row?.message || ''),
+  };
+};
+
+const refundUserCredits = async (
+  userId: string,
+  amount: number,
+  eventType: string,
+  referenceId: string,
+  metadata: Record<string, unknown> = {}
+) => {
+  const { data, error } = await supabase.rpc('refund_user_credits', {
+    p_amount: amount,
+    p_event_type: eventType,
+    p_reference_id: referenceId,
+    p_metadata: metadata,
+    p_user_id: userId,
+  });
+
+  if (error) {
+    console.error(`Credit refund failed for user ${userId}: ${error.message}`);
+    return null;
+  }
+
+  const row = Array.isArray(data) ? data[0] : data;
+  return Number(row?.credits_remaining ?? NaN);
 };
 
 const escapeHtml = (value: string) =>
@@ -491,6 +543,38 @@ const processBatch = async (campaignId: string, batchSize = 3, step = 0, emailCo
       throw new Error(`Campaign not found: ${campaignError?.message}`);
     }
 
+    let workspaceCreditsRemaining: number | null = null;
+    try {
+      const { data: billingSnapshot, error: billingError } = await supabase.rpc('get_billing_snapshot', {
+        p_user_id: campaign.user_id,
+      });
+
+      if (billingError) {
+        console.warn(
+          `Unable to fetch billing snapshot for user ${campaign.user_id}; skipping credit pre-check: ${billingError.message}`
+        );
+      } else {
+        const snapshot = Array.isArray(billingSnapshot) ? billingSnapshot[0] : billingSnapshot;
+        const remaining = Number(snapshot?.credits_remaining);
+        if (Number.isFinite(remaining)) {
+          workspaceCreditsRemaining = remaining;
+          if (remaining <= 0) {
+            console.log(`No credits remaining for campaign ${campaign.id}. Skipping batch.`);
+            return {
+              success: true,
+              message: 'Insufficient credits',
+              emailsSent: 0,
+              hasMore: true
+            };
+          }
+        }
+      }
+    } catch (billingSnapshotError) {
+      console.warn(
+        `Credit pre-check failed for campaign ${campaign.id}: ${getErrorMessage(billingSnapshotError)}`
+      );
+    }
+
     const { data: campaignConfigRows, error: campaignConfigError } = await supabase
       .from('campaign_email_configurations')
       .select('email_config_id')
@@ -715,6 +799,19 @@ const processBatch = async (campaignId: string, batchSize = 3, step = 0, emailCo
       }
     }
 
+    if (workspaceCreditsRemaining !== null) {
+      effectiveBatchSize = Math.min(effectiveBatchSize, Math.max(0, workspaceCreditsRemaining));
+      if (effectiveBatchSize <= 0) {
+        console.log(`Credit cap reached for campaign ${campaign.id}. No recipients can be sent in this batch.`);
+        return {
+          success: true,
+          message: 'Insufficient credits',
+          emailsSent: 0,
+          hasMore: true
+        };
+      }
+    }
+
     // Limit recipients to effective batch size
     const recipientsToProcess = recipientIds.slice(0, effectiveBatchSize);
 
@@ -811,10 +908,13 @@ const processBatch = async (campaignId: string, batchSize = 3, step = 0, emailCo
     }
 
     let emailsSent = 0;
+    let creditExhausted = false;
+    let creditsBlocked = false;
 
     // Process each recipient in the batch
     for (let i = 0; i < recipients.length; i++) {
       const recipient = recipients[i];
+      let creditDebited = false;
       
       try {
         // Determine which email config to use
@@ -890,6 +990,53 @@ const processBatch = async (campaignId: string, batchSize = 3, step = 0, emailCo
 
         const prospectData = prospectMap.get(recipient.email) || {};
 
+        if (creditsBlocked || (workspaceCreditsRemaining !== null && workspaceCreditsRemaining <= 0)) {
+          creditExhausted = true;
+          await supabase
+            .from('recipients')
+            .update({ status: step === 0 ? 'pending' : 'sent' })
+            .eq('id', recipient.id);
+          continue;
+        }
+
+        const creditReferenceId = `${campaignId}:${recipient.id}:${step}`;
+        const creditMetadata = {
+          source: 'campaign',
+          campaign_id: campaignId,
+          recipient_id: recipient.id,
+          step,
+          email_config_id: configIdToUse || null
+        };
+
+        const creditResult = await consumeUserCredits(
+          campaign.user_id,
+          CREDIT_COST_PER_OUTBOUND_EMAIL,
+          'campaign_send',
+          creditReferenceId,
+          creditMetadata
+        );
+
+        if (!creditResult.allowed) {
+          creditExhausted = true;
+          creditsBlocked = true;
+          workspaceCreditsRemaining = 0;
+          console.log(
+            `Skipping send for recipient ${recipient.id} due to insufficient credits. Remaining: ${creditResult.creditsRemaining}`
+          );
+          await supabase
+            .from('recipients')
+            .update({ status: step === 0 ? 'pending' : 'sent' })
+            .eq('id', recipient.id);
+          continue;
+        }
+
+        creditDebited = true;
+        workspaceCreditsRemaining = Number.isFinite(creditResult.creditsRemaining)
+          ? creditResult.creditsRemaining
+          : workspaceCreditsRemaining !== null
+            ? Math.max(0, workspaceCreditsRemaining - CREDIT_COST_PER_OUTBOUND_EMAIL)
+            : workspaceCreditsRemaining;
+
         // Send email
         const info = await sendEmail(
           emailConfig,
@@ -956,6 +1103,26 @@ const processBatch = async (campaignId: string, batchSize = 3, step = 0, emailCo
 
       } catch (error: unknown) {
         console.error(`Error sending to ${recipient.email}:`, error);
+
+        if (creditDebited) {
+          await refundUserCredits(
+            campaign.user_id,
+            CREDIT_COST_PER_OUTBOUND_EMAIL,
+            'campaign_send_refund',
+            `${campaignId}:${recipient.id}:${step}`,
+            {
+              source: 'campaign',
+              campaign_id: campaignId,
+              recipient_id: recipient.id,
+              step,
+              reason: 'send_failure',
+              error: getErrorMessage(error)
+            }
+          );
+          if (workspaceCreditsRemaining !== null) {
+            workspaceCreditsRemaining += CREDIT_COST_PER_OUTBOUND_EMAIL;
+          }
+        }
         
         // Mark as failed so we don't retry indefinitely without intervention
         await supabase
@@ -979,9 +1146,11 @@ const processBatch = async (campaignId: string, batchSize = 3, step = 0, emailCo
 
     return { 
       success: true, 
-      message: `Batch completed. Sent ${emailsSent} emails.`,
+      message: creditExhausted
+        ? `Batch stopped by credits. Sent ${emailsSent} emails.`
+        : `Batch completed. Sent ${emailsSent} emails.`,
       emailsSent,
-      hasMore: false // Let the monitor handle re-triggering
+      hasMore: creditExhausted ? true : false // Let the monitor handle re-triggering
     };
 
   } catch (error: unknown) {

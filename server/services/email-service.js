@@ -399,19 +399,7 @@ export class EmailService {
       payload,
     });
 
-    const transport = this.transportFactory
-      ? this.transportFactory(config)
-      : nodemailer.createTransport({
-          host: config.smtp_host,
-          port: Number(config.smtp_port) || 465,
-          secure: normalizeSecurity(config.security) === 'SSL' || Number(config.smtp_port) === 465,
-          requireTLS: normalizeSecurity(config.security) === 'TLS',
-          auth: {
-            user: config.smtp_username,
-            pass: config.smtp_password,
-          },
-          tls: { rejectUnauthorized: false },
-        });
+    const transport = this.createTransport(config);
 
     const info = await transport.sendMail({
       ...mailOptions,
@@ -431,6 +419,103 @@ export class EmailService {
       threadId: threadHeaders.threadId,
       messageId: info?.messageId || null,
       attachmentsMeta: this.buildOutgoingAttachmentMetadata(payload, attachments, original),
+    };
+  }
+
+  createTransport(config) {
+    return this.transportFactory
+      ? this.transportFactory(config)
+      : nodemailer.createTransport({
+          host: config.smtp_host,
+          port: Number(config.smtp_port) || 465,
+          secure: normalizeSecurity(config.security) === 'SSL' || Number(config.smtp_port) === 465,
+          requireTLS: normalizeSecurity(config.security) === 'TLS',
+          auth: {
+            user: config.smtp_username,
+            pass: config.smtp_password,
+          },
+          tls: { rejectUnauthorized: false },
+        });
+  }
+
+  buildComposeMessage({ config, payload }) {
+    const to = dedupeAddresses(normalizeAddressList(payload?.to));
+    let cc = dedupeAddresses(normalizeAddressList(payload?.cc));
+    let bcc = dedupeAddresses(normalizeAddressList(payload?.bcc));
+
+    const toSet = new Set(to.map((addr) => normalizeEmail(addr)));
+    cc = cc.filter((addr) => !toSet.has(normalizeEmail(addr)));
+    const ccSet = new Set(cc.map((addr) => normalizeEmail(addr)));
+    bcc = bcc.filter((addr) => !toSet.has(normalizeEmail(addr)) && !ccSet.has(normalizeEmail(addr)));
+
+    if (!to.length) {
+      throw new Error('At least one recipient in To is required.');
+    }
+
+    const subject = normalizeText(payload?.subject) || '(No Subject)';
+    const { text, html } = this.normalizeBody(payload?.text, payload?.html);
+    if (!text && !html) {
+      throw new Error('Message body is required.');
+    }
+
+    const fromName = normalizeText(config.sender_name);
+    const from = fromName ? `${fromName} <${config.smtp_username}>` : config.smtp_username;
+
+    return {
+      mailOptions: {
+        from,
+        to: to.join(', '),
+        cc: cc.length ? cc.join(', ') : undefined,
+        bcc: bcc.length ? bcc.join(', ') : undefined,
+        subject,
+        text,
+        html,
+      },
+      recipients: { to, cc, bcc },
+      subject,
+      text,
+      html,
+    };
+  }
+
+  async sendCompose({ config, payload }) {
+    const { mailOptions, recipients, subject, text, html } = this.buildComposeMessage({
+      config,
+      payload,
+    });
+
+    const attachments = await this.resolveAttachments({
+      config,
+      original: null,
+      payload,
+    });
+
+    const transport = this.createTransport(config);
+    const info = await transport.sendMail({
+      ...mailOptions,
+      attachments,
+    });
+
+    const messageId = normalizeMessageId(info?.messageId || '');
+    const sentAt = new Date().toISOString();
+    const threadId = computeThreadKey({
+      message_id: messageId,
+      subject,
+      from_email: config.smtp_username,
+      date: sentAt,
+    });
+
+    return {
+      info,
+      to: recipients.to,
+      cc: recipients.cc,
+      bcc: recipients.bcc,
+      subject,
+      text,
+      html,
+      messageId: messageId || null,
+      threadId,
+      attachmentsMeta: this.buildOutgoingAttachmentMetadata(payload, attachments, null),
     };
   }
 

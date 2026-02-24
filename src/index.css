@@ -321,3 +321,12 @@
     transform: translateY(-6px);
   }
 }
+
+@keyframes workflow-edge-dash {
+  from {
+    stroke-dashoffset: 18;
+  }
+  to {
+    stroke-dashoffset: 0;
+  }
+}

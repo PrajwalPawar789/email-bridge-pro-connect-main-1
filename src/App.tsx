@@ -14,6 +14,8 @@ import Inbox from "./pages/Inbox";
 import Automations from "./pages/Automations";
 import Pipeline from "./pages/Pipeline";
 import Subscription from "./pages/Subscription";
+import Billing from "./pages/Billing";
+import Spending from "./pages/Spending";
 import NotFound from "./pages/NotFound";
 import { AuthProvider } from "./providers/AuthProvider";
 import Onboarding from "./pages/Onboarding";
@@ -40,8 +42,8 @@ const App = () => (
               <Route path="/automations" element={<Automations />} />
               <Route path="/pipeline" element={<Pipeline />} />
               <Route path="/subscription" element={<Subscription />} />
-              <Route path="/billing" element={<Subscription />} />
-              <Route path="/spending" element={<Subscription />} />
+              <Route path="/billing" element={<Billing />} />
+              <Route path="/spending" element={<Spending />} />
               <Route path="/campaign/:id" element={<CampaignTracker />} />
             </Route>
             {/* ADD ALL CUSTOM ROUTES ABOVE THE CATCH-ALL "*" ROUTE */}

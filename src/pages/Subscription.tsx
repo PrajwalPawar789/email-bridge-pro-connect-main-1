@@ -35,6 +35,7 @@ import {
 } from '@/components/ui/dialog';
 import { RadioGroup, RadioGroupItem } from '@/components/ui/radio-group';
 import { Label } from '@/components/ui/label';
+import { listPaymentMethods, PaymentMethodRow } from '@/lib/billing';
 
 type BillingCycle = 'monthly' | 'annual';
 type PlanId = 'free' | 'growth' | 'scale' | 'enterprise';
@@ -56,6 +57,24 @@ type Plan = {
 type ComparisonRow = {
   label: string;
   values: (boolean | string | '-')[];
+};
+
+type BillingSnapshot = {
+  plan_id: string;
+  plan_name: string;
+  billing_cycle: string;
+  subscription_status: string;
+  current_period_start: string;
+  current_period_end: string;
+  credits_in_period: number;
+  credits_used: number;
+  credits_remaining: number;
+  mailbox_limit: number | null;
+  mailboxes_used: number;
+  unlimited_mailboxes: boolean;
+  campaign_limit: number | null;
+  campaigns_used: number;
+  unlimited_campaigns: boolean;
 };
 
 const DEFAULT_PLANS: Plan[] = [
@@ -103,6 +122,7 @@ const DEFAULT_PLANS: Plan[] = [
 
 const coreRows: ComparisonRow[] = [
   { label: 'Sender inboxes included', values: ['1', '5', '20', 'Unlimited'] },
+  { label: 'Campaigns included', values: ['3', '25', '100', 'Unlimited'] },
   { label: 'Campaign studio + sequencing', values: [true, true, true, true] },
   { label: 'AI follow-up automation', values: ['Basic', 'Advanced', 'Advanced + routing', 'Custom workflows'] },
   { label: 'Inbox + reply workspace', values: ['Basic', 'Shared inbox', 'Shared + team rules', 'Enterprise controls'] },
@@ -189,6 +209,14 @@ function mapUserPackageNameToPlanId(userPackageName: string | null): PlanId | nu
   if (name.includes('growth') || name.includes('pro')) return 'growth';
   if (name.includes('scale') || name.includes('power')) return 'scale';
   if (name.includes('enterprise')) return 'enterprise';
+  return null;
+}
+
+function parsePlanId(value: unknown): PlanId | null {
+  const normalized = String(value ?? '').toLowerCase();
+  if (normalized === 'free' || normalized === 'growth' || normalized === 'scale' || normalized === 'enterprise') {
+    return normalized as PlanId;
+  }
   return null;
 }
 
@@ -557,6 +585,8 @@ export default function Subscription() {
   const [currentPlanName, setCurrentPlanName] = useState<string>('Starter Trial');
   const [userPlanRank, setUserPlanRank] = useState<number | undefined>();
   const [isPlanExpired, setIsPlanExpired] = useState(false);
+  const [billingSnapshot, setBillingSnapshot] = useState<BillingSnapshot | null>(null);
+  const [loadingBillingSnapshot, setLoadingBillingSnapshot] = useState(false);
 
   const [summaryBounds, setSummaryBounds] = useState({ left: 0, width: 0 });
   const [summaryHeight, setSummaryHeight] = useState(0);
@@ -573,10 +603,7 @@ export default function Subscription() {
   const [showPaymentMethodModal, setShowPaymentMethodModal] = useState(false);
   const [selectedPaymentMethodId, setSelectedPaymentMethodId] = useState('other');
   const [loadingPaymentMethods, setLoadingPaymentMethods] = useState(false);
-  const [paymentMethods, setPaymentMethods] = useState<any[]>([
-    { id: 'pm_demo_1', card_brand: 'visa', last4: '4242' },
-    { id: 'pm_demo_2', card_brand: 'mastercard', last4: '1887' }
-  ]);
+  const [paymentMethods, setPaymentMethods] = useState<PaymentMethodRow[]>([]);
 
   const sortedPlans = useMemo(() => plansState, [plansState]);
   const selectedPlanObj = useMemo(() => sortedPlans.find((p) => p.id === selectedPlan), [sortedPlans, selectedPlan]);
@@ -592,23 +619,72 @@ export default function Subscription() {
 
   useEffect(() => {
     if (!user) return;
-    const metadata = (user.user_metadata as any) || {};
-    const packageName = metadata.plan_name || metadata.package_name || 'Starter Trial';
-    const tenure = mapTenureToInternal(metadata.tenure || metadata.plan_tenure || 'annual');
-    const expired = Boolean(metadata.is_subscription_expired || metadata.plan_expired || false);
-    const mappedId = mapUserPackageNameToPlanId(packageName);
+    let cancelled = false;
 
-    setCurrentPlanName(packageName);
-    setIsPlanExpired(expired);
-    setUserBillingCycle(tenure);
-    setBilling(tenure);
-    setSelectedBillingCycle(tenure);
+    const applyMetadataFallback = () => {
+      const metadata = (user.user_metadata as any) || {};
+      const packageName = metadata.plan_name || metadata.package_name || 'Starter Trial';
+      const tenure = mapTenureToInternal(metadata.tenure || metadata.plan_tenure || 'annual');
+      const expired = Boolean(metadata.is_subscription_expired || metadata.plan_expired || false);
+      const mappedId = mapUserPackageNameToPlanId(packageName) ?? 'free';
 
-    if (mappedId) {
+      if (cancelled) return;
+      setBillingSnapshot(null);
+      setCurrentPlanName(packageName);
+      setIsPlanExpired(expired);
+      setUserBillingCycle(tenure);
+      setBilling(tenure);
+      setSelectedBillingCycle(tenure);
       setUserPlanId(mappedId);
       setSelectedPlans((prev) => ({ ...prev, [tenure]: mappedId }));
       setUserPlanRank(sortedPlans.find((p) => p.id === mappedId)?.rank);
-    }
+    };
+
+    const loadBillingSnapshot = async () => {
+      setLoadingBillingSnapshot(true);
+      try {
+        const { data, error } = await (supabase as any).rpc('get_billing_snapshot', {
+          p_user_id: user.id
+        });
+
+        if (error) throw error;
+
+        const snapshot = (Array.isArray(data) ? data[0] : null) as BillingSnapshot | null;
+        if (!snapshot) {
+          applyMetadataFallback();
+          return;
+        }
+
+        const planId = parsePlanId(snapshot.plan_id) ?? mapUserPackageNameToPlanId(snapshot.plan_name) ?? 'free';
+        const nextBilling = mapTenureToInternal(snapshot.billing_cycle || 'monthly');
+        const status = String(snapshot.subscription_status || '').toLowerCase();
+        const expired = !['active', 'trialing'].includes(status);
+        const planName = snapshot.plan_name || sortedPlans.find((p) => p.id === planId)?.name || 'Starter Trial';
+
+        if (cancelled) return;
+
+        setBillingSnapshot(snapshot);
+        setCurrentPlanName(planName);
+        setIsPlanExpired(expired);
+        setUserBillingCycle(nextBilling);
+        setBilling(nextBilling);
+        setSelectedBillingCycle(nextBilling);
+        setUserPlanId(planId);
+        setSelectedPlans((prev) => ({ ...prev, [nextBilling]: planId }));
+        setUserPlanRank(sortedPlans.find((p) => p.id === planId)?.rank);
+      } catch (error) {
+        console.error('Failed to load billing snapshot:', error);
+        applyMetadataFallback();
+      } finally {
+        if (!cancelled) setLoadingBillingSnapshot(false);
+      }
+    };
+
+    void loadBillingSnapshot();
+
+    return () => {
+      cancelled = true;
+    };
   }, [user, sortedPlans]);
 
   const recalcBounds = () => {
@@ -721,19 +797,44 @@ export default function Subscription() {
     }
 
     setPendingPlan(plan);
-    setShowPaymentMethodModal(true);
+    await loadPaymentMethodsForCheckout();
+  };
+
+  const loadPaymentMethodsForCheckout = async () => {
+    if (!user) {
+      setShowPaymentMethodModal(true);
+      return;
+    }
+
+    setLoadingPaymentMethods(true);
+    try {
+      const methods = await listPaymentMethods(user.id);
+      setPaymentMethods(methods);
+      const defaultMethod = methods.find((m) => m.is_default) || methods[0] || null;
+      setSelectedPaymentMethodId(defaultMethod?.id || 'other');
+    } catch (error) {
+      console.error('Failed to load payment methods for checkout:', error);
+      setPaymentMethods([]);
+      setSelectedPaymentMethodId('other');
+      toast({
+        title: 'Payment methods unavailable',
+        description: 'Could not load saved payment methods. You can continue with a new payment method.',
+        variant: 'destructive'
+      });
+    } finally {
+      setLoadingPaymentMethods(false);
+      setShowPaymentMethodModal(true);
+    }
   };
 
   const performForceCheckout = async () => {
     setConfirmForceOpen(false);
-    setLoadingPaymentMethods(true);
-    await new Promise((resolve) => setTimeout(resolve, 600));
-    setLoadingPaymentMethods(false);
-    setShowPaymentMethodModal(true);
+    await loadPaymentMethodsForCheckout();
   };
 
   const handleFinalCheckout = async () => {
-    if (!pendingPlan) return;
+    if (!pendingPlan || !user) return;
+    const planToApply = pendingPlan;
 
     setShowPaymentMethodModal(false);
     setCheckoutLoading(true);
@@ -741,23 +842,75 @@ export default function Subscription() {
 
     const method = paymentMethods.find((m) => m.id === selectedPaymentMethodId);
     const methodLabel = method
-      ? `${String(method.card_brand).toUpperCase()} ****${method.last4}`
+      ? `${String(method.brand || 'card').toUpperCase()} ****${method.last4}`
       : 'new payment method';
 
-    setCheckoutLoading(false);
-    startResultModal('Successful', pendingPlan, methodLabel);
+    try {
+      const { error: planError } = await (supabase as any).rpc('set_user_subscription_plan', {
+        p_plan_id: planToApply.id,
+        p_billing_cycle: billing,
+        p_status: 'active',
+        p_user_id: user.id
+      });
 
-    setUserPlanId(pendingPlan.id);
-    setUserPlanRank(pendingPlan.rank);
-    setUserBillingCycle(billing);
-    setCurrentPlanName(pendingPlan.name);
-    setSelectedPlans((prev) => ({ ...prev, [billing]: pendingPlan.id }));
-    setPendingPlan(null);
+      if (planError) throw planError;
 
-    toast({
-      title: 'Plan updated',
-      description: `${pendingPlan.name} selected successfully.`
-    });
+      let snapshotApplied = false;
+      const { data: snapshotData, error: snapshotError } = await (supabase as any).rpc('get_billing_snapshot', {
+        p_user_id: user.id
+      });
+
+      if (!snapshotError) {
+        const snapshot = (Array.isArray(snapshotData) ? snapshotData[0] : null) as BillingSnapshot | null;
+        if (snapshot) {
+          const planId = parsePlanId(snapshot.plan_id) ?? planToApply.id;
+          const nextBilling = mapTenureToInternal(snapshot.billing_cycle || billing);
+          const status = String(snapshot.subscription_status || '').toLowerCase();
+          const expired = !['active', 'trialing'].includes(status);
+          const planName = snapshot.plan_name || sortedPlans.find((p) => p.id === planId)?.name || planToApply.name;
+
+          setBillingSnapshot(snapshot);
+          setCurrentPlanName(planName);
+          setIsPlanExpired(expired);
+          setUserPlanId(planId);
+          setUserBillingCycle(nextBilling);
+          setBilling(nextBilling);
+          setSelectedBillingCycle(nextBilling);
+          setSelectedPlans((prev) => ({ ...prev, [nextBilling]: planId }));
+          setUserPlanRank(sortedPlans.find((p) => p.id === planId)?.rank);
+          snapshotApplied = true;
+        }
+      }
+
+      if (!snapshotApplied) {
+        setBillingSnapshot(null);
+        setCurrentPlanName(planToApply.name);
+        setIsPlanExpired(false);
+        setUserPlanId(planToApply.id);
+        setUserBillingCycle(billing);
+        setBilling(billing);
+        setSelectedBillingCycle(billing);
+        setSelectedPlans((prev) => ({ ...prev, [billing]: planToApply.id }));
+        setUserPlanRank(planToApply.rank);
+      }
+
+      startResultModal('Successful', planToApply, methodLabel);
+      toast({
+        title: 'Plan updated',
+        description: `${planToApply.name} selected successfully.`
+      });
+      setPendingPlan(null);
+    } catch (error: any) {
+      console.error('Plan update failed:', error);
+      startResultModal('Failed', planToApply, methodLabel);
+      toast({
+        title: 'Plan update failed',
+        description: error?.message || 'Unable to update plan right now.',
+        variant: 'destructive'
+      });
+    } finally {
+      setCheckoutLoading(false);
+    }
   };
 
   const getDialogDescription = (plan?: Plan) => {
@@ -828,6 +981,36 @@ export default function Subscription() {
                 </TabsTrigger>
               </TabsList>
             </Tabs>
+          </div>
+          <div className="flex flex-wrap items-center justify-center gap-2">
+            {loadingBillingSnapshot ? (
+              <Badge className="border border-slate-200 bg-white text-slate-600">Loading billing usage...</Badge>
+            ) : billingSnapshot ? (
+              <>
+                <Badge className="border border-emerald-200 bg-emerald-50 text-emerald-700">
+                  Credits: {Number(billingSnapshot.credits_remaining || 0).toLocaleString()} remaining
+                </Badge>
+                <Badge className="border border-sky-200 bg-sky-50 text-sky-700">
+                  Usage: {Number(billingSnapshot.credits_used || 0).toLocaleString()} / {Number(billingSnapshot.credits_in_period || 0).toLocaleString()}
+                </Badge>
+                <Badge className="border border-amber-200 bg-amber-50 text-amber-700">
+                  Mailboxes: {billingSnapshot.mailboxes_used ?? 0}
+                  {billingSnapshot.unlimited_mailboxes
+                    ? ' / Unlimited'
+                    : ` / ${billingSnapshot.mailbox_limit ?? 0}`}
+                </Badge>
+                <Badge className="border border-violet-200 bg-violet-50 text-violet-700">
+                  Campaigns: {billingSnapshot.campaigns_used ?? 0}
+                  {billingSnapshot.unlimited_campaigns
+                    ? ' / Unlimited'
+                    : ` / ${billingSnapshot.campaign_limit ?? 0}`}
+                </Badge>
+              </>
+            ) : (
+              <Badge className="border border-slate-200 bg-white text-slate-600">
+                Billing snapshot unavailable right now
+              </Badge>
+            )}
           </div>
         </div>
 
@@ -951,6 +1134,41 @@ export default function Subscription() {
                       </div>
                     </div>
 
+                    {billingSnapshot && (
+                      <>
+                        <div className="hidden h-10 w-px bg-slate-200 md:block"></div>
+                        <div className="text-center md:text-right">
+                          <div className="mb-0.5 text-sm text-slate-500">Credits Remaining</div>
+                          <div className="text-lg font-bold leading-tight text-slate-900">
+                            {Number(billingSnapshot.credits_remaining || 0).toLocaleString()}
+                          </div>
+                          <div className="text-[11px] text-slate-500">
+                            Used {Number(billingSnapshot.credits_used || 0).toLocaleString()} / {Number(billingSnapshot.credits_in_period || 0).toLocaleString()}
+                          </div>
+                        </div>
+                        <div className="hidden h-10 w-px bg-slate-200 md:block"></div>
+                        <div className="text-center md:text-right">
+                          <div className="mb-0.5 text-sm text-slate-500">Mailbox Capacity</div>
+                          <div className="text-lg font-bold leading-tight text-slate-900">
+                            {billingSnapshot.mailboxes_used ?? 0}
+                            {billingSnapshot.unlimited_mailboxes
+                              ? ' / Unlimited'
+                              : ` / ${billingSnapshot.mailbox_limit ?? 0}`}
+                          </div>
+                        </div>
+                        <div className="hidden h-10 w-px bg-slate-200 md:block"></div>
+                        <div className="text-center md:text-right">
+                          <div className="mb-0.5 text-sm text-slate-500">Campaign Capacity</div>
+                          <div className="text-lg font-bold leading-tight text-slate-900">
+                            {billingSnapshot.campaigns_used ?? 0}
+                            {billingSnapshot.unlimited_campaigns
+                              ? ' / Unlimited'
+                              : ` / ${billingSnapshot.campaign_limit ?? 0}`}
+                          </div>
+                        </div>
+                      </>
+                    )}
+
                     <div className="hidden h-10 w-px bg-slate-200 md:block"></div>
 
                     <div className="flex flex-col items-center">
@@ -1068,28 +1286,26 @@ export default function Subscription() {
               <div className="max-h-[360px] overflow-y-auto pr-2">
                 <RadioGroup value={selectedPaymentMethodId} onValueChange={setSelectedPaymentMethodId} className="flex flex-col gap-3">
                   {paymentMethods.map((method) => {
-                    const brandDisplay = method.card_brand || method.brand || method.brand_display || 'Card';
+                    const brandDisplay = method.brand || 'Card';
                     return (
-                      <Label
-                        key={method.id}
-                        htmlFor={method.id}
+                  <Label
+                    key={method.id}
+                    htmlFor={method.id}
                         className={`flex cursor-pointer items-center justify-between rounded-xl border p-4 transition-all hover:border-emerald-500/50 hover:bg-emerald-50/30 ${
                           selectedPaymentMethodId === method.id
                             ? 'border-emerald-500 bg-emerald-50 ring-1 ring-emerald-500'
                             : 'border-slate-200'
                         }`}
-                      >
-                        <div className="flex items-center gap-4">
-                          <div className="rounded-lg border bg-white p-2 text-slate-600 shadow-sm">
-                            <CreditCard className="h-6 w-6" />
-                          </div>
-                          <div className="flex flex-col">
-                            <span className="font-semibold text-slate-900">
-                              {String(brandDisplay).charAt(0).toUpperCase() + String(brandDisplay).slice(1)}
-                            </span>
-                            <span className="text-sm text-slate-500">Ending in •••• {method.last4}</span>
-                          </div>
-                        </div>
+                  >
+                    <div className="flex items-center gap-4">
+                      <div className="rounded-lg border bg-white p-2 text-slate-600 shadow-sm">
+                        <CreditCard className="h-6 w-6" />
+                      </div>
+                      <div className="flex flex-col">
+                        <span className="font-semibold text-slate-900">{String(brandDisplay).charAt(0).toUpperCase() + String(brandDisplay).slice(1)}</span>
+                        <span className="text-sm text-slate-500">Ending in •••• {method.last4}</span>
+                      </div>
+                    </div>
                         <RadioGroupItem value={method.id} id={method.id} className="data-[state=checked]:border-emerald-500 data-[state=checked]:text-emerald-500" />
                       </Label>
                     );
