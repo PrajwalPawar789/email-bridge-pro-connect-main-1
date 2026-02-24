@@ -10,9 +10,18 @@
     "lint": "eslint .",
     "preview": "vite preview",
     "mailbox:server": "node server/mailbox-sync-server.js",
-    "dev:all": "concurrently \"npm:mailbox:server\" \"npm:dev\""
+    "dev:all": "concurrently \"npm:mailbox:server\" \"npm:dev\"",
+    "smoke:plan:free": "node scripts/smoke-plan-free.js",
+    "smoke:plan:growth": "node scripts/smoke-plan-growth.js",
+    "smoke:plan:scale": "node scripts/smoke-plan-scale.js",
+    "smoke:plan:enterprise": "node scripts/smoke-plan-enterprise.js",
+    "smoke:plan:all": "node scripts/smoke-plan-all.js",
+    "smoke:plan": "node scripts/smoke-plan-constraints.js"
   },
   "dependencies": {
+    "@dnd-kit/core": "^6.3.1",
+    "@dnd-kit/sortable": "^10.0.0",
+    "@dnd-kit/utilities": "^3.2.2",
     "@hookform/resolvers": "^3.9.0",
     "@radix-ui/react-accordion": "^1.2.0",
     "@radix-ui/react-alert-dialog": "^1.1.1",
@@ -45,6 +54,7 @@
     "@react-three/fiber": "^8.16.0",
     "@supabase/supabase-js": "^2.49.8",
     "@tanstack/react-query": "^5.56.2",
+    "@xyflow/react": "^12.10.1",
     "axios": "^1.13.2",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
@@ -76,7 +86,8 @@
     "three": "^0.181.2",
     "vaul": "^0.9.3",
     "xlsx": "^0.18.5",
-    "zod": "^3.23.8"
+    "zod": "^3.23.8",
+    "zustand": "^5.0.11"
   },
   "devDependencies": {
     "@eslint/js": "^9.9.0",

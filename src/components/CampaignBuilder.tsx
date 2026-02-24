@@ -20,6 +20,7 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 import { Separator } from "@/components/ui/separator";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from '@/components/ui/dialog';
 import { cn } from '@/lib/utils';
+import { getBillingSnapshot } from '@/lib/billing';
 import {
   ensureDefaultPipeline,
   fetchPipelineStages,
@@ -154,6 +155,17 @@ const renderPlainTextPreviewHtml = (value: string) => {
 };
 
 const looksLikeHtml = (value: string) => /<\s*[a-z][\w-]*(\s[^>]*)?>/i.test(value);
+
+const resolveCampaignErrorMessage = (error: any) => {
+  const message = String(error?.message || error?.details || '').trim();
+  if (message.toLowerCase().includes('campaign limit reached')) {
+    return message;
+  }
+  if (message.toLowerCase().includes('mailbox limit reached')) {
+    return message;
+  }
+  return message || 'Failed to create campaign';
+};
 
 const CampaignBuilder: React.FC<CampaignBuilderProps> = ({ emailConfigs }) => {
   const navigate = useNavigate();
@@ -434,6 +446,18 @@ const CampaignBuilder: React.FC<CampaignBuilderProps> = ({ emailConfigs }) => {
       const { data: { user } } = await supabase.auth.getUser();
       if (!user) throw new Error('Not authenticated');
 
+      const billingSnapshot = await getBillingSnapshot(user.id);
+      if (
+        billingSnapshot &&
+        !billingSnapshot.unlimited_campaigns &&
+        Number(billingSnapshot.campaign_limit || 0) > 0 &&
+        Number(billingSnapshot.campaigns_used || 0) >= Number(billingSnapshot.campaign_limit || 0)
+      ) {
+        throw new Error(
+          `Campaign limit reached for your current plan (${billingSnapshot.campaign_limit} campaigns). Upgrade to create more campaigns.`
+        );
+      }
+
       // Create campaign
       const { data: campaign, error: campaignError } = await supabase
         .from('campaigns')
@@ -682,16 +706,16 @@ const CampaignBuilder: React.FC<CampaignBuilderProps> = ({ emailConfigs }) => {
           stopOnNotInterested: true
         });
         setCurrentStep(1);
-    } catch (error: any) {
-      console.error('Error creating campaign:', error);
-      toast({
-        title: "Error",
-        description: error.message || "Failed to create campaign",
-        variant: "destructive",
-      });
-    } finally {
-      setLoading(false);
-    }
+      } catch (error: any) {
+        console.error('Error creating campaign:', error);
+        toast({
+          title: "Error",
+          description: resolveCampaignErrorMessage(error),
+          variant: "destructive",
+        });
+      } finally {
+        setLoading(false);
+      }
   };
 
   const renderStepIndicator = () => {

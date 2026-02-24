@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { Gift, User, LogOut, Search, Settings, CreditCard, Clock, Crown } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -10,7 +10,8 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import { Link, useNavigate } from 'react-router-dom';
+import { Link } from 'react-router-dom';
+import { BillingSnapshot, getBillingSnapshot, normalizePlanId } from '@/lib/billing';
 
 interface HeaderProps {
   user: any;
@@ -19,6 +20,87 @@ interface HeaderProps {
 }
 
 const Header = ({ user, onLogout, activeTab }: HeaderProps) => {
+  const [billingSnapshot, setBillingSnapshot] = useState<BillingSnapshot | null>(null);
+  const [loadingBillingSnapshot, setLoadingBillingSnapshot] = useState(false);
+
+  useEffect(() => {
+    const userId = user?.id as string | undefined;
+    if (!userId) {
+      setBillingSnapshot(null);
+      return;
+    }
+
+    let cancelled = false;
+    const load = async () => {
+      setLoadingBillingSnapshot(true);
+      try {
+        const snapshot = await getBillingSnapshot(userId);
+        if (!cancelled) {
+          setBillingSnapshot(snapshot);
+        }
+      } catch (error) {
+        console.error('Failed to load header billing snapshot:', error);
+        if (!cancelled) {
+          setBillingSnapshot(null);
+        }
+      } finally {
+        if (!cancelled) setLoadingBillingSnapshot(false);
+      }
+    };
+
+    void load();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [user?.id]);
+
+  const planBadge = useMemo(() => {
+    const snapshot = billingSnapshot;
+    if (!snapshot) {
+      return {
+        label: loadingBillingSnapshot ? 'Loading plan...' : 'Starter Trial',
+        badgeClass: 'text-slate-600',
+        progressClass: 'bg-slate-200'
+      };
+    }
+
+    const planId = normalizePlanId(snapshot.plan_id);
+    if (planId === 'enterprise') {
+      return {
+        label: `${snapshot.plan_name || 'Enterprise'} (Power)`,
+        badgeClass: 'text-amber-600',
+        progressClass: 'bg-amber-300'
+      };
+    }
+    if (planId === 'scale') {
+      return {
+        label: snapshot.plan_name || 'Scale',
+        badgeClass: 'text-indigo-600',
+        progressClass: 'bg-indigo-300'
+      };
+    }
+    if (planId === 'growth') {
+      return {
+        label: snapshot.plan_name || 'Growth',
+        badgeClass: 'text-emerald-600',
+        progressClass: 'bg-emerald-300'
+      };
+    }
+    return {
+      label: snapshot.plan_name || 'Starter Trial',
+      badgeClass: 'text-slate-600',
+      progressClass: 'bg-slate-300'
+    };
+  }, [billingSnapshot, loadingBillingSnapshot]);
+
+  const creditUsage = useMemo(() => {
+    const used = Number(billingSnapshot?.credits_used || 0);
+    const max = Number(billingSnapshot?.credits_in_period || 0);
+    const pct = max > 0 ? Math.min(100, Math.max(0, (used / max) * 100)) : 0;
+    return { used, max, pct };
+  }, [billingSnapshot]);
+
   const tabLabels: Record<string, string> = {
     home: 'Home',
     campaigns: 'Campaigns',
@@ -105,19 +187,32 @@ const Header = ({ user, onLogout, activeTab }: HeaderProps) => {
                   <div className="font-semibold">{(user?.user_metadata as any)?.first_name ? `${user.user_metadata.first_name} ${user.user_metadata.last_name || ''}` : (user?.email?.split('@')[0] || 'User')}</div>
                   <div className="text-xs text-slate-600">{user?.email}</div>
                 </div>
-                <div className="text-xs text-amber-600 font-semibold flex items-center gap-1">
+                <div className={`text-xs font-semibold flex items-center gap-1 ${planBadge.badgeClass}`}>
                   <Crown className="h-4 w-4" />
-                  <span>Enterprise Plan (Power)</span>
+                  <span>{planBadge.label}</span>
                 </div>
               </div>
 
               <div className="mt-3 text-xs text-slate-600 flex items-center justify-between">
-                <div>Daily Limit</div>
-                <div className="font-semibold text-amber-600">0/38,000</div>
+                <div>Credit Usage</div>
+                <div className={`font-semibold ${planBadge.badgeClass}`}>
+                  {creditUsage.used.toLocaleString()}/{creditUsage.max.toLocaleString()}
+                </div>
               </div>
               <div className="w-full bg-white rounded-full h-2 mt-2 overflow-hidden border border-white/30">
-                <div className="h-2 bg-amber-200" style={{ width: '0%' }} />
+                <div className={`h-2 ${planBadge.progressClass}`} style={{ width: `${creditUsage.pct}%` }} />
               </div>
+              {billingSnapshot && (
+                <div className="mt-2 text-[11px] text-slate-600 flex items-center justify-between">
+                  <span>Campaigns</span>
+                  <span className="font-semibold">
+                    {Number(billingSnapshot.campaigns_used || 0).toLocaleString()}
+                    {billingSnapshot.unlimited_campaigns
+                      ? ' / Unlimited'
+                      : ` / ${Number(billingSnapshot.campaign_limit || 0).toLocaleString()}`}
+                  </span>
+                </div>
+              )}
             </div>
 
             <div className="p-2">

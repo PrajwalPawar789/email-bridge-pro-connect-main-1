@@ -18,6 +18,9 @@ verify_jwt = false
 [functions.book-demo]
 verify_jwt = false
 
+[functions.automation-runner]
+verify_jwt = false
+
 [db]
 major_version = 15
 

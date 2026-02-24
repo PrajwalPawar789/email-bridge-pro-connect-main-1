@@ -138,6 +138,50 @@ const emailService = new EmailService({
   includeOriginalAttachments: REPLY_INCLUDE_ORIGINAL_ATTACHMENTS,
 });
 
+const parsedOutboundEmailCreditCost = Number.parseInt(process.env.OUTBOUND_EMAIL_CREDIT_COST || '1', 10);
+const OUTBOUND_EMAIL_CREDIT_COST = Number.isFinite(parsedOutboundEmailCreditCost) && parsedOutboundEmailCreditCost > 0
+  ? parsedOutboundEmailCreditCost
+  : 1;
+
+const consumeUserCredits = async (dbClient, userId, amount, eventType, referenceId, metadata = {}) => {
+  const { data, error } = await dbClient.rpc('consume_user_credits', {
+    p_amount: amount,
+    p_event_type: eventType,
+    p_reference_id: referenceId,
+    p_metadata: metadata,
+    p_user_id: userId,
+  });
+
+  if (error) {
+    throw new Error(error?.message || 'Failed to consume credits');
+  }
+
+  const row = Array.isArray(data) ? data[0] : data;
+  return {
+    allowed: Boolean(row?.allowed),
+    creditsRemaining: Number(row?.credits_remaining ?? 0),
+    message: String(row?.message || ''),
+  };
+};
+
+const refundUserCredits = async (dbClient, userId, amount, eventType, referenceId, metadata = {}) => {
+  const { data, error } = await dbClient.rpc('refund_user_credits', {
+    p_amount: amount,
+    p_event_type: eventType,
+    p_reference_id: referenceId,
+    p_metadata: metadata,
+    p_user_id: userId,
+  });
+
+  if (error) {
+    console.error('[billing] Credit refund failed:', error?.message || error);
+    return null;
+  }
+
+  const row = Array.isArray(data) ? data[0] : data;
+  return Number(row?.credits_remaining ?? NaN);
+};
+
 const buildImapClient = (config) => {
   const security = (config.security || 'SSL').toUpperCase();
   const secure = security !== 'NONE';
@@ -1811,14 +1855,54 @@ app.post('/api/inbox/messages/:id/reply', async (req, res) => {
       return res.status(400).json({ error: 'Reply body is required.' });
     }
 
-    const result = await emailService.sendReply({
-      config,
-      original: message,
-      payload: {
-        ...payload,
-        mode,
-      },
-    });
+    const creditReferenceId = `inbox-reply:${message.id}:${Date.now()}`;
+    const creditResult = await consumeUserCredits(
+      dbClient,
+      user.id,
+      OUTBOUND_EMAIL_CREDIT_COST,
+      'inbox_reply_send',
+      creditReferenceId,
+      {
+        source: 'inbox_reply',
+        message_id: message.id,
+        config_id: message.config_id,
+      }
+    );
+
+    if (!creditResult.allowed) {
+      return res.status(402).json({
+        error: creditResult.message || 'Insufficient credits',
+        creditsRemaining: creditResult.creditsRemaining,
+      });
+    }
+
+    let result;
+    try {
+      result = await emailService.sendReply({
+        config,
+        original: message,
+        payload: {
+          ...payload,
+          mode,
+        },
+      });
+    } catch (sendError) {
+      await refundUserCredits(
+        dbClient,
+        user.id,
+        OUTBOUND_EMAIL_CREDIT_COST,
+        'inbox_reply_refund',
+        creditReferenceId,
+        {
+          source: 'inbox_reply',
+          message_id: message.id,
+          config_id: message.config_id,
+          reason: 'send_failure',
+          error: sendError?.message || String(sendError),
+        }
+      );
+      throw sendError;
+    }
 
     const sentAt = new Date().toISOString();
     const sentRow = {
@@ -1893,18 +1977,57 @@ app.post('/api/inbox/compose', async (req, res) => {
       return res.status(400).json({ error: 'Message body is required.' });
     }
 
-    const result = await emailService.sendCompose({
-      config,
-      payload: {
-        subject: payload.subject,
-        text: payload.text,
-        html: payload.html,
-        to: payload.to,
-        cc: payload.cc,
-        bcc: payload.bcc,
-        attachments: payload.attachments,
-      },
-    });
+    const creditReferenceId = `inbox-compose:${config.id}:${Date.now()}`;
+    const creditResult = await consumeUserCredits(
+      dbClient,
+      user.id,
+      OUTBOUND_EMAIL_CREDIT_COST,
+      'inbox_compose_send',
+      creditReferenceId,
+      {
+        source: 'inbox_compose',
+        config_id: config.id,
+        subject: payload.subject || null,
+      }
+    );
+
+    if (!creditResult.allowed) {
+      return res.status(402).json({
+        error: creditResult.message || 'Insufficient credits',
+        creditsRemaining: creditResult.creditsRemaining,
+      });
+    }
+
+    let result;
+    try {
+      result = await emailService.sendCompose({
+        config,
+        payload: {
+          subject: payload.subject,
+          text: payload.text,
+          html: payload.html,
+          to: payload.to,
+          cc: payload.cc,
+          bcc: payload.bcc,
+          attachments: payload.attachments,
+        },
+      });
+    } catch (sendError) {
+      await refundUserCredits(
+        dbClient,
+        user.id,
+        OUTBOUND_EMAIL_CREDIT_COST,
+        'inbox_compose_refund',
+        creditReferenceId,
+        {
+          source: 'inbox_compose',
+          config_id: config.id,
+          reason: 'send_failure',
+          error: sendError?.message || String(sendError),
+        }
+      );
+      throw sendError;
+    }
 
     const sentAt = new Date().toISOString();
     const sentRow = {

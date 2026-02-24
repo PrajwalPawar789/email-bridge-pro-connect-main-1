@@ -16,6 +16,7 @@ import { Label } from '@/components/ui/label';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { toast } from '@/hooks/use-toast';
 import { ChevronDown, ChevronLeft, ChevronRight, Download, FileSpreadsheet, Loader2, MoreHorizontal, Search } from 'lucide-react';
+import { getBillingSnapshot, type BillingSnapshot } from '@/lib/billing';
 import {
   AlertDialog,
   AlertDialogAction,
@@ -158,10 +159,19 @@ const resolvePresetFromProvider = (value: string) => {
   return providerPresets.find((preset) => preset.id === normalized);
 };
 
+const resolveEmailConfigErrorMessage = (error: any) => {
+  const message = String(error?.message || error?.details || '').trim();
+  if (message.toLowerCase().includes('mailbox limit reached')) {
+    return message;
+  }
+  return message || 'Failed to save email configuration.';
+};
+
 const EmailConfig: React.FC<EmailConfigProps> = ({ onConfigAdded }) => {
   const [form, setForm] = useState<FormState>({ ...emptyForm });
   const [loading, setLoading] = useState(false);
   const [configs, setConfigs] = useState<any[]>([]);
+  const [billingSnapshot, setBillingSnapshot] = useState<BillingSnapshot | null>(null);
   const [showForm, setShowForm] = useState(false);
   const [activeConfig, setActiveConfig] = useState<any | null>(null);
   const [mode, setMode] = useState<'create' | 'edit'>('create');
@@ -184,25 +194,49 @@ const EmailConfig: React.FC<EmailConfigProps> = ({ onConfigAdded }) => {
     [form.smtp_host]
   );
 
+  const senderLimitReached = useMemo(() => {
+    if (!billingSnapshot || billingSnapshot.unlimited_mailboxes) return false;
+    const used = Number(billingSnapshot.mailboxes_used || 0);
+    const limit = Number(billingSnapshot.mailbox_limit || 0);
+    return limit > 0 && used >= limit;
+  }, [billingSnapshot]);
+
   const fetchConfigs = async () => {
     try {
       const { data: { user } } = await supabase.auth.getUser();
       if (!user) return;
 
-      const { data, error } = await supabase
-        .from('email_configs')
-        .select('*')
-        .eq('user_id', user.id)
-        .order('created_at', { ascending: false });
-      
+      const [configsResult, snapshot] = await Promise.all([
+        supabase
+          .from('email_configs')
+          .select('*')
+          .eq('user_id', user.id)
+          .order('created_at', { ascending: false }),
+        getBillingSnapshot(user.id),
+      ]);
+
+      const { data, error } = configsResult;
       if (error) throw error;
       setConfigs(data || []);
+      setBillingSnapshot(snapshot);
     } catch (error: any) {
       console.error('Error fetching configs:', error);
     }
   };
 
   const openCreateForm = () => {
+    if (senderLimitReached) {
+      toast({
+        title: 'Sender limit reached',
+        description:
+          billingSnapshot?.unlimited_mailboxes
+            ? 'Upgrade required to add more sender accounts.'
+            : `Mailbox limit reached for your current plan (${billingSnapshot?.mailbox_limit ?? 0} mailboxes). Upgrade to add more inboxes.`,
+        variant: 'destructive',
+      });
+      return;
+    }
+
     setMode('create');
     setActiveConfig(null);
     setForm({ ...emptyForm });
@@ -261,6 +295,18 @@ const EmailConfig: React.FC<EmailConfigProps> = ({ onConfigAdded }) => {
       if (!user) throw new Error('Not authenticated');
 
       if (mode === 'create') {
+        const snapshot = await getBillingSnapshot(user.id);
+        if (
+          snapshot &&
+          !snapshot.unlimited_mailboxes &&
+          Number(snapshot.mailbox_limit || 0) > 0 &&
+          Number(snapshot.mailboxes_used || 0) >= Number(snapshot.mailbox_limit || 0)
+        ) {
+          throw new Error(
+            `Mailbox limit reached for your current plan (${snapshot.mailbox_limit} mailboxes). Upgrade to add more inboxes.`
+          );
+        }
+
         const { error } = await supabase.from('email_configs').insert({
           user_id: user.id,
           sender_name: form.sender_name.trim(),
@@ -316,7 +362,7 @@ const EmailConfig: React.FC<EmailConfigProps> = ({ onConfigAdded }) => {
     } catch (error: any) {
       toast({
         title: 'Error',
-        description: error.message,
+        description: resolveEmailConfigErrorMessage(error),
         variant: 'destructive',
       });
     } finally {
@@ -675,6 +721,20 @@ const EmailConfig: React.FC<EmailConfigProps> = ({ onConfigAdded }) => {
                 <Badge className="border border-emerald-200 bg-emerald-50 text-emerald-700">
                   {configs.length.toLocaleString()} total
                 </Badge>
+                {billingSnapshot && (
+                  <Badge
+                    className={
+                      senderLimitReached
+                        ? 'border border-rose-200 bg-rose-50 text-rose-700'
+                        : 'border border-sky-200 bg-sky-50 text-sky-700'
+                    }
+                  >
+                    Senders: {Number(billingSnapshot.mailboxes_used || 0).toLocaleString()}
+                    {billingSnapshot.unlimited_mailboxes
+                      ? ' / Unlimited'
+                      : ` / ${Number(billingSnapshot.mailbox_limit || 0).toLocaleString()}`}
+                  </Badge>
+                )}
                 <Button
                   type="button"
                   variant="outline"
@@ -699,7 +759,7 @@ const EmailConfig: React.FC<EmailConfigProps> = ({ onConfigAdded }) => {
                   )}
                   {bulkImporting ? 'Importing...' : 'Bulk Upload Excel'}
                 </Button>
-                <Button onClick={openCreateForm} className="rounded-full shadow-sm">
+                <Button onClick={openCreateForm} className="rounded-full shadow-sm" disabled={senderLimitReached}>
                   Add email account
                 </Button>
               </div>
