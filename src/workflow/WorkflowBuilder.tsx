@@ -5,7 +5,7 @@ import type { Connection, Edge as FlowEdge, ReactFlowInstance } from "@xyflow/re
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { toast } from "@/hooks/use-toast";
-import type { AutomationDependencyData, AutomationStep } from "@/lib/automations";
+import type { AutomationDependencyData, AutomationStep, AutomationWorkflow } from "@/lib/automations";
 import WorkflowCanvas from "@/workflow/canvas/WorkflowCanvas";
 import { useWorkflowAutosave } from "@/workflow/hooks/useWorkflowAutosave";
 import { useWorkflowKeyboardShortcuts } from "@/workflow/hooks/useWorkflowKeyboardShortcuts";
@@ -30,6 +30,19 @@ interface WorkflowBuilderStatePayload {
   checklistPass: boolean;
 }
 
+export interface WorkflowWebhookSetup {
+  triggerType: AutomationWorkflow["trigger_type"];
+  enabled: boolean;
+  eventName: string;
+  secret: string;
+  endpoint: string;
+  samplePayload: string;
+  testing: boolean;
+  testStatus: "idle" | "success" | "error";
+  testMessage: string;
+  testedAt: string | null;
+}
+
 interface WorkflowBuilderProps {
   workflowId: string;
   initialGraph: WorkflowGraph;
@@ -38,6 +51,13 @@ interface WorkflowBuilderProps {
   runtimeEvents: WorkflowRuntimeEvent[];
   onPersist: (payload: WorkflowBuilderStatePayload) => Promise<void>;
   onStateChange?: (payload: WorkflowBuilderStatePayload) => void;
+  webhookSetup?: WorkflowWebhookSetup;
+  onWebhookEventNameChange?: (value: string) => void;
+  onWebhookSecretChange?: (value: string) => void;
+  onWebhookSecretRegenerate?: () => void;
+  onWebhookCopy?: (value: string, label: string) => void;
+  onWebhookTest?: () => void | Promise<void>;
+  onTriggerTypeChange?: (value: AutomationWorkflow["trigger_type"]) => void;
 }
 
 interface AddNodeOptions {
@@ -45,6 +65,8 @@ interface AddNodeOptions {
   sourceNodeId?: string | null;
   sourceHandle?: string | null;
 }
+
+type RightPanelTab = "library" | "inspector" | "insights";
 
 const GRID = 24;
 
@@ -305,6 +327,13 @@ const WorkflowBuilder = ({
   runtimeEvents,
   onPersist,
   onStateChange,
+  webhookSetup,
+  onWebhookEventNameChange,
+  onWebhookSecretChange,
+  onWebhookSecretRegenerate,
+  onWebhookCopy,
+  onWebhookTest,
+  onTriggerTypeChange,
 }: WorkflowBuilderProps) => {
   const graph = useWorkflowBuilderStore((state) => state.graph);
   const selectedNodeIds = useWorkflowBuilderStore((state) => state.selectedNodeIds);
@@ -335,6 +364,9 @@ const WorkflowBuilder = ({
   const [saving, setSaving] = useState(false);
   const [activeDragKind, setActiveDragKind] = useState<keyof typeof nodePluginMap | null>(null);
   const [insightsMode, setInsightsMode] = useState<"runtime" | "review">("review");
+  const [rightPanelTab, setRightPanelTab] = useState<RightPanelTab>("library");
+  const [rightPanelCompact, setRightPanelCompact] = useState(false);
+  const [rightPanelCompactTouched, setRightPanelCompactTouched] = useState(false);
   const [rightPanelCollapsed, setRightPanelCollapsed] = useState(false);
   const [rightPanelTouched, setRightPanelTouched] = useState(false);
   const flowRef = useRef<ReactFlowInstance | null>(null);
@@ -369,6 +401,26 @@ const WorkflowBuilder = ({
     mediaQuery.addListener(onChange);
     return () => mediaQuery.removeListener(onChange);
   }, [rightPanelTouched]);
+
+  useEffect(() => {
+    if (rightPanelCompactTouched || typeof window === "undefined") return;
+
+    const mediaQuery = window.matchMedia("(max-width: 1680px), (max-height: 980px)");
+    const apply = () => setRightPanelCompact(mediaQuery.matches);
+    apply();
+
+    const onChange = (event: MediaQueryListEvent) => {
+      setRightPanelCompact(event.matches);
+    };
+
+    if (typeof mediaQuery.addEventListener === "function") {
+      mediaQuery.addEventListener("change", onChange);
+      return () => mediaQuery.removeEventListener("change", onChange);
+    }
+
+    mediaQuery.addListener(onChange);
+    return () => mediaQuery.removeListener(onChange);
+  }, [rightPanelCompactTouched]);
 
   useEffect(() => {
     if (mountedWorkflowId.current === workflowId) return;
@@ -408,7 +460,7 @@ const WorkflowBuilder = ({
         checklistPass,
       });
       markSaved();
-      setOverlayErrors(compile.errors);
+      setOverlayErrors([]);
     } finally {
       setSaving(false);
     }
@@ -470,6 +522,11 @@ const WorkflowBuilder = ({
   );
 
   const selectedNodeId = selectedNodeIds[0] || null;
+
+  useEffect(() => {
+    if (!selectedNodeId) return;
+    setRightPanelTab((current) => (current === "library" ? "inspector" : current));
+  }, [selectedNodeId]);
 
   const handleAddNode = useCallback(
     (kind: keyof typeof nodePluginMap, options?: AddNodeOptions) => {
@@ -594,18 +651,33 @@ const WorkflowBuilder = ({
     (patch: Record<string, unknown>) => {
       if (!selectedNodeId) return;
       updateNodeConfig(selectedNodeId, patch);
+
+      if (!selectedNode || selectedNode.kind !== "trigger") return;
+
+      const triggerType = typeof patch.triggerType === "string" ? patch.triggerType : null;
+      if (triggerType === "custom_event" || triggerType === "list_joined" || triggerType === "manual") {
+        onTriggerTypeChange?.(triggerType);
+        if (triggerType !== "custom_event") {
+          onWebhookEventNameChange?.("");
+        }
+      }
+
+      if (typeof patch.eventName === "string") {
+        onWebhookEventNameChange?.(patch.eventName);
+      }
     },
-    [selectedNodeId, updateNodeConfig]
+    [onTriggerTypeChange, onWebhookEventNameChange, selectedNode, selectedNodeId, updateNodeConfig]
   );
 
   const handleInspectorTestSend = useCallback(() => {
     toast({ title: "Test send queued", description: "Sample test send endpoint can be wired from this hook." });
   }, []);
 
-  const allErrors = useMemo(
-    () => Array.from(new Set([...compile.errors, ...overlayErrors])),
-    [compile.errors, overlayErrors]
-  );
+  const handleInspectorWebhookTest = useCallback(() => {
+    void onWebhookTest?.();
+  }, [onWebhookTest]);
+
+  const allErrors = useMemo(() => Array.from(new Set(overlayErrors)), [overlayErrors]);
   const hasSelection = selectedNodeIds.length > 0 || selectedEdgeIds.length > 0;
   const dragPlugin = activeDragKind ? nodePluginMap[activeDragKind] : null;
 
@@ -623,6 +695,38 @@ const WorkflowBuilder = ({
         </div>
       ) : null}
     </DragOverlay>
+  );
+
+  const insightsSection = (
+    <section className="min-h-0 rounded-xl border border-slate-200 bg-white p-2">
+      <div className="mb-2 grid grid-cols-2 gap-1 rounded-md bg-slate-100 p-1">
+        <button
+          type="button"
+          onClick={() => setInsightsMode("review")}
+          className={`h-8 rounded text-xs font-medium transition-colors ${
+            insightsMode === "review" ? "bg-white text-slate-900 shadow-sm" : "text-slate-600"
+          }`}
+        >
+          Review
+        </button>
+        <button
+          type="button"
+          onClick={() => setInsightsMode("runtime")}
+          className={`h-8 rounded text-xs font-medium transition-colors ${
+            insightsMode === "runtime" ? "bg-white text-slate-900 shadow-sm" : "text-slate-600"
+          }`}
+        >
+          Runtime
+        </button>
+      </div>
+      <div className="h-[calc(100%-42px)]">
+        {insightsMode === "review" ? (
+          <WorkflowReviewChecklist items={checklist} compact />
+        ) : (
+          <WorkflowRuntimePanel events={runtime} compact />
+        )}
+      </div>
+    </section>
   );
 
   return (
@@ -685,6 +789,17 @@ const WorkflowBuilder = ({
                 size="sm"
                 variant="outline"
                 onClick={() => {
+                  setRightPanelCompactTouched(true);
+                  setRightPanelCompact((value) => !value);
+                }}
+              >
+                {rightPanelCompact ? "Split sidebar" : "Single sidebar"}
+              </Button>
+              <Button
+                type="button"
+                size="sm"
+                variant="outline"
+                onClick={() => {
                   setRightPanelTouched(true);
                   setRightPanelCollapsed((value) => !value);
                 }}
@@ -699,7 +814,7 @@ const WorkflowBuilder = ({
 
           <div
             className={`mt-2 grid h-[calc(100vh-280px)] min-h-[720px] gap-2 ${
-              rightPanelCollapsed ? "grid-cols-1" : "grid-cols-[minmax(0,1fr)_320px]"
+              rightPanelCollapsed ? "grid-cols-1" : "grid-cols-[minmax(0,1fr)_minmax(320px,360px)]"
             }`}
           >
             <div className="relative min-h-0 rounded-xl border border-slate-200 bg-white p-2">
@@ -735,48 +850,93 @@ const WorkflowBuilder = ({
             </div>
 
             {!rightPanelCollapsed ? (
-              <aside className="grid min-h-0 grid-rows-[300px_minmax(0,1fr)_240px] gap-2">
-                <WorkflowBlockLibrary
-                  onQuickAdd={(kind) => handleAddNode(kind, { sourceNodeId: selectedNodeId })}
-                />
-                <WorkflowInspector
-                  node={selectedNode}
-                  dependencies={dependencies}
-                  onChangeTitle={handleInspectorTitleChange}
-                  onChangeStatus={handleInspectorStatusChange}
-                  onPatchConfig={handleInspectorConfigChange}
-                  onTestSend={handleInspectorTestSend}
-                />
-                <section className="min-h-0 rounded-xl border border-slate-200 bg-white p-2">
-                  <div className="mb-2 grid grid-cols-2 gap-1 rounded-md bg-slate-100 p-1">
-                    <button
-                      type="button"
-                      onClick={() => setInsightsMode("review")}
-                      className={`h-8 rounded text-xs font-medium transition-colors ${
-                        insightsMode === "review" ? "bg-white text-slate-900 shadow-sm" : "text-slate-600"
-                      }`}
-                    >
-                      Review
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => setInsightsMode("runtime")}
-                      className={`h-8 rounded text-xs font-medium transition-colors ${
-                        insightsMode === "runtime" ? "bg-white text-slate-900 shadow-sm" : "text-slate-600"
-                      }`}
-                    >
-                      Runtime
-                    </button>
+              rightPanelCompact ? (
+                <aside className="grid min-h-0 grid-rows-[auto_minmax(0,1fr)] gap-2">
+                  <section className="rounded-xl border border-slate-200 bg-white p-2">
+                    <div className="mb-1 flex items-center justify-between gap-2">
+                      <p className="text-xs font-semibold uppercase tracking-[0.12em] text-slate-500">Sidebar</p>
+                      <p className="text-[11px] text-slate-500">
+                        {selectedNode ? `Selected: ${selectedNode.title}` : "No node selected"}
+                      </p>
+                    </div>
+                    <div className="grid grid-cols-3 gap-1 rounded-md bg-slate-100 p-1">
+                      <button
+                        type="button"
+                        onClick={() => setRightPanelTab("library")}
+                        className={`h-8 rounded text-xs font-medium transition-colors ${
+                          rightPanelTab === "library" ? "bg-white text-slate-900 shadow-sm" : "text-slate-600"
+                        }`}
+                      >
+                        Blocks
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setRightPanelTab("inspector")}
+                        className={`h-8 rounded text-xs font-medium transition-colors ${
+                          rightPanelTab === "inspector" ? "bg-white text-slate-900 shadow-sm" : "text-slate-600"
+                        }`}
+                      >
+                        Inspector
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setRightPanelTab("insights")}
+                        className={`h-8 rounded text-xs font-medium transition-colors ${
+                          rightPanelTab === "insights" ? "bg-white text-slate-900 shadow-sm" : "text-slate-600"
+                        }`}
+                      >
+                        Insights
+                      </button>
+                    </div>
+                  </section>
+
+                  <div className="min-h-0">
+                    {rightPanelTab === "library" ? (
+                      <WorkflowBlockLibrary
+                        onQuickAdd={(kind) => handleAddNode(kind, { sourceNodeId: selectedNodeId })}
+                      />
+                    ) : null}
+                    {rightPanelTab === "inspector" ? (
+                      <WorkflowInspector
+                        node={selectedNode}
+                        dependencies={dependencies}
+                        onChangeTitle={handleInspectorTitleChange}
+                        onChangeStatus={handleInspectorStatusChange}
+                        onPatchConfig={handleInspectorConfigChange}
+                        onTestSend={handleInspectorTestSend}
+                        webhookSetup={webhookSetup}
+                        onWebhookEventNameChange={onWebhookEventNameChange}
+                        onWebhookSecretChange={onWebhookSecretChange}
+                        onWebhookSecretRegenerate={onWebhookSecretRegenerate}
+                        onWebhookCopy={onWebhookCopy}
+                        onWebhookTest={handleInspectorWebhookTest}
+                      />
+                    ) : null}
+                    {rightPanelTab === "insights" ? insightsSection : null}
                   </div>
-                  <div className="h-[calc(100%-42px)]">
-                    {insightsMode === "review" ? (
-                      <WorkflowReviewChecklist items={checklist} compact />
-                    ) : (
-                      <WorkflowRuntimePanel events={runtime} compact />
-                    )}
-                  </div>
-                </section>
-              </aside>
+                </aside>
+              ) : (
+                <aside className="grid min-h-0 grid-rows-[260px_minmax(0,1fr)_200px] gap-2">
+                  <WorkflowBlockLibrary
+                    onQuickAdd={(kind) => handleAddNode(kind, { sourceNodeId: selectedNodeId })}
+                  />
+                  <WorkflowInspector
+                    node={selectedNode}
+                    dependencies={dependencies}
+                    onChangeTitle={handleInspectorTitleChange}
+                    onChangeStatus={handleInspectorStatusChange}
+                    onPatchConfig={handleInspectorConfigChange}
+                    onTestSend={handleInspectorTestSend}
+                    webhookSetup={webhookSetup}
+                    onWebhookEventNameChange={onWebhookEventNameChange}
+                    onWebhookSecretChange={onWebhookSecretChange}
+                    onWebhookSecretRegenerate={onWebhookSecretRegenerate}
+                    onWebhookCopy={onWebhookCopy}
+                    onWebhookTest={handleInspectorWebhookTest}
+                  />
+                  {insightsSection}
+                </aside>
+              )
             ) : null}
           </div>
         </div>

@@ -63,6 +63,10 @@ export const createDefaultNodeConfig = <K extends WorkflowNodeKind>(kind: K): Wo
       url: "https://api.example.com/webhook",
       method: "POST",
       payloadTemplate: "{\"email\":\"{email}\"}",
+      authType: "none",
+      authToken: "",
+      authHeader: "x-api-key",
+      timeoutMs: 12000,
     } as WorkflowNodeConfigByKind[K];
   }
 

@@ -2,10 +2,16 @@
 import { createClient } from '@supabase/supabase-js';
 import type { Database } from './types';
 
-const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL;
+const RAW_SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL;
 const SUPABASE_PUBLISHABLE_KEY = import.meta.env.VITE_SUPABASE_ANON_KEY;
+const USE_DEV_PROXY = import.meta.env.DEV && import.meta.env.VITE_SUPABASE_DEV_PROXY !== 'false';
 
-if (!SUPABASE_URL || !SUPABASE_PUBLISHABLE_KEY) {
+const SUPABASE_URL = USE_DEV_PROXY
+  ? import.meta.env.VITE_SUPABASE_DEV_PROXY_URL ||
+    `${typeof window !== 'undefined' ? window.location.origin : 'http://localhost:8080'}/__supabase`
+  : RAW_SUPABASE_URL;
+
+if (!RAW_SUPABASE_URL || !SUPABASE_PUBLISHABLE_KEY) {
   throw new Error('Missing VITE_SUPABASE_URL or VITE_SUPABASE_ANON_KEY in .env');
 }
 

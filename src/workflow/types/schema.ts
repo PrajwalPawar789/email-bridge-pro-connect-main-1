@@ -56,8 +56,13 @@ export interface SplitNodeConfig {
 
 export interface WebhookNodeConfig {
   url: string;
-  method: "GET" | "POST";
+  method: "GET" | "POST" | "PUT" | "PATCH" | "DELETE" | "HEAD";
   payloadTemplate?: string;
+  headers?: Record<string, string>;
+  authType?: "none" | "bearer" | "api_key";
+  authToken?: string;
+  authHeader?: string;
+  timeoutMs?: number;
 }
 
 export interface ExitNodeConfig {

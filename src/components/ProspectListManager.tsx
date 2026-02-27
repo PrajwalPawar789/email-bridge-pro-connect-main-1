@@ -54,6 +54,7 @@ import { Badge } from "@/components/ui/badge";
 import { Separator } from "@/components/ui/separator";
 import * as XLSX from "xlsx";
 import { useAuth } from "@/providers/AuthProvider";
+import { runAutomationRunner } from "@/lib/automations";
 
 interface Prospect {
   id: string;
@@ -75,6 +76,12 @@ interface EmailList {
   created_at: string;
   count?: number; // Optional count for UI
 }
+
+type AutomationKickoffResult = {
+  matchedWorkflows: number;
+  triggered: number;
+  failed: number;
+};
 
 const ProspectShell = ({ children }: { children: React.ReactNode }) => (
   <div className="relative -my-8 min-h-[calc(100vh-4rem)] bg-[var(--shell-bg)] text-[var(--shell-ink)]">
@@ -370,6 +377,59 @@ const ProspectListManager: React.FC = () => {
     }
   };
 
+  const kickoffListAutomations = async (listId: string): Promise<AutomationKickoffResult> => {
+    const emptyResult: AutomationKickoffResult = {
+      matchedWorkflows: 0,
+      triggered: 0,
+      failed: 0,
+    };
+
+    if (!listId || !user?.id) return emptyResult;
+
+    try {
+      const { data: workflows, error } = await supabase
+        .from("automation_workflows")
+        .select("id")
+        .eq("user_id", user.id)
+        .eq("trigger_type", "list_joined")
+        .eq("trigger_list_id", listId)
+        .eq("status", "live");
+
+      if (error) {
+        console.warn("Failed to query workflows for automation kickoff:", error.message);
+        return emptyResult;
+      }
+
+      const workflowIds = (workflows || [])
+        .map((workflow: { id: string }) => workflow.id)
+        .filter(Boolean);
+
+      if (workflowIds.length === 0) return emptyResult;
+
+      const kickoffResults = await Promise.all(
+        workflowIds.map(async (workflowId) => {
+          try {
+            await runAutomationRunner("run_now", workflowId);
+            return true;
+          } catch (runnerError) {
+            console.warn(`Failed to run workflow ${workflowId} after list update:`, runnerError);
+            return false;
+          }
+        })
+      );
+
+      const triggered = kickoffResults.filter(Boolean).length;
+      return {
+        matchedWorkflows: workflowIds.length,
+        triggered,
+        failed: workflowIds.length - triggered,
+      };
+    } catch (error) {
+      console.warn("Unexpected automation kickoff error:", error);
+      return emptyResult;
+    }
+  };
+
   const handleAddProspect = async () => {
     if (!selectedList) return;
     if (!newProspectForm.email || !newProspectForm.name) {
@@ -433,6 +493,8 @@ const ProspectListManager: React.FC = () => {
         .insert({ list_id: selectedList.id, prospect_id: prospect.id });
 
       if (!linkError) {
+        const kickoffResult = await kickoffListAutomations(selectedList.id);
+
         toast({ title: "Success", description: "Prospect added to list." });
         setNewProspectForm({ name: "", email: "", company: "", job_title: "", phone: "", sender_name: "", sender_email: "", country: "", industry: "" });
         setIsAddProspectOpen(false);
@@ -459,6 +521,14 @@ const ProspectListManager: React.FC = () => {
             if (prev.some((p) => p.id === newProspect.id)) return prev;
             const next = [newProspect, ...prev];
             return next.slice(0, pageSize);
+          });
+        }
+
+        if (kickoffResult.failed > 0) {
+          toast({
+            title: "Automation warning",
+            description: `Added to list, but ${kickoffResult.failed} workflow run(s) failed. Check Automations logs.`,
+            variant: "destructive",
           });
         }
       } else {
@@ -706,6 +776,7 @@ const ProspectListManager: React.FC = () => {
         let successCount = 0;
         let errorCount = 0;
         let skippedCount = 0;
+        let linkedCount = 0;
         let columnMismatchCount = 0;
 
         // Process rows
@@ -840,6 +911,7 @@ const ProspectListManager: React.FC = () => {
 
               if (!linkError) {
                 successCount++;
+                linkedCount++;
                 console.log('Successfully linked prospect to list');
               } else {
                 console.error('Error linking prospect to list:', linkError);
@@ -852,6 +924,11 @@ const ProspectListManager: React.FC = () => {
         }
 
         setImportResults({ success: successCount, errors: errorCount, skipped: skippedCount });
+
+        let kickoffResult: AutomationKickoffResult = { matchedWorkflows: 0, triggered: 0, failed: 0 };
+        if (linkedCount > 0) {
+          kickoffResult = await kickoffListAutomations(selectedList.id);
+        }
         
         console.log('Import completed:', { successCount, errorCount, skippedCount, columnMismatchCount });
         
@@ -867,6 +944,14 @@ const ProspectListManager: React.FC = () => {
         } else {
           toast({ title: "Import Warning", description: "No new prospects were added. All prospects may already exist in this list.", variant: "destructive" });
           // Keep dialog open so user can see the results and try again
+        }
+
+        if (kickoffResult.failed > 0) {
+          toast({
+            title: "Automation warning",
+            description: `Imported prospects, but ${kickoffResult.failed} workflow run(s) failed. Check Automations logs.`,
+            variant: "destructive",
+          });
         }
       } catch (err: any) {
         console.error(err);

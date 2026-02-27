@@ -19,7 +19,20 @@ export const buildPublishChecklist = (graph: WorkflowGraph): WorkflowReviewItem[
     return expectedBranches.some((branch) => !outgoing.some((edge) => edge.sourceHandle === branch.handle));
   });
 
-  const unsupported = graph.nodes.filter((node) => node.kind === "split" || node.kind === "webhook");
+  const webhookNodes = graph.nodes.filter((node) => node.kind === "webhook");
+  const invalidWebhookNodes = webhookNodes.filter((node) => {
+    const config = node.config as Record<string, unknown>;
+    const rawUrl = String(config.url || "").trim();
+    if (!rawUrl) return true;
+    try {
+      new URL(rawUrl);
+      return false;
+    } catch {
+      return true;
+    }
+  });
+
+  const unsupported = graph.nodes.filter((node) => node.kind === "split");
 
   const disconnected = graph.nodes.filter((node) => {
     if (node.kind === "trigger") return false;
@@ -61,6 +74,15 @@ export const buildPublishChecklist = (graph: WorkflowGraph): WorkflowReviewItem[
           : `${invalidConditions.length} condition block(s) are missing one or more branch connections.`,
     },
     {
+      id: "webhooks",
+      label: "Webhook blocks have a valid URL",
+      pass: invalidWebhookNodes.length === 0,
+      detail:
+        invalidWebhookNodes.length === 0
+          ? "Ready"
+          : `${invalidWebhookNodes.length} webhook block(s) need a valid URL.`,
+    },
+    {
       id: "connections",
       label: "All non-trigger nodes are connected",
       pass: disconnected.length === 0,
@@ -80,12 +102,12 @@ export const buildPublishChecklist = (graph: WorkflowGraph): WorkflowReviewItem[
     },
     {
       id: "runner",
-      label: "Runner-compatible blocks only (email/wait/condition/exit)",
+      label: "Runner-compatible blocks only (split still pending support)",
       pass: unsupported.length === 0,
       detail:
         unsupported.length === 0
           ? "Ready"
-          : `${unsupported.length} block(s) need runner support before publish (split/webhook).`,
+          : `${unsupported.length} split block(s) need runner support before publish.`,
     },
   ];
 

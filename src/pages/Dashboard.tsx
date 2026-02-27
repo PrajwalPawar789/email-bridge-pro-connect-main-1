@@ -7,6 +7,7 @@ import CampaignBuilder from '@/components/CampaignBuilder';
 import TemplateManager from '@/components/TemplateManager';
 import Mailbox from '@/components/Mailbox';
 import ProspectListManager from '@/components/ProspectListManager';
+import SegmentManager from '@/components/SegmentManager';
 import EmailAnalyticsDashboard from '@/components/EmailAnalyticsDashboard';
 import Integrations from '@/pages/Integrations';
 import { toast } from '@/hooks/use-toast';
@@ -134,7 +135,7 @@ const Dashboard = () => {
     contacts: <ProspectListManager />,
     integrations: <Integrations />,
     automations: comingSoon('Automations'),
-    segments: comingSoon('Segments'),
+    segments: <SegmentManager />,
     connect: comingSoon('Connect site')
   };
 

@@ -26,6 +26,23 @@ interface WorkflowInspectorProps {
   onPatchConfig: (patch: Record<string, unknown>) => void;
   onTestSend: () => void;
   compact?: boolean;
+  webhookSetup?: {
+    triggerType: "list_joined" | "manual" | "custom_event";
+    enabled: boolean;
+    eventName: string;
+    secret: string;
+    endpoint: string;
+    samplePayload: string;
+    testing: boolean;
+    testStatus: "idle" | "success" | "error";
+    testMessage: string;
+    testedAt: string | null;
+  };
+  onWebhookEventNameChange?: (value: string) => void;
+  onWebhookSecretChange?: (value: string) => void;
+  onWebhookSecretRegenerate?: () => void;
+  onWebhookCopy?: (value: string, label: string) => void;
+  onWebhookTest?: () => void;
 }
 
 const statusOptions: Array<WorkflowNode["status"]> = ["draft", "live", "error"];
@@ -38,6 +55,12 @@ const WorkflowInspector = ({
   onPatchConfig,
   onTestSend,
   compact = false,
+  webhookSetup,
+  onWebhookEventNameChange,
+  onWebhookSecretChange,
+  onWebhookSecretRegenerate,
+  onWebhookCopy,
+  onWebhookTest,
 }: WorkflowInspectorProps) => {
   const [emailEditorMode, setEmailEditorMode] = useState<"compose" | "preview">("compose");
 
@@ -53,6 +76,10 @@ const WorkflowInspector = ({
   const plugin = nodePluginMap[node.kind];
   const config = (node.config || {}) as Record<string, unknown>;
   const conditionConfig = node.kind === "condition" ? normalizeConditionConfig(config) : null;
+  const triggerTypeValue =
+    node.kind === "trigger"
+      ? String(webhookSetup?.triggerType || config.triggerType || "list_joined")
+      : "";
 
   const preview =
     node.kind === "send_email"
@@ -108,7 +135,7 @@ const WorkflowInspector = ({
             <div className="space-y-3">
               <Label>Trigger type</Label>
               <Select
-                value={String(config.triggerType || "list_joined")}
+                value={triggerTypeValue}
                 onValueChange={(value) => onPatchConfig({ triggerType: value })}
               >
                 <SelectTrigger>
@@ -139,14 +166,101 @@ const WorkflowInspector = ({
                 </SelectContent>
               </Select>
 
-              {String(config.triggerType) === "custom_event" ? (
-                <div className="space-y-2">
-                  <Label>Event name</Label>
-                  <Input
-                    value={String(config.eventName || "")}
-                    onChange={(event) => onPatchConfig({ eventName: event.target.value })}
-                    placeholder="account_activated"
-                  />
+              {triggerTypeValue === "custom_event" ? (
+                <div className="space-y-3">
+                  <div className="space-y-2">
+                    <Label>Event name</Label>
+                    <Input
+                      value={String(webhookSetup?.eventName || config.eventName || "")}
+                      onChange={(event) => onPatchConfig({ eventName: event.target.value })}
+                      placeholder="account_activated"
+                    />
+                  </div>
+
+                  {webhookSetup?.enabled ? (
+                    <div className="space-y-3 rounded-lg border border-cyan-200 bg-cyan-50/60 p-2.5">
+                      <p className="text-[11px] font-semibold uppercase tracking-[0.12em] text-cyan-700">
+                        Webhook Trigger Setup
+                      </p>
+
+                      <div className="space-y-2">
+                        <Label>Webhook secret</Label>
+                        <div className="flex gap-2">
+                          <Input
+                            value={webhookSetup.secret}
+                            onChange={(event) => onWebhookSecretChange?.(event.target.value.trim())}
+                            placeholder="whsec_..."
+                            readOnly={!onWebhookSecretChange}
+                          />
+                          <Button
+                            type="button"
+                            variant="outline"
+                            onClick={onWebhookSecretRegenerate}
+                            disabled={!onWebhookSecretRegenerate}
+                          >
+                            Regenerate
+                          </Button>
+                          <Button
+                            type="button"
+                            variant="outline"
+                            onClick={() => onWebhookCopy?.(webhookSetup.secret, "Webhook secret")}
+                            disabled={!webhookSetup.secret || !onWebhookCopy}
+                          >
+                            Copy
+                          </Button>
+                        </div>
+                      </div>
+
+                      <div className="space-y-2">
+                        <Label>Webhook endpoint</Label>
+                        <div className="flex gap-2">
+                          <Input
+                            readOnly
+                            className="font-mono text-xs"
+                            value={
+                              webhookSetup.endpoint ||
+                              "Set VITE_SUPABASE_URL and save workflow to use webhook endpoint."
+                            }
+                          />
+                          <Button
+                            type="button"
+                            variant="outline"
+                            onClick={() => onWebhookCopy?.(webhookSetup.endpoint, "Webhook URL")}
+                            disabled={!webhookSetup.endpoint || !onWebhookCopy}
+                          >
+                            Copy URL
+                          </Button>
+                        </div>
+                      </div>
+
+                      <div className="space-y-2">
+                        <Label>Sample JSON payload</Label>
+                        <Textarea readOnly value={webhookSetup.samplePayload} className="min-h-[100px] font-mono text-xs" />
+                      </div>
+
+                      <div className="flex flex-wrap items-center gap-2">
+                        <Button
+                          type="button"
+                          variant="outline"
+                          onClick={onWebhookTest}
+                          disabled={!onWebhookTest || !webhookSetup.endpoint || webhookSetup.testing}
+                        >
+                          {webhookSetup.testing ? "Testing..." : "Test webhook"}
+                        </Button>
+
+                        {webhookSetup.testStatus !== "idle" ? (
+                          <p
+                            className={cn(
+                              "text-xs",
+                              webhookSetup.testStatus === "success" ? "text-emerald-700" : "text-rose-700"
+                            )}
+                          >
+                            {webhookSetup.testMessage}
+                          </p>
+                        ) : null}
+                      </div>
+                    </div>
+                  ) : null}
                 </div>
               ) : null}
             </div>
@@ -503,9 +617,49 @@ const WorkflowInspector = ({
                   <SelectContent>
                     <SelectItem value="POST">POST</SelectItem>
                     <SelectItem value="GET">GET</SelectItem>
+                    <SelectItem value="PUT">PUT</SelectItem>
+                    <SelectItem value="PATCH">PATCH</SelectItem>
+                    <SelectItem value="DELETE">DELETE</SelectItem>
+                    <SelectItem value="HEAD">HEAD</SelectItem>
                   </SelectContent>
                 </Select>
               </div>
+
+              <div className="space-y-2">
+                <Label>Auth</Label>
+                <Select value={String(config.authType || "none")} onValueChange={(value) => onPatchConfig({ authType: value })}>
+                  <SelectTrigger>
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="none">None</SelectItem>
+                    <SelectItem value="bearer">Bearer token</SelectItem>
+                    <SelectItem value="api_key">API key header</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+
+              {String(config.authType || "none") !== "none" ? (
+                <div className="space-y-2">
+                  <Label>{String(config.authType || "none") === "api_key" ? "API key" : "Bearer token"}</Label>
+                  <Input
+                    value={String(config.authToken || "")}
+                    onChange={(event) => onPatchConfig({ authToken: event.target.value })}
+                    placeholder="Paste secret token"
+                  />
+                </div>
+              ) : null}
+
+              {String(config.authType || "none") === "api_key" ? (
+                <div className="space-y-2">
+                  <Label>API key header</Label>
+                  <Input
+                    value={String(config.authHeader || "x-api-key")}
+                    onChange={(event) => onPatchConfig({ authHeader: event.target.value })}
+                    placeholder="x-api-key"
+                  />
+                </div>
+              ) : null}
 
               <div className="space-y-2">
                 <Label>Payload template</Label>
@@ -513,6 +667,17 @@ const WorkflowInspector = ({
                   className="min-h-[100px]"
                   value={String(config.payloadTemplate || "")}
                   onChange={(event) => onPatchConfig({ payloadTemplate: event.target.value })}
+                />
+              </div>
+
+              <div className="space-y-2">
+                <Label>Timeout (ms)</Label>
+                <Input
+                  type="number"
+                  min={1000}
+                  max={30000}
+                  value={String(config.timeoutMs || 12000)}
+                  onChange={(event) => onPatchConfig({ timeoutMs: Number(event.target.value || 12000) })}
                 />
               </div>
             </div>
