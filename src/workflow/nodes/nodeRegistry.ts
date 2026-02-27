@@ -103,7 +103,7 @@ export const nodePlugins: NodePlugin[] = [
     description: "Notify external systems in real time.",
     icon: Webhook,
     toneClass: "from-teal-500/20 to-teal-100/80 border-teal-300",
-    supportsRunner: false,
+    supportsRunner: true,
     ports: [
       { id: "in", type: "target", position: Position.Top },
       { id: "out", type: "source", position: Position.Bottom },

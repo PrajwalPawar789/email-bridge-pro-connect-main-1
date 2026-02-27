@@ -66,7 +66,12 @@ import { normalizeGraph } from "@/workflow/utils/graph";
 import { canPublishWorkflow } from "@/workflow/utils/review";
 import type { WorkflowGraph, WorkflowRuntimeEvent } from "@/workflow/types/schema";
 
-const emptyDependencies: AutomationDependencyData = { emailLists: [], emailTemplates: [], emailConfigs: [] };
+const emptyDependencies: AutomationDependencyData = {
+  emailLists: [],
+  contactSegments: [],
+  emailTemplates: [],
+  emailConfigs: [],
+};
 const emptyStats: AutomationContactStats = { total: 0, active: 0, completed: 0, failed: 0, due: 0 };
 
 const statusTone: Record<AutomationWorkflow["status"], string> = {
@@ -81,6 +86,12 @@ type BuilderPayload = {
   compiledFlow: AutomationStep[];
   compileErrors: string[];
   checklistPass: boolean;
+};
+
+type WebhookTestState = {
+  status: "idle" | "running" | "success" | "error";
+  message: string;
+  testedAt: string | null;
 };
 
 const formatDate = (value: string | null | undefined) => {
@@ -105,6 +116,35 @@ const getErrorMessage = (error: unknown) => {
 const toObject = (value: unknown): Record<string, unknown> => {
   if (!value || typeof value !== "object" || Array.isArray(value)) return {};
   return value as Record<string, unknown>;
+};
+
+const triggerTypeLabel = (triggerType: AutomationWorkflow["trigger_type"]) => {
+  if (triggerType === "list_joined") return "List trigger";
+  if (triggerType === "custom_event") return "Webhook trigger";
+  return "Manual trigger";
+};
+
+const generateWebhookSecret = () => {
+  const randomValue =
+    typeof crypto !== "undefined" && typeof crypto.randomUUID === "function"
+      ? crypto.randomUUID().replace(/-/g, "")
+      : `${Math.random().toString(36).slice(2)}${Date.now().toString(36)}`;
+  return `whsec_${randomValue.slice(0, 36)}`;
+};
+
+const buildWebhookEndpoint = (
+  workflowId: string,
+  secret: string,
+  eventName: string
+) => {
+  const baseUrl = String(import.meta.env.VITE_SUPABASE_URL || "").trim();
+  if (!baseUrl || !workflowId) return "";
+
+  const params = new URLSearchParams({ workflowId });
+  if (secret) params.set("secret", secret);
+  if (eventName) params.set("event", eventName);
+
+  return `${baseUrl.replace(/\/+$/, "")}/functions/v1/automation-webhook?${params.toString()}`;
 };
 
 const getTemplatePreviewGraph = (template: AutomationWorkflowTemplate): WorkflowGraph => {
@@ -136,6 +176,11 @@ const Automations = () => {
   const [billingCredits, setBillingCredits] = useState<number | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const [builderPayload, setBuilderPayload] = useState<BuilderPayload | null>(null);
+  const [webhookTestState, setWebhookTestState] = useState<WebhookTestState>({
+    status: "idle",
+    message: "",
+    testedAt: null,
+  });
   const [showWorkflowSettings, setShowWorkflowSettings] = useState(false);
   const [workspaceMode, setWorkspaceMode] = useState(false);
   const [workspaceModeTouched, setWorkspaceModeTouched] = useState(false);
@@ -200,6 +245,159 @@ const Automations = () => {
     [selectedTemplate]
   );
 
+  const editorTriggerFilters = useMemo(
+    () => toObject(editor?.trigger_filters),
+    [editor?.trigger_filters]
+  );
+  const editorTriggerSegmentId = String(editorTriggerFilters.segment_id || "").trim();
+  const availableTriggerSegments = useMemo(() => {
+    if (!editor) return dependencies.contactSegments;
+    if (editor.trigger_type !== "list_joined") return dependencies.contactSegments;
+    if (!editor.trigger_list_id) return dependencies.contactSegments;
+    return dependencies.contactSegments.filter(
+      (segment) => !segment.source_list_id || segment.source_list_id === editor.trigger_list_id
+    );
+  }, [dependencies.contactSegments, editor]);
+  const webhookSecret = String(editorTriggerFilters.webhook_secret || "").trim();
+  const webhookEventName = String(editorTriggerFilters.event_name || "").trim();
+  const webhookEndpoint = useMemo(
+    () =>
+      editor && editor.trigger_type === "custom_event"
+        ? buildWebhookEndpoint(editor.id, webhookSecret, webhookEventName)
+        : "",
+    [editor, webhookEventName, webhookSecret]
+  );
+  const webhookSamplePayload = useMemo(
+    () =>
+      JSON.stringify(
+        {
+          event: webhookEventName || "contact_created",
+          email: "prospect@example.com",
+          name: "Alex Johnson",
+          data: {
+            company: "Acme Inc",
+            job_title: "Head of Growth",
+            plan: "trial",
+          },
+        },
+        null,
+        2
+      ),
+    [webhookEventName]
+  );
+
+  const copyToClipboard = useCallback(async (value: string, label: string) => {
+    const trimmed = value.trim();
+    if (!trimmed) return;
+    if (typeof navigator === "undefined" || !navigator.clipboard?.writeText) {
+      toast({
+        title: "Clipboard unavailable",
+        description: "Copy is not supported in this browser session.",
+        variant: "destructive",
+      });
+      return;
+    }
+
+    try {
+      await navigator.clipboard.writeText(trimmed);
+      toast({
+        title: "Copied",
+        description: `${label} copied to clipboard.`,
+      });
+    } catch (error: unknown) {
+      toast({
+        title: "Copy failed",
+        description: getErrorMessage(error),
+        variant: "destructive",
+      });
+    }
+  }, []);
+
+  const setWebhookEventName = useCallback((value: string) => {
+    setEditor((prev) =>
+      prev
+        ? {
+            ...prev,
+            trigger_filters: {
+              ...toObject(prev.trigger_filters),
+              event_name: value,
+            },
+          }
+        : prev
+    );
+  }, []);
+
+  const setTriggerSegmentId = useCallback((value: string) => {
+    setEditor((prev) =>
+      prev
+        ? {
+            ...prev,
+            trigger_filters: {
+              ...toObject(prev.trigger_filters),
+              segment_id: value === "__none" ? null : value,
+            },
+          }
+        : prev
+    );
+  }, []);
+
+  const setTriggerType = useCallback((value: AutomationWorkflow["trigger_type"]) => {
+    setEditor((prev) =>
+      prev
+        ? {
+            ...prev,
+            trigger_type: value,
+            trigger_list_id: value === "list_joined" ? prev.trigger_list_id : null,
+            trigger_filters: (() => {
+              const nextFilters = { ...toObject(prev.trigger_filters) };
+              if (value !== "list_joined") {
+                delete nextFilters.segment_id;
+              }
+
+              if (value === "custom_event") {
+                nextFilters.webhook_secret =
+                  String(nextFilters.webhook_secret || "").trim() || generateWebhookSecret();
+              }
+
+              return nextFilters;
+            })(),
+          }
+        : prev
+    );
+  }, []);
+
+  const setWebhookSecret = useCallback((value: string) => {
+    setEditor((prev) =>
+      prev
+        ? {
+            ...prev,
+            trigger_filters: {
+              ...toObject(prev.trigger_filters),
+              webhook_secret: value.trim(),
+            },
+          }
+        : prev
+    );
+  }, []);
+
+  const regenerateWebhookSecret = useCallback(() => {
+    setEditor((prev) =>
+      prev
+        ? {
+            ...prev,
+            trigger_filters: {
+              ...toObject(prev.trigger_filters),
+              webhook_secret: generateWebhookSecret(),
+            },
+          }
+        : prev
+    );
+  }, []);
+
+  useEffect(() => {
+    setWebhookTestState({ status: "idle", message: "", testedAt: null });
+  }, [editor?.id]);
+
   useEffect(() => {
     if (!templatePreviewId) return;
     if (!templates.some((template) => template.id === templatePreviewId)) {
@@ -221,9 +419,11 @@ const Automations = () => {
     setLogs(nextLogs);
   }, []);
 
-  const loadData = useCallback(async () => {
+  const loadData = useCallback(async ({ initial = false }: { initial?: boolean } = {}) => {
     if (!user) return;
-    setInitializing(true);
+    if (initial) {
+      setInitializing(true);
+    }
 
     try {
       const [workflowRows, dependencyRows, templateRows, snapshot] = await Promise.all([
@@ -254,13 +454,15 @@ const Automations = () => {
         variant: "destructive",
       });
     } finally {
-      setInitializing(false);
+      if (initial) {
+        setInitializing(false);
+      }
     }
   }, [loadInsights, selectedWorkflowId, user]);
 
   useEffect(() => {
     if (user) {
-      void loadData();
+      void loadData({ initial: true });
     }
   }, [loadData, user]);
 
@@ -316,6 +518,7 @@ const Automations = () => {
         description: (editor.description || "").trim() || null,
         trigger_type: editor.trigger_type,
         trigger_list_id: editor.trigger_type === "list_joined" ? editor.trigger_list_id : null,
+        trigger_filters: toObject(editor.trigger_filters),
         flow: payload.compiledFlow,
         settings: withGraphInSettings((editor.settings as Record<string, unknown>) || {}, payload.graph),
         status,
@@ -355,6 +558,94 @@ const Automations = () => {
     }
   };
 
+  const testWebhookConnection = useCallback(async () => {
+    if (!editor || editor.trigger_type !== "custom_event") return;
+
+    if (!webhookEndpoint) {
+      const message = "Webhook endpoint is unavailable. Set VITE_SUPABASE_URL and save workflow first.";
+      setWebhookTestState({
+        status: "error",
+        message,
+        testedAt: new Date().toISOString(),
+      });
+      toast({
+        title: "Webhook test failed",
+        description: message,
+        variant: "destructive",
+      });
+      return;
+    }
+
+    setWebhookTestState({ status: "running", message: "Sending test payload...", testedAt: null });
+
+    try {
+      await persistWorkflow({ quiet: true });
+
+      const testEmail = `webhook-test-${Date.now()}@example.com`;
+      const response = await fetch(webhookEndpoint, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          ...(webhookSecret ? { "x-vintro-webhook-secret": webhookSecret } : {}),
+        },
+        body: JSON.stringify({
+          event: webhookEventName || "contact_created",
+          email: testEmail,
+          name: "Webhook Test Contact",
+          data: {
+            source: "webhook_connection_test",
+            company: "Acme Inc",
+            plan: "trial",
+          },
+        }),
+      });
+
+      const payload = await response.json().catch(() => ({} as Record<string, unknown>));
+      if (!response.ok) {
+        throw new Error(
+          String(payload.error || `Webhook endpoint returned ${response.status}.`)
+        );
+      }
+
+      const acceptedButIgnored = payload.ignored === true;
+      const message = acceptedButIgnored
+        ? `Endpoint reachable, but payload was ignored (${String(payload.reason || "event mismatch")}).`
+        : `Endpoint reachable and accepted test payload (${response.status}).`;
+      const testedAt = new Date().toISOString();
+
+      setWebhookTestState({
+        status: "success",
+        message,
+        testedAt,
+      });
+      toast({
+        title: "Webhook test passed",
+        description: message,
+      });
+
+      await loadInsights(editor.id);
+    } catch (error: unknown) {
+      const message = getErrorMessage(error);
+      setWebhookTestState({
+        status: "error",
+        message,
+        testedAt: new Date().toISOString(),
+      });
+      toast({
+        title: "Webhook test failed",
+        description: message,
+        variant: "destructive",
+      });
+    }
+  }, [
+    editor,
+    loadInsights,
+    persistWorkflow,
+    webhookEndpoint,
+    webhookEventName,
+    webhookSecret,
+  ]);
+
   const applyTemplate = (template: AutomationWorkflowTemplate) =>
     action("apply-template", async () => {
       if (!user) return;
@@ -366,8 +657,22 @@ const Automations = () => {
             : null,
       });
 
-      setWorkflows((prev) => [created, ...prev]);
-      setSelectedWorkflowId(created.id);
+      const createdFilters = toObject(created.trigger_filters);
+      const needsWebhookSecret =
+        created.trigger_type === "custom_event" &&
+        String(createdFilters.webhook_secret || "").trim().length === 0;
+
+      const normalizedCreated = needsWebhookSecret
+        ? await updateAutomationWorkflow(created.id, {
+            trigger_filters: {
+              ...createdFilters,
+              webhook_secret: generateWebhookSecret(),
+            },
+          })
+        : created;
+
+      setWorkflows((prev) => [normalizedCreated, ...prev]);
+      setSelectedWorkflowId(normalizedCreated.id);
       setTemplatePreviewId(null);
 
       toast({
@@ -471,7 +776,7 @@ const Automations = () => {
       await loadData();
     });
 
-  if (loading || initializing) {
+  if (loading) {
     return (
       <div className="flex min-h-screen items-center justify-center">
         <Loader2 className="h-8 w-8 animate-spin text-[var(--shell-accent)]" />
@@ -492,6 +797,11 @@ const Automations = () => {
       }}
       contentClassName="max-w-[1880px]"
     >
+      {initializing ? (
+        <div className="flex min-h-[60vh] items-center justify-center">
+          <Loader2 className="h-8 w-8 animate-spin text-[var(--shell-accent)]" />
+        </div>
+      ) : (
       <div className="space-y-6">
         <Card className="border-[var(--shell-border)] bg-[var(--shell-surface)]">
           <CardContent className="flex flex-wrap items-center justify-between gap-3 p-5">
@@ -596,7 +906,7 @@ const Automations = () => {
                       </p>
 
                       <div className="mt-2 flex flex-wrap items-center gap-1">
-                        <Badge variant="outline">{template.trigger_type === "manual" ? "Manual trigger" : "List trigger"}</Badge>
+                        <Badge variant="outline">{triggerTypeLabel(template.trigger_type)}</Badge>
                         <Badge variant="outline">{previewSteps} blocks</Badge>
                         {!template.runner_compatible ? (
                           <Badge variant="outline" className="border-amber-300 bg-amber-50 text-amber-800">
@@ -662,6 +972,7 @@ const Automations = () => {
                     {workflows.map((workflow) => (
                       <button
                         key={workflow.id}
+                        type="button"
                         onClick={() => setSelectedWorkflowId(workflow.id)}
                         className={cn(
                           "w-full rounded-xl border px-3 py-3 text-left",
@@ -854,7 +1165,7 @@ const Automations = () => {
                     </div>
                   </div>
 
-                  <div className="grid gap-3 lg:grid-cols-[minmax(0,1fr)_240px_240px]">
+                  <div className="grid gap-3 lg:grid-cols-[minmax(0,1fr)_220px_220px_220px]">
                     <div className="space-y-2">
                       <Label>Name</Label>
                       <Input
@@ -866,16 +1177,7 @@ const Automations = () => {
                       <Label>Trigger type</Label>
                       <Select
                         value={editor.trigger_type}
-                        onValueChange={(value) =>
-                          setEditor((prev) =>
-                            prev
-                              ? {
-                                  ...prev,
-                                  trigger_type: value as AutomationWorkflow["trigger_type"],
-                                }
-                              : prev
-                          )
-                        }
+                        onValueChange={(value) => setTriggerType(value as AutomationWorkflow["trigger_type"])}
                       >
                         <SelectTrigger>
                           <SelectValue />
@@ -883,6 +1185,7 @@ const Automations = () => {
                         <SelectContent>
                           <SelectItem value="list_joined">Contact enters list</SelectItem>
                           <SelectItem value="manual">Manual only</SelectItem>
+                          <SelectItem value="custom_event">Webhook event</SelectItem>
                         </SelectContent>
                       </Select>
                     </div>
@@ -896,6 +1199,20 @@ const Automations = () => {
                               ? {
                                   ...prev,
                                   trigger_list_id: value === "__none" ? null : value,
+                                  trigger_filters: (() => {
+                                    const nextFilters = { ...toObject(prev.trigger_filters) };
+                                    const currentSegmentId = String(nextFilters.segment_id || "").trim();
+                                    if (!currentSegmentId) return nextFilters;
+
+                                    const matchedSegment = dependencies.contactSegments.find(
+                                      (segment) => segment.id === currentSegmentId
+                                    );
+                                    const nextListId = value === "__none" ? null : value;
+                                    if (matchedSegment?.source_list_id && matchedSegment.source_list_id !== nextListId) {
+                                      nextFilters.segment_id = null;
+                                    }
+                                    return nextFilters;
+                                  })(),
                                 }
                               : prev
                           )
@@ -913,9 +1230,142 @@ const Automations = () => {
                           ))}
                         </SelectContent>
                       </Select>
+                    </div>
+                    <div className="space-y-2">
+                      <Label>Trigger segment</Label>
+                      <Select
+                        value={editorTriggerSegmentId || "__none"}
+                        onValueChange={setTriggerSegmentId}
+                      >
+                        <SelectTrigger
+                          disabled={
+                            editor.trigger_type !== "list_joined" || availableTriggerSegments.length === 0
+                          }
+                        >
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="__none">All contacts</SelectItem>
+                          {availableTriggerSegments.map((segment) => (
+                            <SelectItem key={segment.id} value={segment.id}>
+                              {segment.name}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
                       <p className="text-xs text-[var(--shell-muted)]">Last run: {formatDate(editor.last_run_at)}</p>
                     </div>
                   </div>
+
+                  {editor.trigger_type === "custom_event" ? (
+                    <div className="space-y-3 rounded-xl border border-cyan-200 bg-cyan-50/60 p-3">
+                      <p className="text-xs font-semibold uppercase tracking-[0.12em] text-cyan-700">
+                        Webhook Trigger Setup
+                      </p>
+
+                      <div className="grid gap-3 lg:grid-cols-2">
+                        <div className="space-y-2">
+                          <Label>Event name (optional)</Label>
+                          <Input
+                            value={webhookEventName}
+                            onChange={(event) => setWebhookEventName(event.target.value)}
+                            placeholder="contact_created"
+                          />
+                          <p className="text-xs text-cyan-700/80">
+                            If set, only matching webhook events will enroll contacts.
+                          </p>
+                        </div>
+
+                        <div className="space-y-2">
+                          <Label>Webhook secret</Label>
+                          <div className="flex gap-2">
+                            <Input
+                              value={webhookSecret}
+                              onChange={(event) => setWebhookSecret(event.target.value)}
+                              placeholder="whsec_..."
+                            />
+                            <Button
+                              type="button"
+                              variant="outline"
+                              onClick={regenerateWebhookSecret}
+                              disabled={!!busy}
+                            >
+                              Regenerate
+                            </Button>
+                            <Button
+                              type="button"
+                              variant="outline"
+                              onClick={() => void copyToClipboard(webhookSecret, "Webhook secret")}
+                              disabled={!webhookSecret}
+                            >
+                              Copy
+                            </Button>
+                          </div>
+                        </div>
+                      </div>
+
+                      <div className="space-y-2">
+                        <Label>Webhook endpoint</Label>
+                        <div className="flex gap-2">
+                          <Input
+                            readOnly
+                            value={webhookEndpoint || "Set VITE_SUPABASE_URL and save workflow to use webhook endpoint."}
+                            className="font-mono text-xs"
+                          />
+                          <Button
+                            type="button"
+                            variant="outline"
+                            onClick={() => void copyToClipboard(webhookEndpoint, "Webhook URL")}
+                            disabled={!webhookEndpoint}
+                          >
+                            Copy URL
+                          </Button>
+                        </div>
+                        <p className="text-xs text-cyan-700/80">
+                          Send a JSON body with at least <code>email</code>. You can pass
+                          <code>name</code> and <code>data</code> fields for personalization and conditions.
+                        </p>
+                      </div>
+
+                      <div className="space-y-2">
+                        <Label>Sample JSON payload</Label>
+                        <Textarea readOnly value={webhookSamplePayload} className="min-h-[140px] font-mono text-xs" />
+                      </div>
+
+                      <div className="space-y-2">
+                        <Label>Connection test</Label>
+                        <div className="flex flex-wrap items-center gap-2">
+                          <Button
+                            type="button"
+                            variant="outline"
+                            onClick={() => void testWebhookConnection()}
+                            disabled={!!busy || webhookTestState.status === "running" || !webhookEndpoint}
+                          >
+                            {webhookTestState.status === "running" ? (
+                              <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                            ) : null}
+                            {webhookTestState.status === "running" ? "Testing..." : "Test webhook"}
+                          </Button>
+
+                          {webhookTestState.status !== "idle" ? (
+                            <p
+                              className={cn(
+                                "text-xs",
+                                webhookTestState.status === "success" ? "text-emerald-700" : "text-rose-700"
+                              )}
+                            >
+                              {webhookTestState.message}
+                              {webhookTestState.testedAt ? ` (${formatDate(webhookTestState.testedAt)})` : ""}
+                            </p>
+                          ) : (
+                            <p className="text-xs text-cyan-700/80">
+                              Sends a live test payload to verify the webhook endpoint is reachable.
+                            </p>
+                          )}
+                        </div>
+                      </div>
+                    </div>
+                  ) : null}
 
                   {showWorkflowSettings ? (
                     <div className="space-y-2">
@@ -954,6 +1404,24 @@ const Automations = () => {
                 runtimeEvents={runtimeEvents}
                 onPersist={handleBuilderPersist}
                 onStateChange={handleBuilderStateChange}
+                webhookSetup={{
+                  triggerType: editor.trigger_type,
+                  enabled: editor.trigger_type === "custom_event",
+                  eventName: webhookEventName,
+                  secret: webhookSecret,
+                  endpoint: webhookEndpoint,
+                  samplePayload: webhookSamplePayload,
+                  testing: webhookTestState.status === "running",
+                  testStatus: webhookTestState.status === "running" ? "idle" : webhookTestState.status,
+                  testMessage: webhookTestState.message,
+                  testedAt: webhookTestState.testedAt,
+                }}
+                onWebhookEventNameChange={setWebhookEventName}
+                onWebhookSecretChange={setWebhookSecret}
+                onWebhookSecretRegenerate={regenerateWebhookSecret}
+                onWebhookCopy={(value, label) => void copyToClipboard(value, label)}
+                onWebhookTest={testWebhookConnection}
+                onTriggerTypeChange={setTriggerType}
               />
             </div>
           )}
@@ -978,9 +1446,7 @@ const Automations = () => {
                 <div className="space-y-3">
                   <div className="flex flex-wrap gap-2">
                     <Badge variant="outline">{selectedTemplate.category}</Badge>
-                    <Badge variant="outline">
-                      {selectedTemplate.trigger_type === "manual" ? "Manual trigger" : "List trigger"}
-                    </Badge>
+                    <Badge variant="outline">{triggerTypeLabel(selectedTemplate.trigger_type)}</Badge>
                     <Badge variant="outline">
                       {
                         selectedTemplatePreviewGraph.nodes.filter(
@@ -998,8 +1464,8 @@ const Automations = () => {
 
                   {!selectedTemplate.runner_compatible ? (
                     <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
-                      This template contains advanced blocks (for example webhook or split). It can be edited now,
-                      but publish may stay blocked until those blocks are removed or runner support is enabled.
+                      This template contains blocks that are not fully runner-compatible yet (for example split).
+                      It can be edited now, but publish may stay blocked until those blocks are removed.
                     </div>
                   ) : null}
 
@@ -1033,6 +1499,7 @@ const Automations = () => {
           </DialogContent>
         </Dialog>
       </div>
+      )}
     </DashboardLayout>
   );
 };

@@ -345,10 +345,16 @@ export const compileGraphToLegacyFlow = (graph: WorkflowGraph): { flow: Automati
       return { flow, errors };
     }
 
-    if (node.kind === "split" || node.kind === "webhook") {
+    if (node.kind === "split") {
       errors.push(`Node type ${node.kind} is not supported by the current automation runner.`);
       flow.push({ id: `${node.id}_stop`, name: "Stop", type: "stop", config: {} });
       return { flow, errors };
+    }
+
+    if (node.kind === "webhook") {
+      const next = outgoingFor(node.id)[0];
+      currentNodeId = next?.target || null;
+      continue;
     }
 
     if (node.kind === "send_email" || node.kind === "wait") {
@@ -372,7 +378,7 @@ export const compileGraphToLegacyFlow = (graph: WorkflowGraph): { flow: Automati
       const hasElseIfBranches = normalizedConfig.clauses.length > 1;
       if (hasElseIfBranches) {
         errors.push(
-          `Condition node "${node.title}" uses else-if branches; legacy flow fallback only preserves If/Else behavior.`
+          `Condition node "${node.title}" uses else-if branches. Graph runner supports this; legacy flow fallback only preserves If/Else behavior.`
         );
       }
 

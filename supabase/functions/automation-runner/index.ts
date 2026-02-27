@@ -24,6 +24,9 @@ const DUE_CONTACTS_BATCH = 80;
 const WAIT_DEFAULT_MINUTES = 60;
 const SEND_RETRY_MINUTES = 15;
 const CREDIT_RETRY_MINUTES = 60;
+const WEBHOOK_RETRY_MINUTES = 10;
+const WEBHOOK_DEFAULT_TIMEOUT_MS = 12000;
+const WEBHOOK_MAX_BODY_CHARS = 2000;
 
 const jsonResponse = (payload: Record<string, unknown>, status = 200) =>
   new Response(JSON.stringify(payload), {
@@ -263,6 +266,179 @@ const personalize = (
     value = value.replace(regex, replacement || "");
   });
   return value;
+};
+
+const truncateText = (value: string, max = WEBHOOK_MAX_BODY_CHARS) => {
+  if (value.length <= max) return value;
+  return `${value.slice(0, max)}...(truncated)`;
+};
+
+const toWebhookMethod = (value: unknown) => {
+  const method = String(value || "POST").toUpperCase();
+  if (
+    method === "GET" ||
+    method === "POST" ||
+    method === "PUT" ||
+    method === "PATCH" ||
+    method === "DELETE" ||
+    method === "HEAD"
+  ) {
+    return method;
+  }
+  return "POST";
+};
+
+const runWebhookNode = async (
+  workflow: Record<string, unknown>,
+  contact: Record<string, unknown>,
+  node: Record<string, unknown>,
+  currentStep: number,
+  state: Record<string, unknown>
+) => {
+  const config = safeJsonObject(node.config);
+  const senderContext = {
+    sender_name: String(workflow.name || "Automation"),
+    smtp_username: "",
+  };
+
+  const rawUrl = personalize(String(config.url || "").trim(), contact, state, senderContext);
+  if (!rawUrl) {
+    throw new Error("Webhook URL is required.");
+  }
+
+  let targetUrl = "";
+  try {
+    targetUrl = new URL(rawUrl).toString();
+  } catch {
+    throw new Error(`Webhook URL is invalid: ${rawUrl}`);
+  }
+
+  const method = toWebhookMethod(config.method);
+  const nowIso = new Date().toISOString();
+  const headers: Record<string, string> = {
+    Accept: "application/json, text/plain;q=0.9, */*;q=0.8",
+    "X-Automation-Workflow-Id": String(workflow.id || ""),
+    "X-Automation-Contact-Id": String(contact.id || ""),
+    "X-Automation-Node-Id": String(node.id || ""),
+  };
+
+  const configuredHeaders = safeJsonObject(config.headers);
+  Object.entries(configuredHeaders).forEach(([key, value]) => {
+    const headerName = String(key || "").trim();
+    if (!headerName) return;
+    headers[headerName] = personalize(String(value || ""), contact, state, senderContext);
+  });
+
+  const authType = String(config.authType || "none").toLowerCase();
+  const authToken = String(config.authToken || "").trim();
+  if (authToken) {
+    const tokenValue = personalize(authToken, contact, state, senderContext);
+    if (authType === "bearer") {
+      headers.Authorization = `Bearer ${tokenValue}`;
+    } else if (authType === "api_key") {
+      const headerName = String(config.authHeader || "x-api-key").trim() || "x-api-key";
+      headers[headerName] = tokenValue;
+    }
+  }
+
+  let body: string | undefined = undefined;
+  const payloadTemplate = String(config.payloadTemplate || "").trim();
+  if (method !== "GET" && method !== "HEAD") {
+    if (payloadTemplate) {
+      const personalizedPayload = personalize(payloadTemplate, contact, state, senderContext);
+      const trimmedPayload = personalizedPayload.trim();
+      if ((trimmedPayload.startsWith("{") && trimmedPayload.endsWith("}")) || (trimmedPayload.startsWith("[") && trimmedPayload.endsWith("]"))) {
+        try {
+          body = JSON.stringify(JSON.parse(trimmedPayload));
+          if (!Object.keys(headers).some((key) => key.toLowerCase() === "content-type")) {
+            headers["Content-Type"] = "application/json";
+          }
+        } catch {
+          body = personalizedPayload;
+          if (!Object.keys(headers).some((key) => key.toLowerCase() === "content-type")) {
+            headers["Content-Type"] = "text/plain; charset=utf-8";
+          }
+        }
+      } else {
+        body = personalizedPayload;
+        if (!Object.keys(headers).some((key) => key.toLowerCase() === "content-type")) {
+          headers["Content-Type"] = "text/plain; charset=utf-8";
+        }
+      }
+    } else {
+      body = JSON.stringify({
+        event: "automation_webhook",
+        workflow_id: workflow.id,
+        workflow_name: workflow.name,
+        contact_id: contact.id,
+        contact_email: contact.email,
+        node_id: node.id,
+        step_index: currentStep,
+        occurred_at: nowIso,
+      });
+      if (!Object.keys(headers).some((key) => key.toLowerCase() === "content-type")) {
+        headers["Content-Type"] = "application/json";
+      }
+    }
+  }
+
+  const timeoutRaw = Number(config.timeoutMs || WEBHOOK_DEFAULT_TIMEOUT_MS);
+  const timeoutMs =
+    Number.isFinite(timeoutRaw) && timeoutRaw >= 1000
+      ? Math.min(timeoutRaw, 30000)
+      : WEBHOOK_DEFAULT_TIMEOUT_MS;
+
+  const controller = new AbortController();
+  const timeoutHandle = setTimeout(() => controller.abort("timeout"), timeoutMs);
+
+  let response: Response;
+  try {
+    response = await fetch(targetUrl, {
+      method,
+      headers,
+      body,
+      signal: controller.signal,
+    });
+  } finally {
+    clearTimeout(timeoutHandle);
+  }
+
+  const responseText = await response.text().catch(() => "");
+  const responsePreview = truncateText(String(responseText || ""));
+  const requestPreview = body ? truncateText(String(body)) : "";
+
+  const webhookResults = safeJsonObject(state.webhook_results);
+  const nextState = {
+    ...state,
+    webhook_results: {
+      ...webhookResults,
+      [String(node.id || "webhook")]: {
+        status: response.status,
+        ok: response.ok,
+        url: targetUrl,
+        method,
+        request_preview: requestPreview || null,
+        response_preview: responsePreview || null,
+        at: nowIso,
+      },
+    },
+    last_webhook_status: response.status,
+    last_webhook_at: nowIso,
+  };
+
+  if (!response.ok) {
+    throw new Error(
+      `Webhook request failed (${response.status}) ${response.statusText || ""} ${responsePreview || ""}`.trim()
+    );
+  }
+
+  return {
+    statePatch: nextState,
+    status: response.status,
+    method,
+    url: targetUrl,
+    responsePreview,
+  };
 };
 
 const logAutomationEvent = async (
@@ -1357,6 +1533,88 @@ const processContactGraph = async (
       );
     }
 
+    if (node.kind === "webhook") {
+      let webhookResult;
+      try {
+        webhookResult = await runWebhookNode(workflow, contact, node, currentStep, state);
+      } catch (error) {
+        await releaseContactForRetry(
+          contact.id,
+          addMinutes(new Date(), WEBHOOK_RETRY_MINUTES),
+          getErrorMessage(error),
+          {
+            ...state,
+            current_node_id: node.id,
+          }
+        );
+        await logAutomationEvent(
+          workflow,
+          contact.id,
+          "webhook_failed",
+          currentStep,
+          getErrorMessage(error),
+          { node_id: node.id }
+        );
+        return { failed: 1 };
+      }
+
+      const next = outgoing[0] || null;
+      const nextNodeId = next ? next.target : null;
+      const nextStep = currentStep + 1;
+      const nextState = {
+        ...safeJsonObject(webhookResult.statePatch),
+        current_node_id: nextNodeId,
+      };
+
+      await logAutomationEvent(
+        workflow,
+        contact.id,
+        "webhook_sent",
+        currentStep,
+        `Webhook responded with ${Number(webhookResult.status || 0)}.`,
+        {
+          node_id: node.id,
+          method: webhookResult.method || null,
+          url: webhookResult.url || null,
+          status: Number(webhookResult.status || 0),
+          response_preview: webhookResult.responsePreview || null,
+        }
+      );
+
+      if (!nextNodeId) {
+        await completeContact(contact.id, nextStep, {
+          ...nextState,
+          current_node_id: null,
+        });
+        await logAutomationEvent(
+          workflow,
+          contact.id,
+          "workflow_completed",
+          nextStep,
+          "Workflow completed after webhook node.",
+          { node_id: node.id }
+        );
+        return { completed: 1 };
+      }
+
+      currentStep = nextStep;
+      currentNodeId = nextNodeId;
+      state = nextState;
+
+      await admin
+        .from("automation_contacts")
+        .update({
+          status: "active",
+          current_step: currentStep,
+          next_run_at: new Date().toISOString(),
+          processing_started_at: null,
+          state,
+          last_error: null,
+        })
+        .eq("id", contact.id);
+      continue;
+    }
+
     await admin
       .from("automation_contacts")
       .update({
@@ -1562,10 +1820,9 @@ serve(async (req: Request) => {
     }
 
     if (action === "enroll_now") {
-      if (!user) return jsonResponse({ error: "User session required" }, 401);
       if (!workflowId) return jsonResponse({ error: "workflowId is required" }, 400);
 
-      const workflow = await loadWorkflow(String(workflowId), user.id);
+      const workflow = await loadWorkflow(String(workflowId), serviceCall ? undefined : user?.id);
       if (!workflow) return jsonResponse({ error: "Workflow not found" }, 404);
 
       const { data, error } = await admin.rpc("enroll_workflow_contacts", {
@@ -1592,10 +1849,9 @@ serve(async (req: Request) => {
     }
 
     if (action === "run_now") {
-      if (!user) return jsonResponse({ error: "User session required" }, 401);
       if (!workflowId) return jsonResponse({ error: "workflowId is required" }, 400);
 
-      const workflow = await loadWorkflow(String(workflowId), user.id);
+      const workflow = await loadWorkflow(String(workflowId), serviceCall ? undefined : user?.id);
       if (!workflow) return jsonResponse({ error: "Workflow not found" }, 404);
 
       const summary = await runWorkflow(workflow, {

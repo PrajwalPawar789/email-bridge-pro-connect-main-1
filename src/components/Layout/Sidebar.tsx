@@ -75,6 +75,7 @@ const Sidebar = ({ activeTab, onTabChange, isCollapsed, toggleSidebar }: Sidebar
 
 
       <button
+        type="button"
         onClick={toggleSidebar}
         className="absolute -right-3 top-8 bg-white/90 border border-[var(--shell-border)] rounded-full p-1 shadow-sm hover:bg-white z-40"
       >
@@ -96,6 +97,7 @@ const Sidebar = ({ activeTab, onTabChange, isCollapsed, toggleSidebar }: Sidebar
                 return (
                   <li key={item.id}>
                     <button
+                      type="button"
                       onClick={() => onTabChange(item.id)}
                       className={cn(
                         "group relative w-full flex items-center rounded-xl px-3 py-2.5 text-sm font-semibold transition-all",

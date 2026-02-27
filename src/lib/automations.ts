@@ -1,7 +1,7 @@
 import { supabase } from "@/integrations/supabase/client";
 
 export type AutomationWorkflowStatus = "draft" | "live" | "paused" | "archived";
-export type AutomationTriggerType = "list_joined" | "manual";
+export type AutomationTriggerType = "list_joined" | "manual" | "custom_event";
 export type AutomationStepType = "send_email" | "wait" | "condition" | "stop";
 export type WaitUnit = "minutes" | "hours" | "days";
 export type ConditionRule =
@@ -78,6 +78,7 @@ export type AutomationLog = {
 
 export type AutomationDependencyData = {
   emailLists: Array<{ id: string; name: string }>;
+  contactSegments: Array<{ id: string; name: string; source_list_id: string | null }>;
   emailTemplates: Array<{ id: string; name: string; subject: string; content: string; is_html: boolean }>;
   emailConfigs: Array<{ id: string; smtp_username: string; sender_name: string | null }>;
 };
@@ -233,7 +234,12 @@ const normalizeAutomationTemplate = (row: Record<string, unknown>): AutomationWo
   description: row.description ? String(row.description) : null,
   category: String(row.category || "General"),
   use_case: row.use_case ? String(row.use_case) : null,
-  trigger_type: row.trigger_type === "manual" ? "manual" : "list_joined",
+  trigger_type:
+    row.trigger_type === "manual"
+      ? "manual"
+      : row.trigger_type === "custom_event"
+        ? "custom_event"
+        : "list_joined",
   trigger_filters: toObject(row.trigger_filters),
   flow: normalizeFlow(row.flow),
   settings: toObject(row.settings),
@@ -420,7 +426,7 @@ const FALLBACK_AUTOMATION_TEMPLATES: AutomationWorkflowTemplate[] = [
     description: "Event-driven email notification flow triggered from webhook events.",
     category: "Webhook Automation",
     use_case: "Send notification emails from external events.",
-    trigger_type: "manual",
+    trigger_type: "custom_event",
     trigger_filters: {},
     flow: [
       {
@@ -443,7 +449,7 @@ const FALLBACK_AUTOMATION_TEMPLATES: AutomationWorkflowTemplate[] = [
             title: "Trigger",
             position: { x: 120, y: 240 },
             status: "draft",
-            config: { triggerType: "manual" },
+            config: { triggerType: "custom_event" },
           },
           {
             id: "webhook_notification",
@@ -505,7 +511,7 @@ const FALLBACK_AUTOMATION_TEMPLATES: AutomationWorkflowTemplate[] = [
       },
     },
     tags: ["webhook", "notification", "event-driven"],
-    runner_compatible: false,
+    runner_compatible: true,
     is_featured: true,
     sort_order: 30,
     is_active: true,
@@ -614,7 +620,12 @@ export const createAutomationWorkflowFromTemplate = async (
     options.description !== undefined
       ? options.description
       : template.description;
-  const resolvedTriggerType: AutomationTriggerType = template.trigger_type === "manual" ? "manual" : "list_joined";
+  const resolvedTriggerType: AutomationTriggerType =
+    template.trigger_type === "manual"
+      ? "manual"
+      : template.trigger_type === "custom_event"
+        ? "custom_event"
+        : "list_joined";
   const resolvedTriggerListId =
     resolvedTriggerType === "list_joined"
       ? options.trigger_list_id || null
@@ -746,12 +757,17 @@ export const runAutomationRunner = async (
 };
 
 export const loadAutomationDependencies = async (userId: string): Promise<AutomationDependencyData> => {
-  const [listsResponse, templatesResponse, configsResponse] = await Promise.all([
+  const [listsResponse, segmentsResponse, templatesResponse, configsResponse] = await Promise.all([
     db
       .from("email_lists")
       .select("id, name")
       .eq("user_id", userId)
       .order("created_at", { ascending: false }),
+    db
+      .from("contact_segments")
+      .select("id, name, source_list_id")
+      .eq("user_id", userId)
+      .order("updated_at", { ascending: false }),
     db
       .from("email_templates")
       .select("id, name, subject, content, is_html")
@@ -765,11 +781,22 @@ export const loadAutomationDependencies = async (userId: string): Promise<Automa
   ]);
 
   if (listsResponse.error) throw listsResponse.error;
+  const segmentError = segmentsResponse.error as { code?: string; status?: number; message?: string } | null;
+  const segmentTableMissing =
+    !!segmentError &&
+    (String(segmentError.code || "") === "42P01" ||
+      String(segmentError.code || "") === "PGRST205" ||
+      Number(segmentError.status || 0) === 404 ||
+      String(segmentError.message || "").toLowerCase().includes("could not find the table"));
+  if (segmentsResponse.error && !segmentTableMissing) throw segmentsResponse.error;
   if (templatesResponse.error) throw templatesResponse.error;
   if (configsResponse.error) throw configsResponse.error;
 
   return {
     emailLists: (listsResponse.data || []) as AutomationDependencyData["emailLists"],
+    contactSegments: segmentTableMissing
+      ? []
+      : (segmentsResponse.data || []) as AutomationDependencyData["contactSegments"],
     emailTemplates: (templatesResponse.data || []) as AutomationDependencyData["emailTemplates"],
     emailConfigs: (configsResponse.data || []) as AutomationDependencyData["emailConfigs"],
   };

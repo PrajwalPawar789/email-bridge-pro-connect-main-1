@@ -11,7 +11,7 @@ import { RadioGroup, RadioGroupItem } from '@/components/ui/radio-group';
 import { toast } from '@/hooks/use-toast';
 import { 
   Plus, Clock, Info, Trash2, ArrowRight, ArrowLeft, CheckCircle2, 
-  Users, Mail, Send, Calendar,
+  Users, Mail, Send, Calendar, Sparkles,
   AlertCircle, Eye, Zap, Check, X, Loader2
 } from 'lucide-react';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
@@ -185,9 +185,12 @@ const CampaignBuilder: React.FC<CampaignBuilderProps> = ({ emailConfigs }) => {
   const [selectedTemplate, setSelectedTemplate] = useState<string>('');
   const [selectedListId, setSelectedListId] = useState<string>('');
   const [allLists, setAllLists] = useState<{ id: string, name: string }[]>([]);
+  const [selectedSegmentId, setSelectedSegmentId] = useState<string>('');
+  const [allSegments, setAllSegments] = useState<{ id: string; name: string; source_list_id: string | null }[]>([]);
   const [followups, setFollowups] = useState<FollowupStep[]>([]);
   const [listCount, setListCount] = useState(0);
-  const [audienceType, setAudienceType] = useState<'list' | 'manual'>('list');
+  const [segmentCount, setSegmentCount] = useState(0);
+  const [audienceType, setAudienceType] = useState<'list' | 'segment' | 'manual'>('list');
   const [scheduledAt, setScheduledAt] = useState<string>('');
   const [pipelineConfig, setPipelineConfig] = useState<PipelineConfigState>({
     enabled: false,
@@ -204,7 +207,9 @@ const CampaignBuilder: React.FC<CampaignBuilderProps> = ({ emailConfigs }) => {
   const contentBodyRef = useRef<HTMLTextAreaElement | null>(null);
   const totalRecipients = audienceType === 'list'
     ? listCount
-    : recipients.split('\n').filter((line) => line.trim()).length;
+    : audienceType === 'segment'
+      ? segmentCount
+      : recipients.split('\n').filter((line) => line.trim()).length;
   const totalDailyLimit = selectedConfigs.reduce((acc, curr) => acc + curr.dailyLimit, 0);
   const estimatedDays = totalDailyLimit > 0 ? Math.ceil(totalRecipients / totalDailyLimit) : 0;
   const scheduleLabel = scheduledAt ? new Date(scheduledAt).toLocaleString() : 'Not scheduled';
@@ -248,6 +253,7 @@ const CampaignBuilder: React.FC<CampaignBuilderProps> = ({ emailConfigs }) => {
   useEffect(() => {
     fetchTemplates();
     fetchLists();
+    fetchSegments();
     fetchUserPipelines();
   }, []);
 
@@ -273,6 +279,26 @@ const CampaignBuilder: React.FC<CampaignBuilderProps> = ({ emailConfigs }) => {
       setListCount(0);
     }
   }, [selectedListId]);
+
+  useEffect(() => {
+    if (!selectedSegmentId) {
+      setSegmentCount(0);
+      return;
+    }
+
+    const fetchSegmentCount = async () => {
+      const { data, error } = await (supabase as any).rpc('segment_match_count', {
+        p_segment_id: selectedSegmentId,
+      });
+      if (error) {
+        setSegmentCount(0);
+        return;
+      }
+      setSegmentCount(Number(data || 0));
+    };
+
+    void fetchSegmentCount();
+  }, [selectedSegmentId]);
 
   const fetchTemplates = async () => {
     try {
@@ -302,6 +328,19 @@ const CampaignBuilder: React.FC<CampaignBuilderProps> = ({ emailConfigs }) => {
       .eq('user_id', user.id)
       .order('created_at', { ascending: false });
     if (!error && data) setAllLists(data);
+  };
+
+  const fetchSegments = async () => {
+    const { data: { user } } = await supabase.auth.getUser();
+    if (!user) return;
+
+    const { data, error } = await (supabase as any)
+      .from('contact_segments')
+      .select('id, name, source_list_id')
+      .eq('user_id', user.id)
+      .order('updated_at', { ascending: false });
+
+    if (!error && data) setAllSegments(data as Array<{ id: string; name: string; source_list_id: string | null }>);
   };
 
   const fetchUserPipelines = async () => {
@@ -408,6 +447,10 @@ const CampaignBuilder: React.FC<CampaignBuilderProps> = ({ emailConfigs }) => {
           toast({ title: "Missing Information", description: "Please select an email list.", variant: "destructive" });
           return false;
         }
+        if (audienceType === 'segment' && !selectedSegmentId) {
+          toast({ title: "Missing Information", description: "Please select a segment.", variant: "destructive" });
+          return false;
+        }
         if (audienceType === 'manual' && !recipients.trim()) {
           toast({ title: "Missing Information", description: "Please enter at least one recipient.", variant: "destructive" });
           return false;
@@ -458,6 +501,14 @@ const CampaignBuilder: React.FC<CampaignBuilderProps> = ({ emailConfigs }) => {
         );
       }
 
+      const selectedSegment = allSegments.find((segment) => segment.id === selectedSegmentId) || null;
+      const resolvedSourceListId =
+        audienceType === 'list'
+          ? (selectedListId || null)
+          : audienceType === 'segment'
+            ? (selectedSegment?.source_list_id || null)
+            : null;
+
       // Create campaign
       const { data: campaign, error: campaignError } = await supabase
         .from('campaigns')
@@ -469,9 +520,10 @@ const CampaignBuilder: React.FC<CampaignBuilderProps> = ({ emailConfigs }) => {
           status: statusToUse,
           send_delay_minutes: form.send_delay_minutes,
           email_config_id: selectedConfigs[0].configId,
-          email_list_id: selectedListId || null,
+          email_list_id: resolvedSourceListId,
+          segment_id: audienceType === 'segment' ? (selectedSegmentId || null) : null,
           scheduled_at: scheduledAt ? new Date(scheduledAt).toISOString() : null,
-        })
+        } as any)
         .select()
         .single();
 
@@ -646,6 +698,66 @@ const CampaignBuilder: React.FC<CampaignBuilderProps> = ({ emailConfigs }) => {
                 .eq('id', campaign.id);
             }
           }
+        } else if (audienceType === 'segment' && selectedSegmentId) {
+          let allSegmentProspects: Array<any> = [];
+          let offset = 0;
+          const segmentBatchSize = 1000;
+          let hasMore = true;
+
+          while (hasMore) {
+            const { data: batch, error } = await (supabase as any).rpc('fetch_segment_prospects', {
+              p_segment_id: selectedSegmentId,
+              p_limit: segmentBatchSize,
+              p_offset: offset,
+            });
+            if (error) throw error;
+
+            const safeBatch = Array.isArray(batch) ? batch : [];
+            if (safeBatch.length === 0) {
+              hasMore = false;
+            } else {
+              allSegmentProspects = allSegmentProspects.concat(safeBatch);
+              if (safeBatch.length < segmentBatchSize) {
+                hasMore = false;
+              } else {
+                offset += segmentBatchSize;
+              }
+            }
+          }
+
+          if (allSegmentProspects.length > 0) {
+            const validProspects = allSegmentProspects.filter(
+              (prospect: any) => prospect && prospect.email && String(prospect.email).trim()
+            );
+
+            const uniqueProspects = validProspects.filter((prospect: any, index: number, self: any[]) => {
+              const currentEmail = String(prospect.email).toLowerCase().trim();
+              return index === self.findIndex((p) => String(p.email).toLowerCase().trim() === currentEmail);
+            });
+
+            const recipientsInserts = uniqueProspects.map((prospect: any, index: number) => {
+              const senderEmail = normalizeEmail(prospect.sender_email);
+
+              return {
+                campaign_id: campaign.id,
+                email: String(prospect.email).trim().toLowerCase(),
+                name: prospect.full_name || '',
+                status: 'pending' as const,
+                replied: false,
+                bounced: false,
+                assigned_email_config_id: resolveAssignedConfigId(senderEmail, index)
+              };
+            });
+
+            const insertedCount = await insertRecipientsInBatches(recipientsInserts);
+
+            if (insertedCount > 0) {
+              await supabase
+                .from('campaigns')
+                .update({ total_recipients: insertedCount })
+                .eq('id', campaign.id);
+            }
+          }
         } else if (audienceType === 'manual' && recipients.trim()) {
           const recipientList = recipients.split('\n')
             .map(line => {
@@ -692,6 +804,8 @@ const CampaignBuilder: React.FC<CampaignBuilderProps> = ({ emailConfigs }) => {
         setRecipients('');
         setSelectedTemplate('');
         setSelectedListId('');
+        setSelectedSegmentId('');
+        setSegmentCount(0);
         setFollowups([]);
         const resetPipelineId = userPipelines[0]?.id || '';
         const resetPipelineStages = resetPipelineId ? (pipelineStagesById[resetPipelineId] || []) : [];
@@ -969,12 +1083,18 @@ const CampaignBuilder: React.FC<CampaignBuilderProps> = ({ emailConfigs }) => {
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
         <div className="lg:col-span-2">
           <Tabs value={audienceType} onValueChange={(v: any) => setAudienceType(v)} className="w-full">
-            <TabsList className="grid w-full grid-cols-2 mb-6 rounded-full border border-[var(--builder-border)] bg-white/80 p-1">
+            <TabsList className="grid w-full grid-cols-3 mb-6 rounded-full border border-[var(--builder-border)] bg-white/80 p-1">
               <TabsTrigger
                 value="list"
                 className="rounded-full text-sm font-semibold data-[state=active]:bg-[var(--builder-ink)] data-[state=active]:text-white"
               >
                 Existing List
+              </TabsTrigger>
+              <TabsTrigger
+                value="segment"
+                className="rounded-full text-sm font-semibold data-[state=active]:bg-[var(--builder-ink)] data-[state=active]:text-white"
+              >
+                Segment
               </TabsTrigger>
               <TabsTrigger
                 value="manual"
@@ -1021,6 +1141,48 @@ const CampaignBuilder: React.FC<CampaignBuilderProps> = ({ emailConfigs }) => {
                     <div className="flex items-center gap-2 text-sm text-emerald-700 bg-emerald-50/80 p-3 rounded-xl border border-emerald-100">
                         <CheckCircle2 className="h-4 w-4" />
                         <span>List loaded successfully with {listCount} prospects.</span>
+                    </div>
+                )}
+              </div>
+            </TabsContent>
+
+            <TabsContent value="segment" className="space-y-4 mt-0">
+              {allSegments.length === 0 && (
+                <div className="rounded-2xl border border-amber-200/70 bg-amber-50/80 p-4 flex items-center justify-between">
+                  <div className="flex items-center gap-3">
+                    <div className="bg-white/80 p-2 rounded-full border border-amber-200">
+                      <Sparkles className="h-5 w-5 text-amber-700" />
+                    </div>
+                    <div>
+                      <h4 className="font-semibold text-amber-900">Create a segment first</h4>
+                      <p className="text-sm text-amber-700">Segments let you target dynamic audiences with include/exclude rules.</p>
+                    </div>
+                  </div>
+                  <Button
+                    variant="outline"
+                    className="bg-white/80 text-amber-700 hover:bg-amber-100 border-amber-200"
+                    onClick={() => navigate('/dashboard?tab=segments')}
+                  >
+                    Open segments
+                  </Button>
+                </div>
+              )}
+              <div className="bg-white/80 border border-[var(--builder-border)] rounded-2xl p-6 space-y-4">
+                <Label className="text-base font-semibold text-[var(--builder-ink)]">Select a Segment</Label>
+                <Select value={selectedSegmentId} onValueChange={setSelectedSegmentId} disabled={allSegments.length === 0}>
+                  <SelectTrigger className="h-12 bg-white/90 border-[var(--builder-border)]">
+                    <SelectValue placeholder="Choose a segment..." />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {allSegments.map((segment) => (
+                      <SelectItem key={segment.id} value={segment.id}>{segment.name}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+                {selectedSegmentId && (
+                    <div className="flex items-center gap-2 text-sm text-emerald-700 bg-emerald-50/80 p-3 rounded-xl border border-emerald-100">
+                        <CheckCircle2 className="h-4 w-4" />
+                        <span>Segment resolved to {segmentCount} matching prospects.</span>
                     </div>
                 )}
               </div>
