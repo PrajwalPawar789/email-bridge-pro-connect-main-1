@@ -6,6 +6,7 @@ import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/com
 import { Badge } from '@/components/ui/badge';
 import { Input } from '@/components/ui/input';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from '@/components/ui/dialog';
+import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from '@/components/ui/sheet';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
@@ -37,6 +38,29 @@ import { ensureDefaultPipeline, fetchOpportunities, fetchPipelineStages, updateO
 import { toast } from '@/hooks/use-toast';
 
 type TimelineFilter = 'all' | 'human' | 'bot' | 'opens' | 'clicks' | 'sent';
+type RecipientTimelineEvent = {
+  id: string;
+  label: string;
+  date: string;
+  color: string;
+  kind: 'system' | 'sent' | 'open' | 'click' | 'reply' | 'bounce';
+  step?: number;
+  details?: string;
+  isBot?: boolean;
+  botScore?: number;
+  ipAddress?: string;
+  userAgent?: string;
+  metadata?: Record<string, unknown> | null;
+};
+
+const timelineFilterOptions: Array<{ id: TimelineFilter; label: string }> = [
+  { id: 'all', label: 'All' },
+  { id: 'human', label: 'Human' },
+  { id: 'bot', label: 'Bots' },
+  { id: 'opens', label: 'Opens' },
+  { id: 'clicks', label: 'Clicks' },
+  { id: 'sent', label: 'Sent' },
+];
 
 const CampaignTracker = () => {
   const { id } = useParams();
@@ -219,7 +243,7 @@ const CampaignTracker = () => {
       try {
         const { data, error } = await supabase
           .from('tracking_events')
-          .select('id, event_type, created_at, step_number, is_bot, bot_reasons, metadata')
+          .select('id, event_type, created_at, step_number, is_bot, bot_score, bot_reasons, ip_address, user_agent, metadata')
           .eq('recipient_id', selectedRecipient.id)
           .order('created_at', { ascending: true });
 
@@ -247,6 +271,11 @@ const CampaignTracker = () => {
     return () => {
       cancelled = true;
     };
+  }, [selectedRecipient?.id]);
+
+  useEffect(() => {
+    if (!selectedRecipient?.id) return;
+    setTimelineFilter('all');
   }, [selectedRecipient?.id]);
 
   const fetchReplies = async () => {
@@ -486,23 +515,63 @@ const CampaignTracker = () => {
     }
   };
 
-  const formatDateTime = (value?: string | null) =>
-    value ? format(new Date(value), 'MMM d, HH:mm') : '—';
+  const formatDateTime = (value?: string | null) => {
+    if (!value) return '-';
+    const parsed = new Date(value);
+    if (Number.isNaN(parsed.getTime())) return '-';
+    return format(parsed, 'MMM d, HH:mm');
+  };
+
+  const formatRelativeTime = (value?: string | null) => {
+    if (!value) return 'No activity yet';
+    const parsed = new Date(value);
+    if (Number.isNaN(parsed.getTime())) return 'No activity yet';
+    return formatDistanceToNow(parsed, { addSuffix: true });
+  };
+
+  const getClientFingerprint = (userAgent?: string | null) => {
+    const ua = (userAgent || '').toLowerCase();
+    if (!ua) {
+      return {
+        device: 'Unknown device',
+        browser: 'Unknown browser',
+        os: 'Unknown OS',
+      };
+    }
+
+    let browser = 'Other browser';
+    if (ua.includes('edg/')) browser = 'Edge';
+    else if (ua.includes('opr/') || ua.includes('opera')) browser = 'Opera';
+    else if (ua.includes('chrome/') && !ua.includes('edg/')) browser = 'Chrome';
+    else if (ua.includes('firefox/')) browser = 'Firefox';
+    else if (ua.includes('safari/') && !ua.includes('chrome/')) browser = 'Safari';
+    else if (ua.includes('thunderbird/')) browser = 'Thunderbird';
+
+    let os = 'Other OS';
+    if (ua.includes('windows')) os = 'Windows';
+    else if (ua.includes('mac os') || ua.includes('macintosh')) os = 'macOS';
+    else if (ua.includes('iphone') || ua.includes('ipad') || ua.includes('ios')) os = 'iOS';
+    else if (ua.includes('android')) os = 'Android';
+    else if (ua.includes('linux')) os = 'Linux';
+
+    let device = 'Desktop';
+    if (ua.includes('ipad') || ua.includes('tablet')) device = 'Tablet';
+    else if (ua.includes('mobile') || ua.includes('iphone') || ua.includes('android')) device = 'Mobile';
+
+    return { device, browser, os };
+  };
+
+  const getMetadataText = (metadata: Record<string, unknown> | null | undefined, key: string) => {
+    if (!metadata || typeof metadata !== 'object') return null;
+    const raw = metadata[key];
+    return typeof raw === 'string' && raw.trim().length > 0 ? raw : null;
+  };
 
 
-  const recipientTimeline = useMemo(() => {
+  const recipientTimeline = useMemo<RecipientTimelineEvent[]>(() => {
     if (!selectedRecipient) return [];
 
-    const events: Array<{
-      id: string;
-      label: string;
-      date: string;
-      color: string;
-      kind: 'system' | 'sent' | 'open' | 'click' | 'reply' | 'bounce';
-      step?: number;
-      details?: string;
-      isBot?: boolean;
-    }> = [];
+    const events: RecipientTimelineEvent[] = [];
 
     if (campaign?.created_at) {
       events.push({
@@ -632,6 +701,15 @@ const CampaignTracker = () => {
       const color = event.event_type === 'open'
         ? (isBot ? 'bg-slate-400' : 'bg-green-500')
         : (isBot ? 'bg-slate-400' : 'bg-purple-500');
+      const ipAddress = typeof event.ip_address === 'string' && event.ip_address.trim().length > 0
+        ? event.ip_address.trim()
+        : undefined;
+      const userAgent = typeof event.user_agent === 'string' && event.user_agent.trim().length > 0
+        ? event.user_agent
+        : undefined;
+      const botScore = typeof event.bot_score === 'number' && Number.isFinite(event.bot_score)
+        ? event.bot_score
+        : undefined;
       const detailParts: string[] = [];
       const metadata = event.metadata && typeof event.metadata === 'object' && !Array.isArray(event.metadata)
         ? (event.metadata as Record<string, unknown>)
@@ -676,7 +754,7 @@ const CampaignTracker = () => {
         detailParts.push(`Reasons: ${event.bot_reasons.join(', ')}`);
       }
 
-      const details = detailParts.length > 0 ? detailParts.join(' • ') : undefined;
+      const details = detailParts.length > 0 ? detailParts.join(' | ') : undefined;
 
       events.push({
         id: event.id,
@@ -687,6 +765,10 @@ const CampaignTracker = () => {
         step: resolvedStep ?? undefined,
         details,
         isBot,
+        botScore,
+        ipAddress,
+        userAgent,
+        metadata,
       });
     });
 
@@ -728,6 +810,121 @@ const CampaignTracker = () => {
     if (timelineFilter === 'sent') return recipientTimeline.filter((event) => event.kind === 'sent');
     return recipientTimeline;
   }, [recipientTimeline, timelineFilter]);
+
+  const timelineCounts = useMemo<Record<TimelineFilter, number>>(() => ({
+    all: recipientTimeline.length,
+    human: recipientTimeline.filter((event) => !event.isBot).length,
+    bot: recipientTimeline.filter((event) => event.isBot).length,
+    opens: recipientTimeline.filter((event) => event.kind === 'open').length,
+    clicks: recipientTimeline.filter((event) => event.kind === 'click').length,
+    sent: recipientTimeline.filter((event) => event.kind === 'sent').length,
+  }), [recipientTimeline]);
+
+  const latestActivityAt = recipientTimeline.length
+    ? recipientTimeline[recipientTimeline.length - 1]?.date
+    : (selectedRecipient?.updated_at || selectedRecipient?.last_email_sent_at || campaign?.created_at);
+
+  const lastSentAt = [...recipientTimeline]
+    .reverse()
+    .find((event) => event.kind === 'sent')?.date || selectedRecipient?.last_email_sent_at;
+
+  const trackedInteractionEvents = useMemo(
+    () => recipientTimeline.filter((event) => event.kind === 'open' || event.kind === 'click'),
+    [recipientTimeline]
+  );
+
+  const timelineStepLabels = useMemo(() => {
+    const stepSet = new Set<number>();
+    recipientTimeline.forEach((event) => {
+      if (typeof event.step === 'number' && Number.isFinite(event.step)) {
+        stepSet.add(event.step);
+      }
+    });
+    return Array.from(stepSet)
+      .sort((a, b) => a - b)
+      .map((step) => `Step ${step}`);
+  }, [recipientTimeline]);
+
+  const trackingSignalSummary = useMemo(() => {
+    const uniqueIps = new Set<string>();
+    const uniqueFingerprints = new Set<string>();
+    let humanSignals = 0;
+    let botSignals = 0;
+
+    trackedInteractionEvents.forEach((event) => {
+      if (event.isBot) botSignals += 1;
+      else humanSignals += 1;
+
+      if (event.ipAddress) {
+        uniqueIps.add(event.ipAddress);
+      }
+
+      if (event.userAgent) {
+        const fingerprint = getClientFingerprint(event.userAgent);
+        uniqueFingerprints.add(`${fingerprint.device}|${fingerprint.browser}|${fingerprint.os}`);
+      }
+    });
+
+    let latestFingerprintEvent: RecipientTimelineEvent | null = null;
+    for (let index = trackedInteractionEvents.length - 1; index >= 0; index -= 1) {
+      const event = trackedInteractionEvents[index];
+      if (event.ipAddress || event.userAgent) {
+        latestFingerprintEvent = event;
+        break;
+      }
+    }
+
+    return {
+      humanSignals,
+      botSignals,
+      uniqueIpCount: uniqueIps.size,
+      uniqueDeviceCount: uniqueFingerprints.size,
+      latestFingerprintEvent,
+    };
+  }, [getClientFingerprint, trackedInteractionEvents]);
+
+  const getTimelineEventVisuals = (event: RecipientTimelineEvent) => {
+    if (event.kind === 'system') {
+      return {
+        icon: Users,
+        iconBg: 'bg-sky-100 text-sky-700',
+        borderTone: 'border-l-sky-300',
+      };
+    }
+    if (event.kind === 'sent') {
+      return {
+        icon: Mail,
+        iconBg: 'bg-blue-100 text-blue-700',
+        borderTone: 'border-l-blue-300',
+      };
+    }
+    if (event.kind === 'open') {
+      return {
+        icon: Eye,
+        iconBg: event.isBot ? 'bg-slate-200 text-slate-600' : 'bg-emerald-100 text-emerald-700',
+        borderTone: event.isBot ? 'border-l-slate-300' : 'border-l-emerald-300',
+      };
+    }
+    if (event.kind === 'click') {
+      return {
+        icon: MousePointerClick,
+        iconBg: event.isBot ? 'bg-slate-200 text-slate-600' : 'bg-violet-100 text-violet-700',
+        borderTone: event.isBot ? 'border-l-slate-300' : 'border-l-violet-300',
+      };
+    }
+    if (event.kind === 'reply') {
+      return {
+        icon: MessageSquare,
+        iconBg: 'bg-amber-100 text-amber-700',
+        borderTone: 'border-l-amber-300',
+      };
+    }
+    return {
+      icon: AlertCircle,
+      iconBg: 'bg-rose-100 text-rose-700',
+      borderTone: 'border-l-rose-300',
+    };
+  };
 
 
   const fetchPipelineData = async () => {
@@ -939,6 +1136,14 @@ const CampaignTracker = () => {
     
     return scheduledTime;
   };
+
+  const selectedRecipientNextSendAt = selectedRecipient
+    ? calculateNextSendTime(selectedRecipient)
+    : null;
+
+  const latestFingerprintClient = trackingSignalSummary.latestFingerprintEvent?.userAgent
+    ? getClientFingerprint(trackingSignalSummary.latestFingerprintEvent.userAgent)
+    : null;
 
   const filterSource = hasRecipientFilters && analyticsRecipients.length > 0
     ? analyticsRecipients
@@ -2098,99 +2303,295 @@ const CampaignTracker = () => {
         </DialogContent>
       </Dialog>
 
-      {/* Recipient Details Dialog */}
-      <Dialog open={!!selectedRecipient} onOpenChange={(open) => !open && setSelectedRecipient(null)}>
-      <DialogContent className="max-w-4xl border border-[var(--shell-border)] bg-white/95">
-          <DialogHeader className="space-y-3">
-            <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
-              <div>
-                <DialogTitle>Recipient Details</DialogTitle>
-                <DialogDescription>
-                  Detailed history for {selectedRecipient?.email}
-                </DialogDescription>
-              </div>
-              {selectedRecipient && (
-                <div className="flex flex-wrap items-center gap-2">
-                  <Badge className={`border ${getStatusColor(selectedRecipient.status || 'sent')}`}>
-                    {selectedRecipient.status || 'sent'}
-                  </Badge>
-                  <Badge variant="secondary" className="bg-slate-100 text-slate-700">
-                    Step {selectedRecipient.current_step ?? 0}
-                  </Badge>
-                </div>
-              )}
-            </div>
-          </DialogHeader>
-          
+      {/* Recipient Details Sidebar */}
+      <Sheet open={!!selectedRecipient} onOpenChange={(open) => !open && setSelectedRecipient(null)}>
+        <SheetContent
+          side="right"
+          className="w-full border-l border-[var(--shell-border)] bg-slate-50 p-0 sm:max-w-[980px]"
+        >
           {selectedRecipient && (
-            <Card className="border border-[var(--shell-border)] bg-[var(--shell-surface-strong)]/95 shadow-[0_10px_24px_rgba(15,23,42,0.08)]">
-              <CardHeader className="pb-3">
-                <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
-                  <div>
-                    <CardTitle className="text-base font-semibold text-[var(--shell-ink)]">Timeline</CardTitle>
-                    <CardDescription className="text-sm text-[var(--shell-muted)]">
-                      Chronological activity with step context and bot labels.
-                    </CardDescription>
-                  </div>
-                  <div className="flex flex-wrap gap-2">
-                    {([
-                      { id: 'all', label: 'All' },
-                      { id: 'human', label: 'Human' },
-                      { id: 'bot', label: 'Bots' },
-                      { id: 'opens', label: 'Opens' },
-                      { id: 'clicks', label: 'Clicks' },
-                      { id: 'sent', label: 'Sent' },
-                    ] as const).map((option) => (
-                      <Button
-                        key={option.id}
-                        size="sm"
-                        variant={timelineFilter === option.id ? 'default' : 'outline'}
-                        className="h-8 px-3 text-xs"
-                        onClick={() => setTimelineFilter(option.id)}
-                      >
-                        {option.label}
-                      </Button>
-                    ))}
+            <div className="flex h-full min-h-0 flex-col bg-[radial-gradient(circle_at_10%_0%,rgba(16,185,129,0.10),transparent_42%),radial-gradient(circle_at_100%_20%,rgba(59,130,246,0.12),transparent_35%),#f8fafc]">
+              <div className="border-b border-[var(--shell-border)] bg-white/90 px-6 pb-5 pt-6 pr-14 backdrop-blur">
+                <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+                  <SheetHeader className="space-y-2 text-left">
+                    <p className="text-[11px] font-semibold uppercase tracking-[0.22em] text-slate-500">
+                      Recipient Intelligence Board
+                    </p>
+                    <SheetTitle className="text-2xl font-semibold text-slate-900">
+                      {selectedRecipient.name || selectedRecipient.email}
+                    </SheetTitle>
+                    <SheetDescription className="text-sm text-slate-600">
+                      Full activity stream for {selectedRecipient.email}
+                    </SheetDescription>
+                  </SheetHeader>
+
+                  <div className="flex flex-wrap items-center gap-2 lg:max-w-[360px] lg:justify-end">
+                    <Badge className={`border ${getStatusColor(selectedRecipient.status || 'sent')}`}>
+                      {selectedRecipient.status || 'sent'}
+                    </Badge>
+                    <Badge variant="secondary" className="bg-slate-100 text-slate-700">
+                      Step {selectedRecipient.current_step ?? 0}
+                    </Badge>
+                    {selectedRecipient.replied && (
+                      <Badge className="border-amber-200 bg-amber-100 text-amber-700">
+                        Replied
+                      </Badge>
+                    )}
+                    {selectedRecipient.bounced && (
+                      <Badge className="border-rose-200 bg-rose-100 text-rose-700">
+                        Bounced
+                      </Badge>
+                    )}
                   </div>
                 </div>
-                <div className="mt-2 flex items-center gap-2 text-xs text-slate-500">
-                  <Activity className="h-3 w-3" />
-                  {filteredTimeline.length} events shown
-                </div>
-              </CardHeader>
-              <CardContent>
-                {recipientTimelineLoading ? (
-                  <div className="text-sm text-slate-500">Loading timeline...</div>
-                ) : filteredTimeline.length === 0 ? (
-                  <div className="text-sm text-slate-400">No activity for this filter.</div>
-                ) : (
-                  <ScrollArea className="h-[520px] pr-4">
-                    <div className="relative space-y-6 border-l-2 border-gray-200 pl-4">
-                      {filteredTimeline.map((event) => (
-                        <div key={event.id} className="relative">
-                          <div className={`absolute -left-[21px] top-0 h-4 w-4 rounded-full ${event.color} border-2 border-white`}></div>
-                          <div className="flex flex-wrap items-center gap-2">
-                            <p className="text-sm font-medium">{event.label}</p>
-                            {event.isBot && (
-                              <Badge variant="secondary" className="bg-slate-100 text-slate-600">
-                                Bot
-                              </Badge>
+              </div>
+
+              <div className="min-h-0 flex-1 overflow-hidden">
+                <div className="grid h-full min-h-0 grid-cols-1 lg:grid-cols-[320px,1fr]">
+                  <aside className="overflow-y-auto border-b border-slate-200 bg-white/70 lg:border-b-0 lg:border-r">
+                    <div className="space-y-4 p-4">
+                      <div className="rounded-2xl border border-slate-200 bg-white px-4 py-3 shadow-sm">
+                        <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">Signal Radar</p>
+                        <div className="mt-3 grid grid-cols-2 gap-2">
+                          <div className="rounded-xl border border-emerald-200 bg-emerald-50 px-2.5 py-2">
+                            <p className="text-[11px] text-emerald-700">Human</p>
+                            <p className="text-lg font-semibold text-emerald-900">{trackingSignalSummary.humanSignals}</p>
+                          </div>
+                          <div className="rounded-xl border border-slate-300 bg-slate-100 px-2.5 py-2">
+                            <p className="text-[11px] text-slate-600">Bot</p>
+                            <p className="text-lg font-semibold text-slate-900">{trackingSignalSummary.botSignals}</p>
+                          </div>
+                          <div className="rounded-xl border border-blue-200 bg-blue-50 px-2.5 py-2">
+                            <p className="text-[11px] text-blue-700">Unique IPs</p>
+                            <p className="text-lg font-semibold text-blue-900">{trackingSignalSummary.uniqueIpCount}</p>
+                          </div>
+                          <div className="rounded-xl border border-violet-200 bg-violet-50 px-2.5 py-2">
+                            <p className="text-[11px] text-violet-700">Devices</p>
+                            <p className="text-lg font-semibold text-violet-900">{trackingSignalSummary.uniqueDeviceCount}</p>
+                          </div>
+                        </div>
+                      </div>
+
+                      <div className="rounded-2xl border border-slate-200 bg-white px-4 py-3 shadow-sm">
+                        <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">Latest Fingerprint</p>
+                        {trackingSignalSummary.latestFingerprintEvent ? (
+                          <div className="mt-2 space-y-2">
+                            <p className="text-sm font-medium text-slate-900">
+                              {trackingSignalSummary.latestFingerprintEvent.label}
+                            </p>
+                            <p className="text-xs text-slate-500">
+                              {formatDateTime(trackingSignalSummary.latestFingerprintEvent.date)} | {formatRelativeTime(trackingSignalSummary.latestFingerprintEvent.date)}
+                            </p>
+                            <div className="flex flex-wrap gap-1.5">
+                              {trackingSignalSummary.latestFingerprintEvent.ipAddress && (
+                                <span className="rounded-full border border-blue-200 bg-blue-50 px-2 py-0.5 text-[11px] font-medium text-blue-700">
+                                  IP {trackingSignalSummary.latestFingerprintEvent.ipAddress}
+                                </span>
+                              )}
+                              {latestFingerprintClient && (
+                                <>
+                                  <span className="rounded-full border border-slate-200 bg-slate-100 px-2 py-0.5 text-[11px] text-slate-700">
+                                    {latestFingerprintClient.device}
+                                  </span>
+                                  <span className="rounded-full border border-slate-200 bg-slate-100 px-2 py-0.5 text-[11px] text-slate-700">
+                                    {latestFingerprintClient.browser}
+                                  </span>
+                                  <span className="rounded-full border border-slate-200 bg-slate-100 px-2 py-0.5 text-[11px] text-slate-700">
+                                    {latestFingerprintClient.os}
+                                  </span>
+                                </>
+                              )}
+                            </div>
+                            {trackingSignalSummary.latestFingerprintEvent.userAgent && (
+                              <p className="rounded-lg bg-slate-50 px-2 py-1 text-[11px] text-slate-500 break-all">
+                                UA: {trackingSignalSummary.latestFingerprintEvent.userAgent}
+                              </p>
                             )}
                           </div>
-                          <p className="text-xs text-gray-500">{formatDateTime(event.date)}</p>
-                          {event.details && (
-                            <p className="mt-1 text-xs text-slate-500">{event.details}</p>
-                          )}
+                        ) : (
+                          <p className="mt-2 text-sm text-slate-500">
+                            No client fingerprint captured yet.
+                          </p>
+                        )}
+                      </div>
+
+                      <div className="rounded-2xl border border-slate-200 bg-white px-4 py-3 shadow-sm">
+                        <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">Journey</p>
+                        <div className="mt-2 space-y-2">
+                          <div>
+                            <p className="text-[11px] uppercase tracking-wide text-slate-500">Latest Activity</p>
+                            <p className="text-sm font-semibold text-slate-900">{formatDateTime(latestActivityAt)}</p>
+                            <p className="text-xs text-slate-500">{formatRelativeTime(latestActivityAt)}</p>
+                          </div>
+                          <div>
+                            <p className="text-[11px] uppercase tracking-wide text-slate-500">Last Sent</p>
+                            <p className="text-sm font-semibold text-slate-900">{formatDateTime(lastSentAt)}</p>
+                            <p className="text-xs text-slate-500">
+                              {selectedRecipientNextSendAt
+                                ? `Next scheduled ${format(selectedRecipientNextSendAt, 'MMM d, HH:mm')}`
+                                : 'No pending sends'}
+                            </p>
+                          </div>
+                          <div className="flex flex-wrap gap-1.5">
+                            {timelineStepLabels.length > 0 ? (
+                              timelineStepLabels.map((stepLabel) => (
+                                <span key={stepLabel} className="rounded-full border border-slate-200 bg-slate-100 px-2 py-0.5 text-[11px] text-slate-700">
+                                  {stepLabel}
+                                </span>
+                              ))
+                            ) : (
+                              <span className="text-xs text-slate-500">No step metadata yet</span>
+                            )}
+                          </div>
                         </div>
+                      </div>
+                    </div>
+                  </aside>
+
+                  <section className="min-h-0 flex flex-col p-4 md:p-5">
+                    <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
+                      <div>
+                        <h3 className="text-base font-semibold text-slate-900">Timeline</h3>
+                        <p className="text-sm text-slate-600">Chronological activity with device, IP, and bot context.</p>
+                      </div>
+                      <div className="inline-flex items-center gap-1 rounded-full border border-slate-200 bg-white px-2.5 py-1 text-xs font-medium text-slate-600 shadow-sm">
+                        <Activity className="h-3.5 w-3.5" />
+                        {filteredTimeline.length} shown
+                      </div>
+                    </div>
+
+                    <div className="mb-4 flex flex-wrap gap-2">
+                      {timelineFilterOptions.map((option) => (
+                        <Button
+                          key={option.id}
+                          size="sm"
+                          variant={timelineFilter === option.id ? 'default' : 'outline'}
+                          className="h-8 rounded-full px-3 text-xs"
+                          onClick={() => setTimelineFilter(option.id)}
+                        >
+                          {option.label}
+                          <span className="ml-1.5 rounded-full bg-black/10 px-1.5 py-0.5 text-[10px] leading-none">
+                            {timelineCounts[option.id]}
+                          </span>
+                        </Button>
                       ))}
                     </div>
-                  </ScrollArea>
-                )}
-              </CardContent>
-            </Card>
+
+                    <div className="min-h-0 flex-1">
+                      {recipientTimelineLoading ? (
+                        <div className="rounded-2xl border border-slate-200 bg-white px-4 py-6 text-sm text-slate-500 shadow-sm">
+                          Loading timeline...
+                        </div>
+                      ) : filteredTimeline.length === 0 ? (
+                        <div className="rounded-2xl border border-dashed border-slate-300 bg-white/90 px-4 py-6 text-sm text-slate-500">
+                          No activity for this filter.
+                        </div>
+                      ) : (
+                        <ScrollArea className="h-full pr-2">
+                          <div className="space-y-3 pb-4">
+                            {filteredTimeline.map((event) => {
+                              const visual = getTimelineEventVisuals(event);
+                              const EventIcon = visual.icon;
+                              const clientFingerprint = event.userAgent ? getClientFingerprint(event.userAgent) : null;
+                              const via = getMetadataText(event.metadata, 'via');
+                              const secFetchMode = getMetadataText(event.metadata, 'sec_fetch_mode');
+                              const secFetchDest = getMetadataText(event.metadata, 'sec_fetch_dest');
+                              return (
+                                <article
+                                  key={event.id}
+                                  className={`rounded-2xl border border-slate-200 border-l-4 bg-white/95 px-4 py-3 shadow-sm ${visual.borderTone}`}
+                                >
+                                  <div className="flex items-start gap-3">
+                                    <div className={`mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-full ${visual.iconBg}`}>
+                                      <EventIcon className="h-4 w-4" />
+                                    </div>
+                                    <div className="min-w-0 flex-1">
+                                      <div className="flex flex-wrap items-center gap-2">
+                                        <p className="text-sm font-medium text-slate-900">{event.label}</p>
+                                        {typeof event.step === 'number' && (
+                                          <Badge variant="outline" className="border-slate-200 bg-white text-slate-600">
+                                            Step {event.step}
+                                          </Badge>
+                                        )}
+                                        {event.isBot && (
+                                          <Badge className="border-slate-300 bg-slate-100 text-slate-700">
+                                            Bot
+                                          </Badge>
+                                        )}
+                                        {event.isBot && typeof event.botScore === 'number' && (
+                                          <Badge variant="outline" className="border-slate-300 bg-white text-slate-600">
+                                            Score {event.botScore}
+                                          </Badge>
+                                        )}
+                                      </div>
+
+                                      <p className="mt-1 text-xs text-slate-500">
+                                        {formatDateTime(event.date)} | {formatRelativeTime(event.date)}
+                                      </p>
+
+                                      {(event.ipAddress || clientFingerprint || via || secFetchMode || secFetchDest) && (
+                                        <div className="mt-2 flex flex-wrap gap-1.5">
+                                          {event.ipAddress && (
+                                            <span className="rounded-full border border-blue-200 bg-blue-50 px-2 py-0.5 text-[11px] font-medium text-blue-700">
+                                              IP {event.ipAddress}
+                                            </span>
+                                          )}
+                                          {clientFingerprint && (
+                                            <>
+                                              <span className="rounded-full border border-slate-200 bg-slate-100 px-2 py-0.5 text-[11px] text-slate-700">
+                                                {clientFingerprint.device}
+                                              </span>
+                                              <span className="rounded-full border border-slate-200 bg-slate-100 px-2 py-0.5 text-[11px] text-slate-700">
+                                                {clientFingerprint.browser}
+                                              </span>
+                                              <span className="rounded-full border border-slate-200 bg-slate-100 px-2 py-0.5 text-[11px] text-slate-700">
+                                                {clientFingerprint.os}
+                                              </span>
+                                            </>
+                                          )}
+                                          {via && (
+                                            <span className="max-w-[220px] truncate rounded-full border border-slate-200 bg-white px-2 py-0.5 text-[11px] text-slate-600">
+                                              Via {via}
+                                            </span>
+                                          )}
+                                          {secFetchMode && (
+                                            <span className="max-w-[220px] truncate rounded-full border border-slate-200 bg-white px-2 py-0.5 text-[11px] text-slate-600">
+                                              Mode {secFetchMode}
+                                            </span>
+                                          )}
+                                          {secFetchDest && (
+                                            <span className="max-w-[220px] truncate rounded-full border border-slate-200 bg-white px-2 py-0.5 text-[11px] text-slate-600">
+                                              Dest {secFetchDest}
+                                            </span>
+                                          )}
+                                        </div>
+                                      )}
+
+                                      {event.details && (
+                                        <p className="mt-2 text-xs text-slate-600">{event.details}</p>
+                                      )}
+
+                                      {event.userAgent && (
+                                        <p className="mt-2 rounded-lg bg-slate-50 px-2 py-1 text-[11px] text-slate-500 break-all">
+                                          UA: {event.userAgent}
+                                        </p>
+                                      )}
+                                    </div>
+                                  </div>
+                                </article>
+                              );
+                            })}
+                          </div>
+                        </ScrollArea>
+                      )}
+                    </div>
+                  </section>
+                </div>
+              </div>
+            </div>
           )}
-        </DialogContent>
-      </Dialog>
+        </SheetContent>
+      </Sheet>
     </DashboardLayout>
   );
 };

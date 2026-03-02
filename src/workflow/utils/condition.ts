@@ -11,8 +11,11 @@ const toObject = (value: unknown): Record<string, unknown> => {
 
 const toConditionRule = (value: unknown): ConditionRule => {
   const normalized = String(value || "").toLowerCase();
+  if (normalized === "has_replied") return "email_replied";
   if (
     normalized === "user_property" ||
+    normalized === "email_replied" ||
+    normalized === "email_reply_contains" ||
     normalized === "email_opened" ||
     normalized === "email_clicked" ||
     normalized === "tag_exists" ||
@@ -177,6 +180,8 @@ export const isConditionBranchHandle = (value: unknown, handle: string) =>
 
 export interface ConditionEvaluationContext {
   userProperties?: Record<string, string>;
+  replied?: boolean;
+  replyText?: string;
   opened?: boolean;
   clicked?: boolean;
   tags?: string[];
@@ -187,6 +192,22 @@ export const evaluateConditionClause = (
   clause: ConditionClauseConfig,
   context: ConditionEvaluationContext
 ): boolean => {
+  const replyText = String(
+    context.replyText ||
+      (context.userProperties || {}).reply_text ||
+      (context.userProperties || {}).last_reply ||
+      (context.userProperties || {}).email_reply ||
+      ""
+  )
+    .trim()
+    .toLowerCase();
+
+  if (clause.rule === "email_replied") return Boolean(context.replied) || replyText.length > 0;
+  if (clause.rule === "email_reply_contains") {
+    const expected = String(clause.value || "").trim().toLowerCase();
+    if (!expected) return false;
+    return replyText.includes(expected);
+  }
   if (clause.rule === "email_opened") return Boolean(context.opened);
   if (clause.rule === "email_clicked") return Boolean(context.clicked);
   if (clause.rule === "tag_exists") {

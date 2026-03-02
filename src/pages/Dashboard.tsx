@@ -101,6 +101,22 @@ const Dashboard = () => {
       navigate('/pipeline');
       return;
     }
+    if (tab === 'referrals') {
+      navigate('/referrals');
+      return;
+    }
+    if (tab === 'email-builder' || tab === 'templates') {
+      navigate('/email-builder');
+      return;
+    }
+    if (tab === 'landing-pages') {
+      navigate('/landing-pages');
+      return;
+    }
+    if (tab === 'site-connector' || tab === 'connect') {
+      navigate('/site-connector');
+      return;
+    }
 
     setActiveTab(tab);
     if (tab === 'home') {

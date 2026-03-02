@@ -5,6 +5,14 @@ import { useAuth } from '@/providers/AuthProvider';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import {
+  Pagination,
+  PaginationContent,
+  PaginationItem,
+  PaginationLink,
+  PaginationNext,
+  PaginationPrevious,
+} from '@/components/ui/pagination';
 import { toast } from '@/hooks/use-toast';
 import {
   BillingSnapshot,
@@ -17,6 +25,8 @@ import {
 } from '@/lib/billing';
 import { supabase } from '@/integrations/supabase/client';
 import { RefreshCw } from 'lucide-react';
+
+const LEDGER_PAGE_SIZE = 20;
 
 const formatDate = (value: string | null | undefined) => {
   if (!value) return '-';
@@ -39,6 +49,7 @@ const Spending = () => {
   const [loadingData, setLoadingData] = useState(false);
   const [snapshot, setSnapshot] = useState<BillingSnapshot | null>(null);
   const [ledger, setLedger] = useState<CreditLedgerRow[]>([]);
+  const [ledgerPage, setLedgerPage] = useState(1);
   const [transactions, setTransactions] = useState<BillingTransactionRow[]>([]);
 
   const handleTabChange = (tab: string) => {
@@ -77,12 +88,13 @@ const Spending = () => {
 
       setSnapshot(snapshotRow);
       setLedger(ledgerRows);
+      setLedgerPage(1);
       setTransactions(txRows);
-    } catch (error: any) {
+    } catch (error: unknown) {
       console.error('Failed to load spending data:', error);
       toast({
         title: 'Failed to load spending history',
-        description: error?.message || 'Please try again.',
+        description: error instanceof Error ? error.message : 'Please try again.',
         variant: 'destructive',
       });
     } finally {
@@ -106,6 +118,22 @@ const Spending = () => {
     if (total <= 0) return 0;
     return Math.min(100, Math.max(0, (used / total) * 100));
   }, [snapshot]);
+
+  const ledgerTotalPages = useMemo(() => Math.max(1, Math.ceil(ledger.length / LEDGER_PAGE_SIZE)), [ledger.length]);
+
+  useEffect(() => {
+    if (ledgerPage > ledgerTotalPages) {
+      setLedgerPage(ledgerTotalPages);
+    }
+  }, [ledgerPage, ledgerTotalPages]);
+
+  const paginatedLedger = useMemo(() => {
+    const start = (ledgerPage - 1) * LEDGER_PAGE_SIZE;
+    return ledger.slice(start, start + LEDGER_PAGE_SIZE);
+  }, [ledger, ledgerPage]);
+
+  const ledgerPageStart = ledger.length === 0 ? 0 : (ledgerPage - 1) * LEDGER_PAGE_SIZE + 1;
+  const ledgerPageEnd = Math.min(ledgerPage * LEDGER_PAGE_SIZE, ledger.length);
 
   if (loading) {
     return (
@@ -191,7 +219,7 @@ const Spending = () => {
                   </tr>
                 </thead>
                 <tbody>
-                  {ledger.map((entry) => (
+                  {paginatedLedger.map((entry) => (
                     <tr key={entry.id} className="border-b">
                       <td className="py-2 pr-4">{formatDate(entry.created_at)}</td>
                       <td className="py-2 pr-4 capitalize">{formatEventType(entry.event_type)}</td>
@@ -205,6 +233,51 @@ const Spending = () => {
                 </tbody>
               </table>
             </div>
+            {ledger.length > 0 && (
+              <div className="mt-4 flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+                <p className="text-sm text-slate-500">
+                  Showing {ledgerPageStart}-{ledgerPageEnd} of {ledger.length}
+                </p>
+                <Pagination className="w-auto justify-end">
+                  <PaginationContent>
+                    <PaginationItem>
+                      <PaginationPrevious
+                        href="#"
+                        onClick={(e) => {
+                          e.preventDefault();
+                          if (ledgerPage > 1) setLedgerPage((prev) => prev - 1);
+                        }}
+                        className={ledgerPage === 1 ? 'pointer-events-none opacity-50' : ''}
+                      />
+                    </PaginationItem>
+                    {Array.from({ length: ledgerTotalPages }, (_, index) => index + 1).map((page) => (
+                      <PaginationItem key={`ledger-page-${page}`}>
+                        <PaginationLink
+                          href="#"
+                          isActive={page === ledgerPage}
+                          onClick={(e) => {
+                            e.preventDefault();
+                            setLedgerPage(page);
+                          }}
+                        >
+                          {page}
+                        </PaginationLink>
+                      </PaginationItem>
+                    ))}
+                    <PaginationItem>
+                      <PaginationNext
+                        href="#"
+                        onClick={(e) => {
+                          e.preventDefault();
+                          if (ledgerPage < ledgerTotalPages) setLedgerPage((prev) => prev + 1);
+                        }}
+                        className={ledgerPage === ledgerTotalPages ? 'pointer-events-none opacity-50' : ''}
+                      />
+                    </PaginationItem>
+                  </PaginationContent>
+                </Pagination>
+              </div>
+            )}
             {ledger.length === 0 && (
               <div className="rounded-md border border-dashed border-slate-300 p-4 text-sm text-slate-500">
                 No credit ledger events yet.

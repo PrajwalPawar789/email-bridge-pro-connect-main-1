@@ -1464,7 +1464,7 @@ const Automations = () => {
 
                   {!selectedTemplate.runner_compatible ? (
                     <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
-                      This template contains blocks that are not fully runner-compatible yet (for example split).
+                      This template contains blocks that are not fully runner-compatible yet.
                       It can be edited now, but publish may stay blocked until those blocks are removed.
                     </div>
                   ) : null}

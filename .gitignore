@@ -22,3 +22,14 @@ dist-ssr
 *.njsproj
 *.sln
 *.sw?
+
+# Local environment files
+.env
+.env.*
+!.env.example
+
+# Local temporary artifacts
+tmpclaude-*-cwd
+create-flywheel-studio-main/
+build-log.txt
+check-output.txt

@@ -6,6 +6,8 @@ import { supabase } from '@/integrations/supabase/client';
 import { toast } from '@/hooks/use-toast';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
+import { Textarea } from '@/components/ui/textarea';
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Badge } from '@/components/ui/badge';
 import {
@@ -75,6 +77,17 @@ type BillingSnapshot = {
   campaign_limit: number | null;
   campaigns_used: number;
   unlimited_campaigns: boolean;
+};
+
+type ContactSalesForm = {
+  fullName: string;
+  email: string;
+  company: string;
+  role: string;
+  teamSize: string;
+  crm: string;
+  message: string;
+  website: string;
 };
 
 const DEFAULT_PLANS: Plan[] = [
@@ -166,7 +179,7 @@ function planDisplay(plan: Plan, billing: BillingCycle) {
   const price = priceFor(plan, billing);
 
   let priceLabel: React.ReactNode;
-  let priceSuffix = '';
+  const priceSuffix = '';
 
   if (isEnterprise) {
     priceLabel = 'Custom Plan';
@@ -243,6 +256,13 @@ function renderCell(v: boolean | string | '-') {
   return null;
 }
 
+function formatDateShort(value: string | null | undefined) {
+  if (!value) return '--';
+  const d = new Date(value);
+  if (Number.isNaN(d.getTime())) return '--';
+  return d.toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' });
+}
+
 function resolveActiveTab(pathname: string) {
   if (pathname === '/billing') return 'billing';
   if (pathname === '/spending') return 'spending';
@@ -255,6 +275,7 @@ type PlanCardProps = {
   selected: boolean;
   planIndex: number;
   onSelect: () => void;
+  onContactSales: () => void;
   onToggleComparison: () => void;
   comparisonOpen: boolean;
   core: ComparisonRow[];
@@ -271,6 +292,7 @@ const PlanCard = ({
   selected,
   planIndex,
   onSelect,
+  onContactSales,
   onToggleComparison,
   comparisonOpen,
   core,
@@ -280,17 +302,23 @@ const PlanCard = ({
   selectedBillingCycle,
   isPlanExpired
 }: PlanCardProps) => {
-  const navigate = useNavigate();
   const includedCore = core
     .map((r) => ({ label: r.label, v: r.values[planIndex] }))
     .filter((r) => r.v !== false && r.v !== '-');
   const includedInsights = insights
     .map((r) => ({ label: r.label, v: r.values[planIndex] }))
     .filter((r) => r.v !== false && r.v !== '-');
+  const highlightedCore = includedCore.slice(0, 4);
+  const highlightedInsights = includedInsights.slice(0, 3);
+  const additionalCount = Math.max(
+    0,
+    includedCore.length + includedInsights.length - highlightedCore.length - highlightedInsights.length
+  );
 
   const isCurrent = userPlanId === plan.id && billing === userBillingCycle;
   const isSelectedUI = selected && selectedBillingCycle === billing;
   const isDisabled = plan.id === 'free' || plan.id === 'enterprise' || (isCurrent && !isPlanExpired);
+  const details = planDisplay(plan, billing);
 
   const buttonText = isCurrent
     ? isPlanExpired
@@ -302,9 +330,13 @@ const PlanCard = ({
 
   return (
     <Card
-      className={`relative flex h-full flex-col ${
+      className={`relative flex h-full flex-col overflow-hidden rounded-2xl border border-slate-200 bg-white transition-all duration-200 ${
         plan.id === 'free' || plan.id === 'enterprise' ? 'cursor-default' : 'cursor-pointer'
-      } ${isSelectedUI ? 'ring-2 ring-emerald-300 bg-emerald-50/60' : ''}`}
+      } ${
+        isSelectedUI
+          ? 'border-emerald-300 bg-emerald-50/40 ring-2 ring-emerald-200 shadow-[0_20px_45px_-28px_rgba(16,185,129,0.55)]'
+          : 'shadow-[0_16px_40px_-30px_rgba(15,23,42,0.45)] hover:border-slate-300 hover:shadow-[0_18px_44px_-30px_rgba(15,23,42,0.5)]'
+      }`}
       onClick={plan.id === 'free' || plan.id === 'enterprise' ? undefined : onSelect}
       role={plan.id === 'free' || plan.id === 'enterprise' ? undefined : 'button'}
       tabIndex={plan.id === 'free' || plan.id === 'enterprise' ? -1 : 0}
@@ -315,53 +347,48 @@ const PlanCard = ({
         }
       }}
     >
-      <CardHeader className="!p-3">
-        <div className="flex items-center justify-between">
+      <CardHeader className="space-y-4 p-5 pb-4">
+        <div className="flex items-start justify-between gap-3">
           <div className="flex-1">
-            <div className="flex items-center gap-2">
+            <div className="flex items-center gap-2.5">
               {planIcon(plan.id)}
-              <CardTitle className="text-base font-semibold md:text-xl">{plan.name}</CardTitle>
+              <CardTitle className="text-base font-semibold text-slate-900 md:text-lg">{plan.name}</CardTitle>
             </div>
+            {plan.description && <div className="mt-2 text-sm text-slate-600">{plan.description}</div>}
           </div>
           {isCurrent && isPlanExpired ? (
-            <Badge className="mb-1 bg-rose-500 text-white hover:bg-rose-600">EXPIRED</Badge>
+            <Badge className="border border-rose-200 bg-rose-50 text-rose-700 hover:bg-rose-50">Expired</Badge>
+          ) : isCurrent ? (
+            <Badge className="border border-sky-200 bg-sky-50 text-sky-700 hover:bg-sky-50">Current</Badge>
           ) : plan.popular ? (
-            <Badge className="mb-1 bg-[var(--shell-accent)] text-white hover:bg-[var(--shell-accent)]">MOST POPULAR</Badge>
+            <Badge className="border border-emerald-200 bg-emerald-50 text-emerald-700 hover:bg-emerald-50">Most Popular</Badge>
           ) : null}
         </div>
 
-        <div className="mt-2 space-y-2">
-          {plan.description && <div className="text-sm text-slate-600">{plan.description}</div>}
-          {(() => {
-            const d = planDisplay(plan, billing);
-            return (
-              <>
-                <div className="text-3xl font-bold">
-                  {d.priceLabel}
-                  {d.priceSuffix && <span className="text-sm text-slate-500">{d.priceSuffix}</span>}
-                </div>
-                <div className="text-slate-500" style={{ visibility: plan.id === 'enterprise' ? 'hidden' : undefined }}>
-                  {d.billedNote}
-                </div>
-              </>
-            );
-          })()}
+        <div className="rounded-xl border border-slate-200 bg-white/90 px-4 py-3">
+          <div className="text-3xl font-bold text-slate-900">
+            {details.priceLabel}
+            {details.priceSuffix && <span className="text-sm text-slate-500">{details.priceSuffix}</span>}
+          </div>
+          <div className="mt-1 text-xs text-slate-500" style={{ visibility: plan.id === 'enterprise' ? 'hidden' : undefined }}>
+            {details.billedNote}
+          </div>
         </div>
       </CardHeader>
 
-      <CardContent className="!p-3 flex flex-1 flex-col space-y-5">
-        <div className="border-y border-slate-200 py-3">
-          <div className="flex items-center text-[17px] font-semibold text-black">
-            <Coins className="h-5 w-5 text-[var(--shell-warm)]" />
-            <span className="ml-2">{planDisplay(plan, billing).credits}</span>
+      <CardContent className="flex flex-1 flex-col space-y-4 px-5 pb-5 pt-0">
+        <div className="rounded-lg border border-slate-200 bg-slate-50/70 p-3">
+          <div className="flex items-center text-sm font-semibold text-slate-800">
+            <Coins className="mr-2 h-4 w-4 text-[var(--shell-warm)]" />
+            {details.credits}
           </div>
         </div>
 
-        <div className="grid grid-cols-1 pt-3">
+        <div className="grid grid-cols-1">
           {plan.id === 'enterprise' ? (
             <Button
-              className="w-full bg-[var(--shell-ink)] text-white hover:bg-slate-800"
-              onClick={() => navigate('/subscription')}
+              className="h-10 w-full bg-[var(--shell-ink)] text-white hover:bg-slate-800"
+              onClick={onContactSales}
             >
               Contact our sales
             </Button>
@@ -369,7 +396,7 @@ const PlanCard = ({
             <Button
               onClick={onSelect}
               disabled={isDisabled}
-              className={`w-full ${
+              className={`h-10 w-full ${
                 isSelectedUI
                   ? 'bg-[#424242] text-white'
                   : 'bg-[var(--shell-accent)] text-white hover:bg-emerald-700'
@@ -381,10 +408,10 @@ const PlanCard = ({
           )}
         </div>
 
-        <div className="space-y-3">
-          <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">Outbound Execution Capabilities</div>
-          <ul className="space-y-2">
-            {includedCore.map((item) => (
+        <div className="space-y-2">
+          <div className="text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-500">Execution</div>
+          <ul className="space-y-1.5">
+            {highlightedCore.map((item) => (
               <li key={item.label} className="flex items-start text-sm text-slate-700">
                 <Check className="mr-2 mt-0.5 h-4 w-4 text-emerald-600" />
                 <span>
@@ -396,10 +423,10 @@ const PlanCard = ({
           </ul>
         </div>
 
-        <div className="space-y-3">
-          <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">Revenue Intelligence Layer</div>
-          <ul className="space-y-2">
-            {includedInsights.map((item) => (
+        <div className="space-y-2">
+          <div className="text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-500">Intelligence</div>
+          <ul className="space-y-1.5">
+            {highlightedInsights.map((item) => (
               <li key={item.label} className="flex items-start text-sm text-slate-700">
                 <Check className="mr-2 mt-0.5 h-4 w-4 text-emerald-600" />
                 <span>
@@ -409,6 +436,9 @@ const PlanCard = ({
               </li>
             ))}
           </ul>
+          {additionalCount > 0 && (
+            <p className="text-xs text-slate-500">+{additionalCount} more features in comparison view</p>
+          )}
         </div>
       </CardContent>
 
@@ -416,7 +446,7 @@ const PlanCard = ({
         type="button"
         onClick={onToggleComparison}
         aria-expanded={comparisonOpen}
-        className="my-4 inline-flex w-full items-center justify-center text-sm font-semibold text-[var(--shell-accent)] underline"
+        className="inline-flex w-full items-center justify-center border-t border-slate-200 px-4 py-3 text-sm font-semibold text-[var(--shell-accent)] transition-colors hover:bg-slate-50"
       >
         {comparisonOpen ? 'Hide plan comparison' : 'Show plan comparison'}
         {comparisonOpen ? <ChevronUp className="ml-1 h-4 w-4" /> : <ChevronDown className="ml-1 h-4 w-4" />}
@@ -430,6 +460,7 @@ type PlanComparisonTableProps = {
   plans: Plan[];
   selectedPlan: PlanId;
   onSelect: (id: PlanId) => void;
+  onContactSales: () => void;
   core: ComparisonRow[];
   insights: ComparisonRow[];
   userBillingCycle: BillingCycle;
@@ -443,6 +474,7 @@ const PlanComparisonTable = ({
   plans,
   selectedPlan,
   onSelect,
+  onContactSales,
   core,
   insights,
   userBillingCycle,
@@ -450,14 +482,14 @@ const PlanComparisonTable = ({
   selectedBillingCycle,
   isPlanExpired
 }: PlanComparisonTableProps) => {
-  const navigate = useNavigate();
-
   return (
-    <div className="overflow-x-auto rounded-lg border border-slate-200">
-      <table className="min-w-[720px] w-full text-sm">
+    <div className="overflow-x-auto rounded-2xl border border-slate-200 bg-white shadow-[0_18px_45px_-34px_rgba(15,23,42,0.5)]">
+      <table className="min-w-[780px] w-full text-sm">
         <thead>
           <tr className="bg-slate-50">
-            <th className="p-3 text-left font-semibold text-slate-700">Feature</th>
+            <th className="sticky left-0 z-20 border-r border-slate-200 bg-slate-50 p-3 text-left font-semibold text-slate-700">
+              Feature
+            </th>
             {plans.map((p) => {
               const d = planDisplay(p, billing);
               const isSelected = p.id === selectedPlan && billing === selectedBillingCycle;
@@ -468,7 +500,7 @@ const PlanComparisonTable = ({
                 <th
                   key={p.id}
                   className={`p-3 text-left align-bottom font-semibold text-slate-800 ${
-                    isSelected ? 'bg-emerald-50 border-b-2 border-emerald-300' : ''
+                    isSelected ? 'bg-emerald-50/80 border-b-2 border-emerald-300' : ''
                   }`}
                 >
                   <div className="space-y-2">
@@ -488,7 +520,7 @@ const PlanComparisonTable = ({
                       {p.id === 'enterprise' ? (
                         <Button
                           className="w-full bg-[var(--shell-ink)] text-white hover:bg-slate-800"
-                          onClick={() => navigate('/subscription')}
+                          onClick={onContactSales}
                         >
                           Contact our sales
                         </Button>
@@ -496,7 +528,7 @@ const PlanComparisonTable = ({
                         <Button
                           onClick={() => onSelect(p.id)}
                           disabled={isDisabled}
-                          className={`w-full ${
+                          className={`h-9 w-full ${
                             isCurrent
                               ? 'bg-[#424242] text-white'
                               : isSelected
@@ -518,7 +550,7 @@ const PlanComparisonTable = ({
           <tr>
             <td
               colSpan={1 + plans.length}
-              className="bg-white p-3 text-[12px] font-semibold uppercase tracking-wide text-slate-500"
+              className="bg-slate-50/60 p-3 text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-500"
               style={{ border: '1px solid #e7e8e9' }}
             >
               Outbound Execution Capabilities
@@ -526,7 +558,9 @@ const PlanComparisonTable = ({
           </tr>
           {core.map((row, i) => (
             <tr key={`core-${i}`} className="border-t border-slate-200">
-              <td className="p-3 font-medium text-slate-800">{row.label}</td>
+              <td className="sticky left-0 z-10 border-r border-slate-200 bg-white p-3 font-medium text-slate-800">
+                {row.label}
+              </td>
               {row.values.map((v, idx) => (
                 <td
                   key={idx}
@@ -541,7 +575,7 @@ const PlanComparisonTable = ({
           <tr>
             <td
               colSpan={1 + plans.length}
-              className="bg-white p-3 text-[12px] font-semibold uppercase tracking-wide text-slate-500"
+              className="bg-slate-50/60 p-3 text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-500"
               style={{ border: '1px solid #e7e8e9' }}
             >
               Revenue Intelligence Layer
@@ -549,7 +583,9 @@ const PlanComparisonTable = ({
           </tr>
           {insights.map((row, i) => (
             <tr key={`insights-${i}`} className="border-t border-slate-200">
-              <td className="p-3 font-medium text-slate-800">{row.label}</td>
+              <td className="sticky left-0 z-10 border-r border-slate-200 bg-white p-3 font-medium text-slate-800">
+                {row.label}
+              </td>
               {row.values.map((v, idx) => (
                 <td
                   key={idx}
@@ -604,9 +640,61 @@ export default function Subscription() {
   const [selectedPaymentMethodId, setSelectedPaymentMethodId] = useState('other');
   const [loadingPaymentMethods, setLoadingPaymentMethods] = useState(false);
   const [paymentMethods, setPaymentMethods] = useState<PaymentMethodRow[]>([]);
+  const [contactSalesOpen, setContactSalesOpen] = useState(false);
+  const [contactSalesSubmitting, setContactSalesSubmitting] = useState(false);
+  const [contactSalesStatus, setContactSalesStatus] = useState<'idle' | 'success' | 'error'>('idle');
+  const [contactSalesError, setContactSalesError] = useState('');
+  const [contactSalesForm, setContactSalesForm] = useState<ContactSalesForm>({
+    fullName: '',
+    email: '',
+    company: '',
+    role: '',
+    teamSize: '',
+    crm: '',
+    message: '',
+    website: '',
+  });
 
   const sortedPlans = useMemo(() => plansState, [plansState]);
   const selectedPlanObj = useMemo(() => sortedPlans.find((p) => p.id === selectedPlan), [sortedPlans, selectedPlan]);
+  const shouldShowSummaryTray = Boolean(
+    selectedPlanObj &&
+      userPlanId &&
+      (isPlanExpired || selectedPlan !== userPlanId || billing !== userBillingCycle) &&
+      !showResult &&
+      !confirmForceOpen
+  );
+  const isSelectedCurrentPlan = userPlanId === selectedPlan && billing === userBillingCycle;
+  const summaryStatusLabel = isSelectedCurrentPlan ? (isPlanExpired ? 'Expired' : 'Current') : 'Selected';
+  const annualSavings =
+    selectedPlanObj && billing === 'annual' && selectedPlanObj.priceAnnual > 0 && selectedPlanObj.priceAnnual < selectedPlanObj.priceMonthly
+      ? selectedPlanObj.priceMonthly * 12 - selectedPlanObj.priceAnnual * 12
+      : 0;
+  const creditUsagePct = useMemo(() => {
+    const used = Number(billingSnapshot?.credits_used || 0);
+    const total = Number(billingSnapshot?.credits_in_period || 0);
+    if (total <= 0) return 0;
+    return Math.min(100, Math.max(0, (used / total) * 100));
+  }, [billingSnapshot]);
+  const snapshotStatusValue = String(billingSnapshot?.subscription_status || '').toLowerCase();
+  const snapshotStatusLabel = !billingSnapshot
+    ? 'Snapshot unavailable'
+    : snapshotStatusValue === 'active' || snapshotStatusValue === 'trialing'
+    ? 'Active'
+    : snapshotStatusValue === 'past_due'
+    ? 'Past due'
+    : snapshotStatusValue === 'canceled' || snapshotStatusValue === 'cancelled'
+    ? 'Canceled'
+    : snapshotStatusValue || 'Unknown';
+  const snapshotStatusClass =
+    snapshotStatusValue === 'active' || snapshotStatusValue === 'trialing'
+      ? 'border-emerald-200 bg-emerald-50 text-emerald-700'
+      : snapshotStatusValue === 'past_due'
+      ? 'border-amber-200 bg-amber-50 text-amber-700'
+      : snapshotStatusValue === 'canceled' || snapshotStatusValue === 'cancelled'
+      ? 'border-rose-200 bg-rose-50 text-rose-700'
+      : 'border-slate-200 bg-slate-100 text-slate-600';
+  const periodEndLabel = formatDateShort(billingSnapshot?.current_period_end);
 
   const dynamicCoreRows = useMemo(() => coreRows, []);
   const dynamicInsightsRows = useMemo(() => insightsRows, []);
@@ -708,11 +796,15 @@ export default function Subscription() {
 
   useEffect(() => {
     const el = summaryRef.current;
+    if (!shouldShowSummaryTray || !el) {
+      setSummaryHeight(0);
+      return;
+    }
     const measure = () => setSummaryHeight(el ? el.offsetHeight : 0);
     measure();
     window.addEventListener('resize', measure);
     return () => window.removeEventListener('resize', measure);
-  }, [selectedPlan, billing, showComparison, checkoutLoading]);
+  }, [shouldShowSummaryTray, selectedPlan, billing, showComparison, checkoutLoading, billingSnapshot]);
 
   const handleLogout = async () => {
     await supabase.auth.signOut();
@@ -765,6 +857,7 @@ export default function Subscription() {
 
   const getUpgradeButtonText = (plan?: Plan) => {
     if (!plan) return 'Upgrade Plan';
+    if (plan.id === 'enterprise') return 'Contact Sales';
     if (userPlanId === plan.id && billing === userBillingCycle && !isPlanExpired) return 'Current Plan';
 
     const changeType = getPlanChangeType(userPlanRank, plan.rank);
@@ -787,7 +880,11 @@ export default function Subscription() {
   };
 
   const handleCheckout = async (plan: Plan) => {
-    if (plan.id === 'free' || plan.id === 'enterprise') return;
+    if (plan.id === 'free') return;
+    if (plan.id === 'enterprise') {
+      openContactSalesDialog();
+      return;
+    }
     if (userPlanId === plan.id && billing === userBillingCycle && !isPlanExpired) return;
 
     if (userPlanId && userPlanId !== plan.id && !isPlanExpired) {
@@ -934,6 +1031,136 @@ export default function Subscription() {
     setTimeout(recalcBounds, 120);
   };
 
+  const deriveContactSalesDefaults = (): ContactSalesForm => {
+    const metadata =
+      user?.user_metadata && typeof user.user_metadata === 'object'
+        ? (user.user_metadata as Record<string, unknown>)
+        : {};
+
+    const firstName = typeof metadata.first_name === 'string' ? metadata.first_name : '';
+    const lastName = typeof metadata.last_name === 'string' ? metadata.last_name : '';
+    const fullName = `${firstName} ${lastName}`.trim();
+    const company =
+      typeof metadata.company === 'string'
+        ? metadata.company
+        : typeof metadata.company_name === 'string'
+        ? metadata.company_name
+        : '';
+    const role =
+      typeof metadata.role === 'string'
+        ? metadata.role
+        : typeof metadata.job_title === 'string'
+        ? metadata.job_title
+        : '';
+
+    return {
+      fullName,
+      email: user?.email || '',
+      company,
+      role,
+      teamSize: '',
+      crm: '',
+      message: `We are evaluating the Enterprise plan with ${billing} billing and need custom pricing details.`,
+      website: '',
+    };
+  };
+
+  const openContactSalesDialog = () => {
+    setContactSalesStatus('idle');
+    setContactSalesError('');
+    setContactSalesForm(deriveContactSalesDefaults());
+    setContactSalesOpen(true);
+  };
+
+  const handleContactSalesOpenChange = (open: boolean) => {
+    setContactSalesOpen(open);
+    if (!open) {
+      setContactSalesStatus('idle');
+      setContactSalesError('');
+      setContactSalesSubmitting(false);
+      setContactSalesForm(deriveContactSalesDefaults());
+    }
+  };
+
+  const handleContactSalesChange =
+    (field: keyof ContactSalesForm) =>
+    (event: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement>) => {
+      if (contactSalesStatus !== 'idle') {
+        setContactSalesStatus('idle');
+        setContactSalesError('');
+      }
+      setContactSalesForm((prev) => ({ ...prev, [field]: event.target.value }));
+    };
+
+  const handleContactSalesSubmit = async (event: React.FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    setContactSalesError('');
+
+    if (contactSalesForm.website) {
+      setContactSalesStatus('success');
+      return;
+    }
+
+    const fullName = contactSalesForm.fullName.trim();
+    const email = contactSalesForm.email.trim();
+    const company = contactSalesForm.company.trim();
+
+    if (!fullName || !email || !company || !contactSalesForm.teamSize.trim()) {
+      setContactSalesStatus('error');
+      setContactSalesError('Please complete all required fields.');
+      return;
+    }
+
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    if (!emailRegex.test(email)) {
+      setContactSalesStatus('error');
+      setContactSalesError('Enter a valid work email address.');
+      return;
+    }
+
+    setContactSalesSubmitting(true);
+
+    try {
+      const { error } = await supabase.functions.invoke('book-demo', {
+        body: {
+          fullName,
+          email,
+          company,
+          role: contactSalesForm.role.trim(),
+          teamSize: contactSalesForm.teamSize.trim(),
+          crm: contactSalesForm.crm.trim(),
+          message: contactSalesForm.message.trim(),
+          website: contactSalesForm.website,
+          source: 'subscription_enterprise',
+          requestedPlan: 'enterprise',
+          requestedBillingCycle: billing,
+          currentPlanId: userPlanId,
+          currentPlanName,
+          userId: user?.id || null,
+        },
+      });
+
+      if (error) throw error;
+
+      setContactSalesStatus('success');
+      toast({
+        title: 'Request sent to sales',
+        description: 'Our team will contact you within 1 business day.',
+      });
+    } catch (error) {
+      console.error('Contact sales request failed:', error);
+      setContactSalesStatus('error');
+      setContactSalesError(error instanceof Error ? error.message : 'Unable to send request. Please try again.');
+      toast({
+        title: 'Failed to send request',
+        description: 'Please try again or email info@theciovision.com',
+        variant: 'destructive',
+      });
+    } finally {
+      setContactSalesSubmitting(false);
+    }
+  };
+
   if (loading) {
     return (
       <div className="flex min-h-screen items-center justify-center">
@@ -951,70 +1178,141 @@ export default function Subscription() {
       user={user}
       onLogout={handleLogout}
     >
-      <div className="space-y-8" ref={pageRef} style={{ paddingBottom: (summaryHeight || 0) + 24 }}>
-        <div className="flex flex-col items-center gap-3 text-center">
-          <h1 className="text-2xl font-bold text-[var(--shell-ink)] md:text-3xl" style={{ fontFamily: 'var(--shell-font-display)' }}>
-            Choose a plan that matches your outbound operating model
-          </h1>
-          <p className="max-w-3xl text-[var(--shell-muted)]">
-            Built for campaigns, inboxes, automations, and pipeline attribution. Pick by team scale and inbox volume,
-            then expand with governance and integrations as you grow.
+      <div
+        className="space-y-8"
+        ref={pageRef}
+        style={{ paddingBottom: shouldShowSummaryTray ? (summaryHeight || 0) + 24 : 0 }}
+      >
+        <section className="relative overflow-hidden rounded-3xl border border-[var(--shell-border)] bg-gradient-to-br from-white via-slate-50/70 to-emerald-50/30 p-5 shadow-[0_24px_55px_-40px_rgba(15,23,42,0.55)] sm:p-6 lg:p-8">
+          <div className="pointer-events-none absolute -right-24 -top-28 h-72 w-72 rounded-full bg-emerald-200/30 blur-3xl" />
+          <div className="pointer-events-none absolute -left-20 bottom-0 h-56 w-56 rounded-full bg-sky-200/25 blur-3xl" />
+
+          <div className="relative grid gap-6 xl:grid-cols-[minmax(0,1.45fr)_minmax(300px,1fr)]">
+            <div className="space-y-5">
+              <div className="space-y-2">
+                <p className="text-[11px] font-semibold uppercase tracking-[0.2em] text-[var(--shell-muted)]">Subscription</p>
+                <h1 className="text-2xl font-bold text-[var(--shell-ink)] md:text-3xl" style={{ fontFamily: 'var(--shell-font-display)' }}>
+                  Design your growth lane, then scale with confidence
+                </h1>
+                <p className="max-w-2xl text-sm text-[var(--shell-muted)] md:text-base">
+                  Choose a plan by team size, campaign volume, and workflow complexity. Pricing, credits, and limits are visible before checkout.
+                </p>
+              </div>
+
+              <div className="flex flex-wrap items-center gap-2">
+                <Badge className="border border-slate-200 bg-white text-slate-700">
+                  Current: {currentPlanName}
+                </Badge>
+                <Badge className={`border ${snapshotStatusClass}`}>
+                  Status: {snapshotStatusLabel}
+                </Badge>
+                <Badge className="border border-slate-200 bg-white text-slate-700">
+                  Renewal: {periodEndLabel}
+                </Badge>
+                {annualSavings > 0 && (
+                  <Badge className="border border-emerald-200 bg-emerald-50 text-emerald-700">
+                    <BadgePercent className="mr-1 h-3.5 w-3.5" />
+                    Annual savings ${annualSavings.toFixed(0)}
+                  </Badge>
+                )}
+              </div>
+
+              <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
+                <Tabs
+                  value={billing}
+                  onValueChange={handleBillingChange}
+                  className="rounded-xl border border-[var(--shell-border)] bg-white p-1"
+                >
+                  <TabsList className="grid grid-cols-2 gap-1 bg-transparent p-0">
+                    <TabsTrigger
+                      value="annual"
+                      className="rounded-lg px-4 data-[state=active]:bg-[var(--shell-accent)] data-[state=active]:text-white"
+                    >
+                      Annual (Save 20%)
+                    </TabsTrigger>
+                    <TabsTrigger
+                      value="monthly"
+                      className="rounded-lg px-4 data-[state=active]:bg-[var(--shell-accent)] data-[state=active]:text-white"
+                    >
+                      Monthly
+                    </TabsTrigger>
+                  </TabsList>
+                </Tabs>
+
+                <Button
+                  type="button"
+                  variant="outline"
+                  className="border-[var(--shell-border)] bg-white text-[var(--shell-ink)] hover:bg-slate-50"
+                  onClick={handleToggleComparison}
+                >
+                  {showComparison ? 'Hide comparison table' : 'Compare all features'}
+                  {showComparison ? <ChevronUp className="ml-2 h-4 w-4" /> : <ChevronDown className="ml-2 h-4 w-4" />}
+                </Button>
+              </div>
+            </div>
+
+            <Card className="rounded-2xl border border-slate-200 bg-white/95 shadow-[0_18px_42px_-32px_rgba(15,23,42,0.45)]">
+              <CardHeader className="pb-3">
+                <CardTitle className="text-base font-semibold text-slate-900">Workspace usage snapshot</CardTitle>
+                <p className="text-xs text-slate-500">
+                  {loadingBillingSnapshot ? 'Syncing billing state...' : `Based on ${billing === 'annual' ? 'annual' : 'monthly'} cycle`}
+                </p>
+              </CardHeader>
+              <CardContent className="space-y-4">
+                <div>
+                  <div className="mb-2 flex items-center justify-between text-sm">
+                    <span className="font-medium text-slate-600">Credits remaining</span>
+                    <span className="font-semibold text-slate-900">
+                      {billingSnapshot ? Number(billingSnapshot.credits_remaining || 0).toLocaleString() : '--'}
+                    </span>
+                  </div>
+                  <div className="h-2 overflow-hidden rounded-full bg-slate-200">
+                    <div className="h-full rounded-full bg-emerald-500 transition-[width] duration-300" style={{ width: `${creditUsagePct}%` }} />
+                  </div>
+                  <p className="mt-1.5 text-xs text-slate-500">
+                    {billingSnapshot
+                      ? `${Number(billingSnapshot.credits_used || 0).toLocaleString()} used of ${Number(
+                          billingSnapshot.credits_in_period || 0
+                        ).toLocaleString()}`
+                      : 'Billing snapshot unavailable right now'}
+                  </p>
+                </div>
+
+                <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+                  <div className="rounded-lg border border-slate-200 bg-slate-50/70 px-3 py-2.5">
+                    <p className="text-[11px] font-semibold uppercase tracking-[0.12em] text-slate-500">Mailboxes</p>
+                    <p className="mt-1 text-sm font-semibold text-slate-900">
+                      {billingSnapshot
+                        ? `${billingSnapshot.mailboxes_used ?? 0}${
+                            billingSnapshot.unlimited_mailboxes ? ' / Unlimited' : ` / ${billingSnapshot.mailbox_limit ?? 0}`
+                          }`
+                        : '--'}
+                    </p>
+                  </div>
+                  <div className="rounded-lg border border-slate-200 bg-slate-50/70 px-3 py-2.5">
+                    <p className="text-[11px] font-semibold uppercase tracking-[0.12em] text-slate-500">Campaigns</p>
+                    <p className="mt-1 text-sm font-semibold text-slate-900">
+                      {billingSnapshot
+                        ? `${billingSnapshot.campaigns_used ?? 0}${
+                            billingSnapshot.unlimited_campaigns ? ' / Unlimited' : ` / ${billingSnapshot.campaign_limit ?? 0}`
+                          }`
+                        : '--'}
+                    </p>
+                  </div>
+                </div>
+              </CardContent>
+            </Card>
+          </div>
+        </section>
+
+        <div className="space-y-2">
+          <h2 className="text-xl font-semibold text-[var(--shell-ink)]">Choose your plan</h2>
+          <p className="text-sm text-[var(--shell-muted)]">
+            Select a tier to preview pricing and limits. You can compare full feature matrices below.
           </p>
-          <div className="flex items-center gap-3">
-            <Tabs
-              value={billing}
-              onValueChange={handleBillingChange}
-              className="rounded-lg border border-[var(--shell-border)] bg-white p-1"
-            >
-              <TabsList className="grid grid-cols-2">
-                <TabsTrigger
-                  value="annual"
-                  className="data-[state=active]:bg-[var(--shell-accent)] data-[state=active]:text-white"
-                >
-                  Annual (Save 20%)
-                </TabsTrigger>
-                <TabsTrigger
-                  value="monthly"
-                  className="data-[state=active]:bg-[var(--shell-accent)] data-[state=active]:text-white"
-                >
-                  Monthly
-                </TabsTrigger>
-              </TabsList>
-            </Tabs>
-          </div>
-          <div className="flex flex-wrap items-center justify-center gap-2">
-            {loadingBillingSnapshot ? (
-              <Badge className="border border-slate-200 bg-white text-slate-600">Loading billing usage...</Badge>
-            ) : billingSnapshot ? (
-              <>
-                <Badge className="border border-emerald-200 bg-emerald-50 text-emerald-700">
-                  Credits: {Number(billingSnapshot.credits_remaining || 0).toLocaleString()} remaining
-                </Badge>
-                <Badge className="border border-sky-200 bg-sky-50 text-sky-700">
-                  Usage: {Number(billingSnapshot.credits_used || 0).toLocaleString()} / {Number(billingSnapshot.credits_in_period || 0).toLocaleString()}
-                </Badge>
-                <Badge className="border border-amber-200 bg-amber-50 text-amber-700">
-                  Mailboxes: {billingSnapshot.mailboxes_used ?? 0}
-                  {billingSnapshot.unlimited_mailboxes
-                    ? ' / Unlimited'
-                    : ` / ${billingSnapshot.mailbox_limit ?? 0}`}
-                </Badge>
-                <Badge className="border border-violet-200 bg-violet-50 text-violet-700">
-                  Campaigns: {billingSnapshot.campaigns_used ?? 0}
-                  {billingSnapshot.unlimited_campaigns
-                    ? ' / Unlimited'
-                    : ` / ${billingSnapshot.campaign_limit ?? 0}`}
-                </Badge>
-              </>
-            ) : (
-              <Badge className="border border-slate-200 bg-white text-slate-600">
-                Billing snapshot unavailable right now
-              </Badge>
-            )}
-          </div>
         </div>
 
-        <div className="grid grid-cols-1 items-stretch gap-3 md:grid-cols-2 lg:grid-cols-4">
+        <div className="grid grid-cols-1 items-stretch gap-5 md:grid-cols-2 xl:grid-cols-4">
           {sortedPlans.map((p, idx) => (
             <PlanCard
               key={p.id}
@@ -1023,6 +1321,7 @@ export default function Subscription() {
               planIndex={idx}
               selected={p.id === selectedPlan}
               onSelect={() => selectPlan(p.id, billing)}
+              onContactSales={openContactSalesDialog}
               onToggleComparison={handleToggleComparison}
               comparisonOpen={showComparison}
               core={dynamicCoreRows}
@@ -1036,14 +1335,14 @@ export default function Subscription() {
         </div>
 
         {showComparison && (
-          <div className="mt-6" id="plan-comparison">
+          <div className="mt-4" id="plan-comparison">
             <div
               ref={comparisonHeadingRef}
-              className="flex items-center gap-2 rounded-t-lg border bg-white px-4 py-3 text-slate-800"
+              className="flex items-center gap-2 rounded-t-2xl border border-slate-200 bg-gradient-to-r from-slate-50 to-white px-5 py-4 text-slate-800"
             >
               <div>
                 <div className="font-semibold">Plan comparison</div>
-                <div className="text-xs text-slate-600">Find the features available in each plan</div>
+                <div className="text-xs text-slate-600">Review every capability side-by-side before confirming a change.</div>
               </div>
             </div>
             <PlanComparisonTable
@@ -1051,6 +1350,7 @@ export default function Subscription() {
               plans={sortedPlans}
               selectedPlan={selectedPlan}
               onSelect={(id) => selectPlan(id, billing)}
+              onContactSales={openContactSalesDialog}
               core={dynamicCoreRows}
               insights={dynamicInsightsRows}
               userBillingCycle={userBillingCycle}
@@ -1061,117 +1361,90 @@ export default function Subscription() {
           </div>
         )}
 
-        {selectedPlanObj && !showResult && !confirmForceOpen && (
+        {shouldShowSummaryTray && selectedPlanObj && (
           <div
             ref={summaryRef}
-            className="fixed bottom-0 z-[10] w-full rounded-t-lg border-t border-slate-200 bg-white shadow-[0_-4px_20px_rgba(0,0,0,0.08)]"
+            className="fixed bottom-2 z-[20] w-full"
             style={{ left: `${summaryBounds.left}px`, width: `${summaryBounds.width}px` }}
           >
-            <div className="px-6 py-4">
-              <div className="flex flex-col items-center justify-between gap-6 md:flex-row">
-                <div className="flex flex-col gap-1 text-center md:text-left">
-                  <div className="text-sm font-medium uppercase tracking-wide text-slate-500">Summary</div>
-                  <div className="flex items-center justify-center gap-3 md:justify-start">
-                    <div className="flex items-center gap-2 text-xl font-bold text-slate-900">
-                      {planIcon(selectedPlanObj.id)}
-                      <span>{selectedPlanObj.name}</span>
-                    </div>
-                    <span className="rounded-full border border-emerald-200 bg-emerald-100 px-2.5 py-0.5 text-xs font-semibold text-emerald-700">
-                      {userPlanId === selectedPlan && billing === userBillingCycle ? (isPlanExpired ? 'Expired' : 'Current') : 'Selected'}
-                    </span>
-                  </div>
-                  <button
-                    className="mt-1 flex text-sm text-slate-600 underline transition-colors hover:text-[var(--shell-accent)]"
-                    onClick={() => {
-                      if (!showComparison) {
-                        handleToggleComparison();
-                        return;
-                      }
-                      requestAnimationFrame(() => {
-                        const el = document.getElementById('plan-comparison');
-                        if (!el) return;
-                        const top = el.getBoundingClientRect().top + window.scrollY - 120;
-                        window.scrollTo({ top, behavior: 'smooth' });
-                      });
-                    }}
-                  >
-                    See price breakdown
-                  </button>
-                </div>
-
-                <div className="flex w-full flex-col items-center gap-3 md:w-auto md:items-end">
-                  <div className="flex flex-wrap items-center justify-center gap-6 md:justify-end md:gap-8">
-                    <div className="text-center md:text-right">
-                      <div className="mb-0.5 text-sm text-slate-500">Billed {billing === 'annual' ? 'Annually' : 'Monthly'}</div>
-                      <div className="text-lg font-bold leading-tight text-slate-900">
-                        {(() => {
-                          const p = selectedPlanObj;
-                          if (p.id === 'enterprise') return 'Custom';
-                          const amt = billing === 'annual' ? p.priceAnnual * 12 : p.priceMonthly;
-                          const suffix = billing === 'annual' ? '/yr' : '/mo';
-
-                          if (billing === 'annual' && p.priceAnnual > 0 && p.priceAnnual < p.priceMonthly) {
-                            const original = p.priceMonthly * 12;
-                            const savings = original - amt;
-                            return (
-                              <div className="flex flex-col items-center md:items-end">
-                                <div className="flex items-baseline gap-2">
-                                  <span className="text-sm font-semibold text-slate-400 line-through">${original.toFixed(0)}</span>
-                                  <span>${amt.toFixed(0)}{suffix}</span>
-                                </div>
-                                <div className="mt-0.5 rounded-full border border-emerald-200 bg-emerald-100 px-2.5 py-0.5 text-sm text-emerald-700">
-                                  <span className="inline-flex items-center gap-1">
-                                    <BadgePercent className="h-5 w-5" />
-                                    You are saving <strong>${savings.toFixed(0)}</strong> by paying annually
-                                  </span>
-                                </div>
-                              </div>
-                            );
-                          }
-
-                          return `$${amt}${suffix}`;
-                        })()}
+            <div className="px-2">
+              <div className="overflow-hidden rounded-2xl border border-slate-200 bg-white/95 backdrop-blur shadow-[0_22px_42px_-28px_rgba(15,23,42,0.6)]">
+                <div className="p-3 sm:p-4">
+                  <div className="grid gap-3 xl:grid-cols-[minmax(0,1fr)_auto] xl:items-center">
+                    <div className="space-y-3">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <div className="flex items-center gap-2 rounded-lg border border-slate-200 bg-slate-50 px-3 py-1.5 text-sm font-semibold text-slate-900">
+                          {planIcon(selectedPlanObj.id)}
+                          <span>{selectedPlanObj.name}</span>
+                        </div>
+                        <span
+                          className={`rounded-full border px-2.5 py-0.5 text-xs font-semibold ${
+                            summaryStatusLabel === 'Expired'
+                              ? 'border-rose-200 bg-rose-50 text-rose-700'
+                              : summaryStatusLabel === 'Current'
+                              ? 'border-sky-200 bg-sky-50 text-sky-700'
+                              : 'border-emerald-200 bg-emerald-100 text-emerald-700'
+                          }`}
+                        >
+                          {summaryStatusLabel}
+                        </span>
+                        {annualSavings > 0 && (
+                          <span className="inline-flex items-center gap-1 rounded-full border border-emerald-200 bg-emerald-100 px-2 py-0.5 text-[11px] font-semibold text-emerald-700">
+                            <BadgePercent className="h-3.5 w-3.5" />
+                            Save ${annualSavings.toFixed(0)}
+                          </span>
+                        )}
                       </div>
+
+                      <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+                        <div className="rounded-lg border border-slate-200 bg-slate-50/80 px-2.5 py-2">
+                          <p className="text-[10px] font-semibold uppercase tracking-[0.14em] text-slate-500">Billing</p>
+                          <p className="mt-1 text-sm font-semibold text-slate-900">{billing === 'annual' ? 'Annual' : 'Monthly'}</p>
+                        </div>
+                        <div className="rounded-lg border border-slate-200 bg-slate-50/80 px-2.5 py-2">
+                          <p className="text-[10px] font-semibold uppercase tracking-[0.14em] text-slate-500">Credits</p>
+                          <p className="mt-1 text-sm font-semibold text-slate-900">
+                            {billingSnapshot ? Number(billingSnapshot.credits_remaining || 0).toLocaleString() : '--'}
+                          </p>
+                        </div>
+                        <div className="rounded-lg border border-slate-200 bg-slate-50/80 px-2.5 py-2">
+                          <p className="text-[10px] font-semibold uppercase tracking-[0.14em] text-slate-500">Mailboxes</p>
+                          <p className="mt-1 text-sm font-semibold text-slate-900">
+                            {billingSnapshot
+                              ? `${billingSnapshot.mailboxes_used ?? 0}${billingSnapshot.unlimited_mailboxes ? ' / Unlimited' : ` / ${billingSnapshot.mailbox_limit ?? 0}`}`
+                              : '--'}
+                          </p>
+                        </div>
+                        <div className="rounded-lg border border-slate-200 bg-slate-50/80 px-2.5 py-2">
+                          <p className="text-[10px] font-semibold uppercase tracking-[0.14em] text-slate-500">Campaigns</p>
+                          <p className="mt-1 text-sm font-semibold text-slate-900">
+                            {billingSnapshot
+                              ? `${billingSnapshot.campaigns_used ?? 0}${billingSnapshot.unlimited_campaigns ? ' / Unlimited' : ` / ${billingSnapshot.campaign_limit ?? 0}`}`
+                              : '--'}
+                          </p>
+                        </div>
+                      </div>
+
+                      <button
+                        className="inline-flex text-sm text-slate-600 underline transition-colors hover:text-[var(--shell-accent)]"
+                        onClick={() => {
+                          if (!showComparison) {
+                            handleToggleComparison();
+                            return;
+                          }
+                          requestAnimationFrame(() => {
+                            const el = document.getElementById('plan-comparison');
+                            if (!el) return;
+                            const top = el.getBoundingClientRect().top + window.scrollY - 120;
+                            window.scrollTo({ top, behavior: 'smooth' });
+                          });
+                        }}
+                      >
+                        See full feature breakdown
+                      </button>
                     </div>
 
-                    {billingSnapshot && (
-                      <>
-                        <div className="hidden h-10 w-px bg-slate-200 md:block"></div>
-                        <div className="text-center md:text-right">
-                          <div className="mb-0.5 text-sm text-slate-500">Credits Remaining</div>
-                          <div className="text-lg font-bold leading-tight text-slate-900">
-                            {Number(billingSnapshot.credits_remaining || 0).toLocaleString()}
-                          </div>
-                          <div className="text-[11px] text-slate-500">
-                            Used {Number(billingSnapshot.credits_used || 0).toLocaleString()} / {Number(billingSnapshot.credits_in_period || 0).toLocaleString()}
-                          </div>
-                        </div>
-                        <div className="hidden h-10 w-px bg-slate-200 md:block"></div>
-                        <div className="text-center md:text-right">
-                          <div className="mb-0.5 text-sm text-slate-500">Mailbox Capacity</div>
-                          <div className="text-lg font-bold leading-tight text-slate-900">
-                            {billingSnapshot.mailboxes_used ?? 0}
-                            {billingSnapshot.unlimited_mailboxes
-                              ? ' / Unlimited'
-                              : ` / ${billingSnapshot.mailbox_limit ?? 0}`}
-                          </div>
-                        </div>
-                        <div className="hidden h-10 w-px bg-slate-200 md:block"></div>
-                        <div className="text-center md:text-right">
-                          <div className="mb-0.5 text-sm text-slate-500">Campaign Capacity</div>
-                          <div className="text-lg font-bold leading-tight text-slate-900">
-                            {billingSnapshot.campaigns_used ?? 0}
-                            {billingSnapshot.unlimited_campaigns
-                              ? ' / Unlimited'
-                              : ` / ${billingSnapshot.campaign_limit ?? 0}`}
-                          </div>
-                        </div>
-                      </>
-                    )}
-
-                    <div className="hidden h-10 w-px bg-slate-200 md:block"></div>
-
-                    <div className="flex flex-col items-center">
+                    <div className="flex flex-col items-stretch gap-1.5 xl:min-w-[220px] xl:items-end">
                       <Button
                         onClick={() => selectedPlanObj && handleCheckout(selectedPlanObj)}
                         disabled={
@@ -1179,7 +1452,7 @@ export default function Subscription() {
                           checkoutLoading ||
                           (userPlanId === selectedPlanObj.id && billing === userBillingCycle && !isPlanExpired)
                         }
-                        className="h-11 bg-[var(--shell-accent)] px-8 text-base font-semibold text-white shadow-md transition-all duration-200 hover:bg-emerald-700 hover:shadow-lg"
+                        className="h-11 w-full bg-[var(--shell-accent)] px-6 text-base font-semibold text-white shadow-md transition-all duration-200 hover:bg-emerald-700 hover:shadow-lg xl:w-auto xl:min-w-[220px]"
                       >
                         {checkoutLoading ? (
                           <>
@@ -1190,11 +1463,11 @@ export default function Subscription() {
                           getUpgradeButtonText(selectedPlanObj)
                         )}
                       </Button>
-                      <span className="mt-1.5 text-[10px] italic text-slate-400">*Sales taxes calculated at checkout</span>
+                      <span className="text-center text-[10px] italic text-slate-400 xl:text-right">*Sales taxes calculated at checkout</span>
                     </div>
                   </div>
 
-                  <div className="mt-1 flex items-center gap-4 text-[11px] text-slate-500">
+                  <div className="mt-3 flex flex-wrap items-center justify-center gap-2 border-t border-slate-200 pt-2 text-[11px] text-slate-500 xl:justify-end">
                     <a href="/security" className="transition-colors hover:text-[var(--shell-accent)]">
                       Security
                     </a>
@@ -1213,6 +1486,193 @@ export default function Subscription() {
           </div>
         )}
       </div>
+
+      <Dialog open={contactSalesOpen} onOpenChange={handleContactSalesOpenChange}>
+        <DialogContent className="max-w-2xl w-[95vw] overflow-hidden rounded-2xl bg-white p-0">
+          <div className="border-b border-slate-200 bg-slate-50/80 px-6 py-5">
+            <DialogTitle className="text-xl font-semibold text-slate-900">Contact sales</DialogTitle>
+            <DialogDescription className="mt-1 text-sm text-slate-600">
+              Tell us about your team and we will send enterprise pricing, rollout options, and implementation guidance.
+            </DialogDescription>
+          </div>
+
+          <form onSubmit={handleContactSalesSubmit} className="space-y-5 px-6 py-5">
+            {contactSalesStatus === 'success' ? (
+              <div className="space-y-4">
+                <div className="rounded-xl border border-emerald-200 bg-emerald-50 p-4">
+                  <div className="flex items-start gap-3">
+                    <CircleCheckBig className="mt-0.5 h-5 w-5 text-emerald-600" />
+                    <div>
+                      <p className="font-semibold text-emerald-800">Request submitted</p>
+                      <p className="mt-1 text-sm text-emerald-700">
+                        Your enterprise inquiry is in our queue. A solutions specialist will contact you within 1 business day.
+                      </p>
+                    </div>
+                  </div>
+                </div>
+
+                <DialogFooter className="flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
+                  <Button
+                    type="button"
+                    variant="outline"
+                    className="border-slate-300 bg-white text-slate-900 hover:bg-slate-100"
+                    onClick={() => {
+                      setContactSalesStatus('idle');
+                      setContactSalesError('');
+                      setContactSalesForm(deriveContactSalesDefaults());
+                    }}
+                  >
+                    Send another request
+                  </Button>
+                  <Button type="button" className="bg-[var(--shell-accent)] text-white hover:bg-emerald-700" onClick={() => handleContactSalesOpenChange(false)}>
+                    Close
+                  </Button>
+                </DialogFooter>
+              </div>
+            ) : (
+              <>
+                <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+                  <div className="space-y-2">
+                    <Label htmlFor="contact-sales-name">Full name *</Label>
+                    <Input
+                      id="contact-sales-name"
+                      value={contactSalesForm.fullName}
+                      onChange={handleContactSalesChange('fullName')}
+                      placeholder="Jane Doe"
+                      disabled={contactSalesSubmitting}
+                      required
+                    />
+                  </div>
+                  <div className="space-y-2">
+                    <Label htmlFor="contact-sales-email">Work email *</Label>
+                    <Input
+                      id="contact-sales-email"
+                      type="email"
+                      value={contactSalesForm.email}
+                      onChange={handleContactSalesChange('email')}
+                      placeholder="jane@company.com"
+                      disabled={contactSalesSubmitting}
+                      required
+                    />
+                  </div>
+                  <div className="space-y-2">
+                    <Label htmlFor="contact-sales-company">Company *</Label>
+                    <Input
+                      id="contact-sales-company"
+                      value={contactSalesForm.company}
+                      onChange={handleContactSalesChange('company')}
+                      placeholder="Acme Inc."
+                      disabled={contactSalesSubmitting}
+                      required
+                    />
+                  </div>
+                  <div className="space-y-2">
+                    <Label htmlFor="contact-sales-role">Role</Label>
+                    <Input
+                      id="contact-sales-role"
+                      value={contactSalesForm.role}
+                      onChange={handleContactSalesChange('role')}
+                      placeholder="Revenue Operations Lead"
+                      disabled={contactSalesSubmitting}
+                    />
+                  </div>
+                  <div className="space-y-2">
+                    <Label htmlFor="contact-sales-team-size">Team size *</Label>
+                    <select
+                      id="contact-sales-team-size"
+                      value={contactSalesForm.teamSize}
+                      onChange={handleContactSalesChange('teamSize')}
+                      className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
+                      disabled={contactSalesSubmitting}
+                      required
+                    >
+                      <option value="">Select team size</option>
+                      <option value="1-5">1-5</option>
+                      <option value="6-20">6-20</option>
+                      <option value="21-50">21-50</option>
+                      <option value="51-200">51-200</option>
+                      <option value="200+">200+</option>
+                    </select>
+                  </div>
+                  <div className="space-y-2">
+                    <Label htmlFor="contact-sales-crm">Primary CRM</Label>
+                    <select
+                      id="contact-sales-crm"
+                      value={contactSalesForm.crm}
+                      onChange={handleContactSalesChange('crm')}
+                      className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
+                      disabled={contactSalesSubmitting}
+                    >
+                      <option value="">Select CRM</option>
+                      <option value="HubSpot">HubSpot</option>
+                      <option value="Salesforce">Salesforce</option>
+                      <option value="Pipedrive">Pipedrive</option>
+                      <option value="Zoho">Zoho</option>
+                      <option value="Other">Other</option>
+                    </select>
+                  </div>
+                </div>
+
+                <div className="space-y-2">
+                  <Label htmlFor="contact-sales-message">What do you need from enterprise? *</Label>
+                  <Textarea
+                    id="contact-sales-message"
+                    value={contactSalesForm.message}
+                    onChange={handleContactSalesChange('message')}
+                    placeholder="Tell us about security requirements, team rollout, custom limits, or support expectations."
+                    rows={4}
+                    disabled={contactSalesSubmitting}
+                    required
+                  />
+                </div>
+
+                <div className="hidden" aria-hidden="true">
+                  <Label htmlFor="contact-sales-website">Website</Label>
+                  <Input
+                    id="contact-sales-website"
+                    autoComplete="off"
+                    tabIndex={-1}
+                    value={contactSalesForm.website}
+                    onChange={handleContactSalesChange('website')}
+                  />
+                </div>
+
+                {contactSalesStatus === 'error' && (
+                  <div className="rounded-md border border-rose-200 bg-rose-50 px-3 py-2 text-sm text-rose-700">
+                    {contactSalesError || 'Unable to send request. Please try again.'}
+                  </div>
+                )}
+
+                <DialogFooter className="flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
+                  <Button
+                    type="button"
+                    variant="outline"
+                    className="border-slate-300 bg-white text-slate-900 hover:bg-slate-100"
+                    onClick={() => handleContactSalesOpenChange(false)}
+                    disabled={contactSalesSubmitting}
+                  >
+                    Cancel
+                  </Button>
+                  <Button
+                    type="submit"
+                    className="bg-[var(--shell-accent)] text-white hover:bg-emerald-700"
+                    disabled={contactSalesSubmitting}
+                  >
+                    {contactSalesSubmitting ? (
+                      <>
+                        <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                        Sending...
+                      </>
+                    ) : (
+                      'Send request'
+                    )}
+                  </Button>
+                </DialogFooter>
+              </>
+            )}
+          </form>
+        </DialogContent>
+      </Dialog>
 
       <Dialog open={showResult} onOpenChange={setShowResult}>
         <DialogContent className="max-w-lg">

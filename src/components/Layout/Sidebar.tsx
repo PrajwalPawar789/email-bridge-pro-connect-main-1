@@ -1,32 +1,39 @@
 import React from 'react';
-import { Link } from 'react-router-dom';
+import { Link, useNavigate } from 'react-router-dom';
 import {
   Home,
   Send,
   RefreshCw,
   Users,
   Sparkles,
+  Mail,
   LayoutTemplate,
-  Grid,
+  Globe,
   Settings,
   ExternalLink,
   ChevronLeft,
   ChevronRight,
   Inbox,
   PlugZap,
-  Kanban
+  Kanban,
+  Gift
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import Logo from '../Logo';
+import SidebarNotifications from './SidebarNotifications';
 
 interface SidebarProps {
   activeTab: string;
   onTabChange: (tab: string) => void;
   isCollapsed: boolean;
   toggleSidebar: () => void;
+  user: {
+    id?: string;
+  } | null;
 }
 
-const Sidebar = ({ activeTab, onTabChange, isCollapsed, toggleSidebar }: SidebarProps) => {
+const Sidebar = ({ activeTab, onTabChange, isCollapsed, toggleSidebar, user }: SidebarProps) => {
+  const navigate = useNavigate();
   const navSections = [
     {
       label: 'Core',
@@ -42,14 +49,16 @@ const Sidebar = ({ activeTab, onTabChange, isCollapsed, toggleSidebar }: Sidebar
         { id: 'automations', label: 'Automations', icon: RefreshCw },
         { id: 'contacts', label: 'Contacts', icon: Users },
         { id: 'pipeline', label: 'Pipeline', icon: Kanban },
+        { id: 'referrals', label: 'Referrals', icon: Gift },
         { id: 'segments', label: 'Segments', icon: Sparkles, badge: 'Beta' }
       ]
     },
     {
       label: 'Assets',
       items: [
-        { id: 'templates', label: 'Templates', icon: LayoutTemplate },
-        { id: 'connect', label: 'Connect site', icon: Grid, hasSubmenu: true }
+        { id: 'email-builder', label: 'Email Builder', icon: Mail },
+        { id: 'landing-pages', label: 'Landing Pages', icon: LayoutTemplate },
+        { id: 'site-connector', label: 'Site Connector', icon: Globe }
       ]
     },
     {
@@ -98,7 +107,13 @@ const Sidebar = ({ activeTab, onTabChange, isCollapsed, toggleSidebar }: Sidebar
                   <li key={item.id}>
                     <button
                       type="button"
-                      onClick={() => onTabChange(item.id)}
+                      onClick={() => {
+                        if (item.id === 'referrals') {
+                          navigate('/referrals');
+                          return;
+                        }
+                        onTabChange(item.id);
+                      }}
                       className={cn(
                         "group relative w-full flex items-center rounded-xl px-3 py-2.5 text-sm font-semibold transition-all",
                         isActive
@@ -143,17 +158,21 @@ const Sidebar = ({ activeTab, onTabChange, isCollapsed, toggleSidebar }: Sidebar
       </nav>
 
       <div className="p-4 border-t border-[var(--shell-border)]">
-        <Link
-          to="/profile"
-          className={cn(
-            "flex items-center gap-3 px-3 py-2.5 text-sm font-semibold text-slate-600 hover:text-slate-900 rounded-xl hover:bg-white/80 transition-colors",
-            isCollapsed && "justify-center"
-          )}
-          title={isCollapsed ? "Go to Profile" : undefined}
-        >
-          {!isCollapsed && <span>Go to Profile</span>}
-          <ExternalLink className={cn("h-4 w-4 text-slate-400", !isCollapsed && "ml-auto")} />
-        </Link>
+        <div className={cn('flex flex-col gap-2', isCollapsed && 'items-center')}>
+          <SidebarNotifications userId={user?.id || null} isCollapsed={isCollapsed} />
+
+          <Link
+            to="/profile"
+            className={cn(
+              "flex items-center gap-3 px-3 py-2.5 text-sm font-semibold text-slate-600 hover:text-slate-900 rounded-xl hover:bg-white/80 transition-colors",
+              isCollapsed ? "h-9 w-9 justify-center p-0" : "w-full"
+            )}
+            title={isCollapsed ? "Go to Profile" : undefined}
+          >
+            {!isCollapsed && <span>Go to Profile</span>}
+            <ExternalLink className={cn("h-4 w-4 text-slate-400", !isCollapsed && "ml-auto")} />
+          </Link>
+        </div>
       </div>
     </aside>
   );

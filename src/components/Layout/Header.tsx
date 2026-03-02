@@ -1,20 +1,29 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { Gift, User, LogOut, Search, Settings, CreditCard, Clock, Crown } from 'lucide-react';
+import { Gift, User, LogOut, Search, Settings, CreditCard, Clock, Crown, ChevronRight } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
-  DropdownMenuLabel,
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { Link } from 'react-router-dom';
 import { BillingSnapshot, getBillingSnapshot, normalizePlanId } from '@/lib/billing';
 
+interface HeaderUser {
+  id?: string;
+  email?: string;
+  user_metadata?: {
+    avatar_url?: string;
+    first_name?: string;
+    last_name?: string;
+  };
+}
+
 interface HeaderProps {
-  user: any;
+  user: HeaderUser | null;
   onLogout: () => void;
   activeTab?: string;
 }
@@ -22,9 +31,11 @@ interface HeaderProps {
 const Header = ({ user, onLogout, activeTab }: HeaderProps) => {
   const [billingSnapshot, setBillingSnapshot] = useState<BillingSnapshot | null>(null);
   const [loadingBillingSnapshot, setLoadingBillingSnapshot] = useState(false);
+  const hasBillingSnapshot = Boolean(billingSnapshot);
+  const userMetadata = user?.user_metadata;
 
   useEffect(() => {
-    const userId = user?.id as string | undefined;
+    const userId = user?.id;
     if (!userId) {
       setBillingSnapshot(null);
       return;
@@ -60,8 +71,8 @@ const Header = ({ user, onLogout, activeTab }: HeaderProps) => {
     if (!snapshot) {
       return {
         label: loadingBillingSnapshot ? 'Loading plan...' : 'Starter Trial',
-        badgeClass: 'text-slate-600',
-        progressClass: 'bg-slate-200'
+        badgeClass: 'border border-slate-200 bg-white text-slate-600',
+        progressClass: 'bg-slate-400'
       };
     }
 
@@ -69,28 +80,28 @@ const Header = ({ user, onLogout, activeTab }: HeaderProps) => {
     if (planId === 'enterprise') {
       return {
         label: `${snapshot.plan_name || 'Enterprise'} (Power)`,
-        badgeClass: 'text-amber-600',
-        progressClass: 'bg-amber-300'
+        badgeClass: 'border border-amber-200 bg-amber-50 text-amber-700',
+        progressClass: 'bg-amber-400'
       };
     }
     if (planId === 'scale') {
       return {
         label: snapshot.plan_name || 'Scale',
-        badgeClass: 'text-indigo-600',
-        progressClass: 'bg-indigo-300'
+        badgeClass: 'border border-indigo-200 bg-indigo-50 text-indigo-700',
+        progressClass: 'bg-indigo-400'
       };
     }
     if (planId === 'growth') {
       return {
         label: snapshot.plan_name || 'Growth',
-        badgeClass: 'text-emerald-600',
-        progressClass: 'bg-emerald-300'
+        badgeClass: 'border border-emerald-200 bg-emerald-50 text-emerald-700',
+        progressClass: 'bg-emerald-400'
       };
     }
     return {
       label: snapshot.plan_name || 'Starter Trial',
-      badgeClass: 'text-slate-600',
-      progressClass: 'bg-slate-300'
+      badgeClass: 'border border-slate-200 bg-slate-50 text-slate-700',
+      progressClass: 'bg-slate-400'
     };
   }, [billingSnapshot, loadingBillingSnapshot]);
 
@@ -101,6 +112,19 @@ const Header = ({ user, onLogout, activeTab }: HeaderProps) => {
     return { used, max, pct };
   }, [billingSnapshot]);
 
+  const campaignUsage = useMemo(() => {
+    const used = Number(billingSnapshot?.campaigns_used || 0);
+    const max = Number(billingSnapshot?.campaign_limit || 0);
+    const unlimited = Boolean(billingSnapshot?.unlimited_campaigns);
+    return { used, max, unlimited };
+  }, [billingSnapshot]);
+
+  const displayName = useMemo(() => {
+    const fullName = `${userMetadata?.first_name || ''} ${userMetadata?.last_name || ''}`.trim();
+    if (fullName) return fullName;
+    return user?.email?.split('@')[0] || 'User';
+  }, [user?.email, userMetadata?.first_name, userMetadata?.last_name]);
+
   const tabLabels: Record<string, string> = {
     home: 'Home',
     campaigns: 'Campaigns',
@@ -108,7 +132,11 @@ const Header = ({ user, onLogout, activeTab }: HeaderProps) => {
     automations: 'Automations',
     contacts: 'Contacts',
     pipeline: 'Pipeline',
+    referrals: 'Referrals',
     segments: 'Segments',
+    'email-builder': 'Email Builder',
+    'landing-pages': 'Landing Pages',
+    'site-connector': 'Site Connector',
     templates: 'Templates',
     connect: 'Connect',
     integrations: 'Integrations',
@@ -145,12 +173,15 @@ const Header = ({ user, onLogout, activeTab }: HeaderProps) => {
           />
         </div>
 
-        <Button 
-          variant="outline" 
+        <Button
+          variant="outline"
           className="h-9 rounded-full border-[var(--shell-border)] bg-white/80 text-[var(--shell-ink)] font-semibold gap-2 hover:bg-white"
+          asChild
         >
-          <Gift className="h-4 w-4" />
-          Refer a friend
+          <Link to="/referrals">
+            <Gift className="h-4 w-4" />
+            Refer a friend
+          </Link>
         </Button>
 
         <DropdownMenu>
@@ -171,92 +202,147 @@ const Header = ({ user, onLogout, activeTab }: HeaderProps) => {
               </svg>
             </Button>
           </DropdownMenuTrigger>
-          <DropdownMenuContent align="end" className="w-80 border-[var(--shell-border)] bg-white/95">
-            <div className="p-3 bg-amber-50 rounded-md">
-              <div className="flex items-center gap-3">
-                <div className="w-10 h-10 rounded-full overflow-hidden">
-                  {user?.user_metadata?.avatar_url ? (
-                    <img src={user.user_metadata.avatar_url} alt="avatar" className="w-full h-full object-cover" />
-                  ) : (
-                    <div className="w-full h-full bg-emerald-50 flex items-center justify-center text-emerald-700">
-                      <User className="h-4 w-4" />
+          <DropdownMenuContent
+            align="end"
+            sideOffset={10}
+            className="w-[360px] max-w-[calc(100vw-1rem)] max-h-[calc(100vh-5rem)] overflow-y-auto rounded-2xl border border-slate-200/90 bg-white p-0 shadow-[0_26px_65px_-24px_rgba(15,23,42,0.45)]"
+          >
+            <div className="p-2">
+              <div className="rounded-xl border border-slate-200 bg-gradient-to-br from-slate-50 via-white to-white p-4">
+                <div className="flex items-start gap-3">
+                  <div className="h-11 w-11 rounded-full overflow-hidden border border-slate-200 bg-emerald-50">
+                    {user?.user_metadata?.avatar_url ? (
+                      <img src={user.user_metadata.avatar_url} alt="avatar" className="h-full w-full object-cover" />
+                    ) : (
+                      <div className="h-full w-full flex items-center justify-center text-emerald-700">
+                        <User className="h-4 w-4" />
+                      </div>
+                    )}
+                  </div>
+
+                  <div className="min-w-0 flex-1">
+                    <p className="truncate text-sm font-semibold text-slate-900">{displayName}</p>
+                    <p className="truncate text-xs text-slate-500">{user?.email}</p>
+                  </div>
+
+                  <div className={`inline-flex items-center gap-1 rounded-full px-2 py-1 text-[11px] font-semibold ${planBadge.badgeClass}`}>
+                    <Crown className="h-3.5 w-3.5" />
+                    <span className="max-w-[120px] truncate">{planBadge.label}</span>
+                  </div>
+                </div>
+
+                <div className="mt-4 rounded-lg border border-slate-200 bg-white/90 p-3">
+                  <div className="mb-1.5 flex items-center justify-between text-[11px] text-slate-600">
+                    <span className="font-medium">Credit usage</span>
+                    <span className="text-xs font-semibold text-slate-800">
+                      {loadingBillingSnapshot
+                        ? 'Loading...'
+                        : hasBillingSnapshot
+                          ? `${creditUsage.used.toLocaleString()} / ${creditUsage.max.toLocaleString()}`
+                          : 'No data'}
+                    </span>
+                  </div>
+                  <div className="h-2 overflow-hidden rounded-full bg-slate-200">
+                    <div className={`h-full rounded-full transition-[width] duration-300 ${planBadge.progressClass}`} style={{ width: `${creditUsage.pct}%` }} />
+                  </div>
+                  <p className="mt-1.5 text-[11px] text-slate-500">
+                    {creditUsage.max > 0
+                      ? `${Math.max(creditUsage.max - creditUsage.used, 0).toLocaleString()} credits remaining`
+                      : loadingBillingSnapshot
+                        ? 'Syncing billing snapshot'
+                        : 'No credit allocation found'}
+                  </p>
+                </div>
+
+                <div className="mt-2 grid grid-cols-2 gap-2">
+                  <div className="rounded-lg border border-slate-200 bg-white px-2.5 py-2">
+                    <p className="text-[10px] uppercase tracking-[0.12em] text-slate-500">Campaigns</p>
+                    <p className="mt-1 text-sm font-semibold text-slate-900">
+                      {loadingBillingSnapshot
+                        ? 'Loading...'
+                        : campaignUsage.unlimited
+                          ? `${campaignUsage.used.toLocaleString()} / Unlimited`
+                          : `${campaignUsage.used.toLocaleString()} / ${campaignUsage.max.toLocaleString()}`}
+                    </p>
+                  </div>
+
+                  <div className="rounded-lg border border-slate-200 bg-white px-2.5 py-2">
+                    <p className="text-[10px] uppercase tracking-[0.12em] text-slate-500">Current plan</p>
+                    <p className="mt-1 truncate text-sm font-semibold text-slate-900">{planBadge.label}</p>
+                    <p className="text-[11px] text-slate-500">Manage in Subscription</p>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <div className="px-2 pb-2">
+              <p className="px-2 pb-1 text-[10px] font-semibold uppercase tracking-[0.2em] text-slate-400">Account</p>
+              <div className="space-y-1">
+                <DropdownMenuItem asChild className="group h-auto rounded-lg px-2 py-2.5 focus:bg-slate-100">
+                  <Link to="/profile" className="flex w-full items-center gap-3">
+                    <div className="flex h-8 w-8 items-center justify-center rounded-md border border-slate-200 bg-white text-slate-600">
+                      <Settings className="h-4 w-4" />
                     </div>
-                  )}
-                </div>
-                <div className="flex-1">
-                  <div className="font-semibold">{(user?.user_metadata as any)?.first_name ? `${user.user_metadata.first_name} ${user.user_metadata.last_name || ''}` : (user?.email?.split('@')[0] || 'User')}</div>
-                  <div className="text-xs text-slate-600">{user?.email}</div>
-                </div>
-                <div className={`text-xs font-semibold flex items-center gap-1 ${planBadge.badgeClass}`}>
-                  <Crown className="h-4 w-4" />
-                  <span>{planBadge.label}</span>
-                </div>
-              </div>
+                    <div className="min-w-0 flex-1">
+                      <p className="text-sm font-medium text-slate-800">Account settings</p>
+                      <p className="truncate text-[11px] text-slate-500">Profile, security and preferences</p>
+                    </div>
+                    <ChevronRight className="h-4 w-4 shrink-0 text-slate-400 transition-colors group-hover:text-slate-500" />
+                  </Link>
+                </DropdownMenuItem>
 
-              <div className="mt-3 text-xs text-slate-600 flex items-center justify-between">
-                <div>Credit Usage</div>
-                <div className={`font-semibold ${planBadge.badgeClass}`}>
-                  {creditUsage.used.toLocaleString()}/{creditUsage.max.toLocaleString()}
-                </div>
+                <DropdownMenuItem asChild className="group h-auto rounded-lg px-2 py-2.5 focus:bg-slate-100">
+                  <Link to="/subscription" className="flex w-full items-center gap-3">
+                    <div className="flex h-8 w-8 items-center justify-center rounded-md border border-slate-200 bg-white text-slate-600">
+                      <Crown className="h-4 w-4" />
+                    </div>
+                    <div className="min-w-0 flex-1">
+                      <p className="text-sm font-medium text-slate-800">Subscription</p>
+                      <p className="truncate text-[11px] text-slate-500">Upgrade, downgrade, or change billing cycle</p>
+                    </div>
+                    <ChevronRight className="h-4 w-4 shrink-0 text-slate-400 transition-colors group-hover:text-slate-500" />
+                  </Link>
+                </DropdownMenuItem>
+
+                <DropdownMenuItem asChild className="group h-auto rounded-lg px-2 py-2.5 focus:bg-slate-100">
+                  <Link to="/billing" className="flex w-full items-center gap-3">
+                    <div className="flex h-8 w-8 items-center justify-center rounded-md border border-slate-200 bg-white text-slate-600">
+                      <CreditCard className="h-4 w-4" />
+                    </div>
+                    <div className="min-w-0 flex-1">
+                      <p className="text-sm font-medium text-slate-800">Payments & billing</p>
+                      <p className="truncate text-[11px] text-slate-500">Invoices, transactions, and payment methods</p>
+                    </div>
+                    <ChevronRight className="h-4 w-4 shrink-0 text-slate-400 transition-colors group-hover:text-slate-500" />
+                  </Link>
+                </DropdownMenuItem>
+
+                <DropdownMenuItem asChild className="group h-auto rounded-lg px-2 py-2.5 focus:bg-slate-100">
+                  <Link to="/spending" className="flex w-full items-center gap-3">
+                    <div className="flex h-8 w-8 items-center justify-center rounded-md border border-slate-200 bg-white text-slate-600">
+                      <Clock className="h-4 w-4" />
+                    </div>
+                    <div className="min-w-0 flex-1">
+                      <p className="text-sm font-medium text-slate-800">Spending history</p>
+                      <p className="truncate text-[11px] text-slate-500">Track monthly usage and charges over time</p>
+                    </div>
+                    <ChevronRight className="h-4 w-4 shrink-0 text-slate-400 transition-colors group-hover:text-slate-500" />
+                  </Link>
+                </DropdownMenuItem>
               </div>
-              <div className="w-full bg-white rounded-full h-2 mt-2 overflow-hidden border border-white/30">
-                <div className={`h-2 ${planBadge.progressClass}`} style={{ width: `${creditUsage.pct}%` }} />
-              </div>
-              {billingSnapshot && (
-                <div className="mt-2 text-[11px] text-slate-600 flex items-center justify-between">
-                  <span>Campaigns</span>
-                  <span className="font-semibold">
-                    {Number(billingSnapshot.campaigns_used || 0).toLocaleString()}
-                    {billingSnapshot.unlimited_campaigns
-                      ? ' / Unlimited'
-                      : ` / ${Number(billingSnapshot.campaign_limit || 0).toLocaleString()}`}
-                  </span>
-                </div>
-              )}
             </div>
 
-            <div className="p-2">
-              <div className="text-[10px] uppercase tracking-wider text-[var(--shell-muted)] font-semibold px-2 py-1">Account Management</div>
-              <DropdownMenuSeparator />
-              <DropdownMenuItem asChild>
-                <Link to="/profile" className="flex items-center gap-2 w-full">
-                  <Settings className="h-4 w-4 text-slate-500" />
-                  <div className="flex-1 text-sm">Account Settings</div>
-                  <div className="text-xs text-slate-400">Manage your account details</div>
-                </Link>
-              </DropdownMenuItem>
-
-              <DropdownMenuItem asChild>
-                <Link to="/subscription" className="flex items-center gap-2 w-full">
-                  <Crown className="h-4 w-4 text-slate-500" />
-                  <div className="flex-1 text-sm">Subscription</div>
-                  <div className="text-xs text-slate-400">Upgrade & Manage plans</div>
-                </Link>
-              </DropdownMenuItem>
-
-              <DropdownMenuItem asChild>
-                <Link to="/billing" className="flex items-center gap-2 w-full">
-                  <CreditCard className="h-4 w-4 text-slate-500" />
-                  <div className="flex-1 text-sm">Payments & Billing</div>
-                  <div className="text-xs text-slate-400">Transactions, Invoices & Billing</div>
-                </Link>
-              </DropdownMenuItem>
-
-              <DropdownMenuItem asChild>
-                <Link to="/spending" className="flex items-center gap-2 w-full">
-                  <Clock className="h-4 w-4 text-slate-500" />
-                  <div className="flex-1 text-sm">Spending History</div>
-                  <div className="text-xs text-slate-400"> </div>
-                </Link>
-              </DropdownMenuItem>
-            </div>
-
-            <DropdownMenuSeparator />
-            <div className="p-2">
-              <DropdownMenuItem onClick={onLogout} className="text-amber-600 font-semibold">
-                <LogOut className="mr-2 h-4 w-4" />
-                <span>Sign Out</span>
-              </DropdownMenuItem>
+            <div className="sticky bottom-0 bg-white/95 backdrop-blur supports-[backdrop-filter]:bg-white/85">
+              <DropdownMenuSeparator className="mx-0 my-0 bg-slate-200" />
+              <div className="p-2">
+                <DropdownMenuItem
+                  onClick={onLogout}
+                  className="h-10 rounded-lg px-3 font-semibold text-rose-600 focus:bg-rose-50 focus:text-rose-700"
+                >
+                  <LogOut className="mr-2 h-4 w-4" />
+                  <span>Sign out</span>
+                </DropdownMenuItem>
+              </div>
             </div>
           </DropdownMenuContent>
         </DropdownMenu>

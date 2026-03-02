@@ -49,6 +49,17 @@
     --sidebar-border: 220 13% 91%;
 
     --sidebar-ring: 217.2 91.2% 59.8%;
+
+    --success: 145 65% 38%;
+    --warning: 38 92% 50%;
+    --info: 205 85% 52%;
+
+    --canvas-bg: 210 28% 96%;
+    --canvas-dot: 210 24% 88%;
+
+    --block-hover: 145 36% 95%;
+    --block-selected: 145 46% 91%;
+    --block-border: 145 32% 78%;
   }
 
   .dark {
@@ -87,6 +98,17 @@
     --sidebar-accent-foreground: 240 4.8% 95.9%;
     --sidebar-border: 240 3.7% 15.9%;
     --sidebar-ring: 217.2 91.2% 59.8%;
+
+    --success: 145 58% 46%;
+    --warning: 38 86% 54%;
+    --info: 205 78% 62%;
+
+    --canvas-bg: 224 30% 10%;
+    --canvas-dot: 224 26% 18%;
+
+    --block-hover: 145 24% 20%;
+    --block-selected: 145 28% 24%;
+    --block-border: 145 25% 35%;
   }
 
   .landing-theme {
@@ -322,11 +344,38 @@
   }
 }
 
+@keyframes pipeline-fade-up {
+  from {
+    opacity: 0;
+    transform: translate3d(0, 14px, 0) scale(0.985);
+  }
+  to {
+    opacity: 1;
+    transform: translate3d(0, 0, 0) scale(1);
+  }
+}
+
 @keyframes workflow-edge-dash {
   from {
     stroke-dashoffset: 18;
   }
   to {
     stroke-dashoffset: 0;
+  }
+}
+
+@layer utilities {
+  .scrollbar-thin {
+    scrollbar-width: thin;
+    scrollbar-color: hsl(var(--border)) transparent;
+  }
+
+  .scrollbar-thin::-webkit-scrollbar {
+    width: 6px;
+  }
+
+  .scrollbar-thin::-webkit-scrollbar-thumb {
+    background: hsl(var(--border));
+    border-radius: 999px;
   }
 }

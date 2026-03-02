@@ -44,7 +44,11 @@ const summaryForNode = (kind: string, config: Record<string, unknown>) => {
     return String(config.url || "No URL");
   }
   if (kind === "split") {
-    return `${config.percentageA || 50}% / ${config.percentageB || 50}%`;
+    const a = Number(config.percentageA ?? 50);
+    const b = Number(config.percentageB ?? 50);
+    const safeA = Number.isFinite(a) ? a : 50;
+    const safeB = Number.isFinite(b) ? b : 50;
+    return `${safeA}% / ${safeB}%`;
   }
   return "";
 };

@@ -68,13 +68,13 @@ async function recountBotOpens() {
       const botReasons = [];
       let isBot = false;
 
-      // 1. Speed Trap (Temporal Analysis) - NEW 5-second rule
+      // 1. Speed Trap (Temporal Analysis) - critical within 10 seconds
       if (event.recipients?.last_email_sent_at) {
         const sentTime = new Date(event.recipients.last_email_sent_at).getTime();
         const eventTime = new Date(event.created_at).getTime();
         const timeDiff = eventTime - sentTime;
 
-        if (timeDiff < 5000) { // < 5 seconds = bot
+        if (timeDiff < 10000) { // < 10 seconds = bot
           botScore += 90;
           botReasons.push('speed_trap_critical');
         }

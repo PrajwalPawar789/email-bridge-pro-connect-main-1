@@ -155,6 +155,7 @@ const renderPlainTextPreviewHtml = (value: string) => {
 };
 
 const looksLikeHtml = (value: string) => /<\s*[a-z][\w-]*(\s[^>]*)?>/i.test(value);
+const EMAIL_BUILDER_STATE_REGEX = /<!--\s*VINTRO_EMAIL_BUILDER_STATE:[A-Za-z0-9+/=]+\s*-->/g;
 
 const resolveCampaignErrorMessage = (error: any) => {
   const message = String(error?.message || error?.details || '').trim();
@@ -389,7 +390,9 @@ const CampaignBuilder: React.FC<CampaignBuilderProps> = ({ emailConfigs }) => {
   const handleTemplateSelect = (templateId: string) => {
     const template = templates.find(t => t.id === templateId);
     if (template) {
-      const normalizedContent = (template.content || "").replace(/\s+$/, "");
+      const normalizedContent = (template.content || "")
+        .replace(EMAIL_BUILDER_STATE_REGEX, '')
+        .replace(/\s+$/, "");
       setForm(prev => ({
         ...prev,
         subject: template.subject || '',
@@ -517,6 +520,7 @@ const CampaignBuilder: React.FC<CampaignBuilderProps> = ({ emailConfigs }) => {
           name: form.name,
           subject: form.subject,
           body: form.content,
+          template_id: selectedTemplate || null,
           status: statusToUse,
           send_delay_minutes: form.send_delay_minutes,
           email_config_id: selectedConfigs[0].configId,
@@ -1415,7 +1419,7 @@ const CampaignBuilder: React.FC<CampaignBuilderProps> = ({ emailConfigs }) => {
           <Button
             variant="outline"
             className="bg-white/80 text-amber-700 hover:bg-amber-100 border-amber-200"
-            onClick={() => navigate('/dashboard?tab=templates')}
+            onClick={() => navigate('/email-builder')}
           >
             Add template
           </Button>

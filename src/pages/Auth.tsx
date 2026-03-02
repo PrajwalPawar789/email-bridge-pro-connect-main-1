@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { supabase } from '@/integrations/supabase/client';
-import { useNavigate } from 'react-router-dom';
+import { useLocation, useNavigate } from 'react-router-dom';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
@@ -8,6 +8,16 @@ import { toast } from '@/hooks/use-toast';
 import { Mail, Lock, ArrowRight, CheckCircle2 } from 'lucide-react';
 import Logo from '@/components/Logo';
 import { fetchOnboardingStatus } from '@/lib/onboarding';
+import {
+  captureReferralCodeFromSearch,
+  claimReferralForUser,
+  clearPendingReferralClaimReady,
+  clearPendingReferralCode,
+  isPendingReferralClaimReady,
+  markPendingReferralClaimReady,
+  persistPendingReferralCode,
+  readPendingReferralCode,
+} from '@/lib/referrals';
 
 const Auth = () => {
   const [isLogin, setIsLogin] = useState(true);
@@ -18,16 +28,140 @@ const Auth = () => {
   const [awaitingVerification, setAwaitingVerification] = useState(false);
   const [verificationEmail, setVerificationEmail] = useState('');
   const [resendLoading, setResendLoading] = useState(false);
+  const [pendingReferralCode, setPendingReferralCode] = useState<string | null>(() => readPendingReferralCode());
   const navigate = useNavigate();
+  const location = useLocation();
 
   const emailRedirectTo = useMemo(() => {
     if (typeof window === 'undefined') return undefined;
     return `${window.location.origin}/auth`;
   }, []);
+  const referralCodeFromUrl = useMemo(
+    () => captureReferralCodeFromSearch(location.search),
+    [location.search]
+  );
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+
+    const rawHash = window.location.hash?.startsWith('#')
+      ? window.location.hash.slice(1)
+      : window.location.hash || '';
+    if (!rawHash) return;
+
+    const params = new URLSearchParams(rawHash);
+    const callbackError = params.get('error_description') || params.get('error');
+    const accessToken = params.get('access_token');
+    const refreshToken = params.get('refresh_token');
+
+    const clearAuthHash = () => {
+      const base = `${window.location.pathname}${window.location.search}`;
+      window.history.replaceState({}, document.title, base);
+    };
+
+    if (callbackError) {
+      let callbackMessage = String(callbackError).replace(/\+/g, ' ');
+      try {
+        callbackMessage = decodeURIComponent(callbackMessage);
+      } catch {
+        // Keep raw callback text if decoding fails.
+      }
+      toast({
+        title: 'Verification failed',
+        description: callbackMessage,
+        variant: 'destructive',
+      });
+      clearAuthHash();
+      return;
+    }
+
+    if (!accessToken || !refreshToken) return;
+
+    let canceled = false;
+    (async () => {
+      const { data: currentSession } = await supabase.auth.getSession();
+      if (canceled || currentSession.session) {
+        clearAuthHash();
+        return;
+      }
+
+      const { error } = await supabase.auth.setSession({
+        access_token: accessToken,
+        refresh_token: refreshToken,
+      });
+
+      if (!canceled && error) {
+        toast({
+          title: 'Verification failed',
+          description: error.message,
+          variant: 'destructive',
+        });
+      }
+
+      if (!canceled) {
+        clearAuthHash();
+      }
+    })();
+
+    return () => {
+      canceled = true;
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!referralCodeFromUrl) return;
+    persistPendingReferralCode(referralCodeFromUrl);
+    setPendingReferralCode(referralCodeFromUrl);
+  }, [referralCodeFromUrl]);
 
   useEffect(() => {
     const redirectAfterAuth = async (session: any) => {
       if (!session?.user) return;
+
+      const tryClaimPendingReferral = async () => {
+        const isClaimReady = isPendingReferralClaimReady();
+        if (!isClaimReady) {
+          clearPendingReferralCode();
+          setPendingReferralCode(null);
+          return;
+        }
+
+        const referralCode = pendingReferralCode || readPendingReferralCode();
+        if (!referralCode) {
+          clearPendingReferralClaimReady();
+          return;
+        }
+
+        const createdAtMs = Date.parse(String(session.user.created_at || ''));
+        const isFreshAccount =
+          Number.isFinite(createdAtMs) && Date.now() - createdAtMs <= 1000 * 60 * 60 * 24;
+
+        if (!isFreshAccount) {
+          clearPendingReferralClaimReady();
+          clearPendingReferralCode();
+          setPendingReferralCode(null);
+          return;
+        }
+
+        try {
+          const result = await claimReferralForUser(referralCode, session.user.id);
+          if (result.linked) {
+            toast({
+              title: 'Referral tracked',
+              description: 'Your signup was linked to the referral code.',
+            });
+          }
+        } catch (error) {
+          console.error('Failed to claim referral code:', error);
+        } finally {
+          clearPendingReferralClaimReady();
+          clearPendingReferralCode();
+          setPendingReferralCode(null);
+        }
+      };
+
+      await tryClaimPendingReferral();
+
       try {
         const status = await fetchOnboardingStatus(session.user.id);
         const target =
@@ -53,7 +187,7 @@ const Auth = () => {
     });
 
     return () => subscription.unsubscribe();
-  }, [navigate]);
+  }, [navigate, pendingReferralCode]);
 
   const markAwaitingVerification = (targetEmail: string) => {
     setAwaitingVerification(true);
@@ -113,12 +247,38 @@ const Auth = () => {
         });
       } else {
         // For signup, we'll automatically sign in the user after successful registration
-        const { data, error } = await supabase.auth.signUp({
+        const signUpOptions: Record<string, any> = emailRedirectTo ? { emailRedirectTo } : {};
+        if (pendingReferralCode) {
+          signUpOptions.data = { referral_code: pendingReferralCode };
+        }
+
+        let { data, error } = await supabase.auth.signUp({
           email,
           password,
-          options: emailRedirectTo ? { emailRedirectTo } : undefined,
+          options: signUpOptions,
         });
+
+        if (
+          error &&
+          pendingReferralCode &&
+          /database error saving new user/i.test(String(error.message || ''))
+        ) {
+          // Fallback: retry without referral metadata so DB trigger failures don't block signup.
+          const fallbackOptions: Record<string, any> = emailRedirectTo ? { emailRedirectTo } : {};
+          const fallbackResult = await supabase.auth.signUp({
+            email,
+            password,
+            options: fallbackOptions,
+          });
+          data = fallbackResult.data;
+          error = fallbackResult.error;
+        }
+
         if (error) throw error;
+
+        if (pendingReferralCode) {
+          markPendingReferralClaimReady();
+        }
         
         const requiresVerification = !!data.user && !data.user.email_confirmed_at && !data.session;
 
@@ -155,12 +315,17 @@ const Auth = () => {
   const handleGoogleAuth = async () => {
     setGoogleLoading(true);
     try {
+      if (pendingReferralCode) {
+        markPendingReferralClaimReady();
+      }
+
       const { error } = await supabase.auth.signInWithOAuth({
         provider: 'google',
         options: emailRedirectTo ? { redirectTo: emailRedirectTo } : undefined,
       });
       if (error) throw error;
     } catch (error: any) {
+      clearPendingReferralClaimReady();
       toast({
         title: 'Google sign-in failed',
         description: error.message,
@@ -223,6 +388,12 @@ const Auth = () => {
                 : 'Get started with your free account today'}
             </p>
           </div>
+
+          {pendingReferralCode && (
+            <div className="rounded-2xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-800">
+              Referral code <span className="font-semibold">{pendingReferralCode}</span> will be applied after signup.
+            </div>
+          )}
 
           <form onSubmit={handleAuth} className="space-y-6">
             <div className="space-y-4">
