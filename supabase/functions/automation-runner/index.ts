@@ -1152,6 +1152,39 @@ const graphBranchRank = (handle: unknown) => {
   return 100;
 };
 
+const clampPercentage = (value: unknown, fallback: number) => {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric)) return fallback;
+  return Math.max(0, Math.min(100, numeric));
+};
+
+const normalizeSplitDistribution = (rawConfig: unknown) => {
+  const config = safeJsonObject(rawConfig);
+  const rawA = clampPercentage(config.percentageA ?? 50, 50);
+  const rawB = clampPercentage(config.percentageB ?? 50, 50);
+  const total = rawA + rawB;
+
+  if (total <= 0) {
+    return { percentageA: 50, percentageB: 50 };
+  }
+
+  const percentageA = (rawA / total) * 100;
+  return {
+    percentageA,
+    percentageB: 100 - percentageA,
+  };
+};
+
+const stablePercentageBucket = (seed: string) => {
+  let hash = 2166136261;
+  for (let index = 0; index < seed.length; index += 1) {
+    hash ^= seed.charCodeAt(index);
+    hash += (hash << 1) + (hash << 4) + (hash << 7) + (hash << 8) + (hash << 24);
+  }
+  const normalized = hash >>> 0;
+  return (normalized % 10000) / 100;
+};
+
 const normalizeWorkflowGraph = (workflow: Record<string, unknown>) => {
   const settings = safeJsonObject(workflow.settings);
   const graph = safeJsonObject(settings.workflow_graph);
@@ -1188,6 +1221,13 @@ const normalizeWorkflowGraph = (workflow: Record<string, unknown>) => {
       if (sourceNode?.kind === "condition") {
         if (sourceHandle === "yes") sourceHandle = "if";
         if (sourceHandle === "no") sourceHandle = "else";
+      } else if (sourceNode?.kind === "split") {
+        const normalizedHandle = sourceHandle.toLowerCase();
+        if (normalizedHandle === "a" || normalizedHandle === "variant_a" || normalizedHandle === "variant-a") {
+          sourceHandle = "a";
+        } else if (normalizedHandle === "b" || normalizedHandle === "variant_b" || normalizedHandle === "variant-b") {
+          sourceHandle = "b";
+        }
       }
 
       return {
@@ -1491,6 +1531,91 @@ const processContactGraph = async (
         ...state,
         current_node_id: currentNodeId,
       };
+
+      await admin
+        .from("automation_contacts")
+        .update({
+          status: "active",
+          current_step: currentStep,
+          next_run_at: new Date().toISOString(),
+          processing_started_at: null,
+          state,
+          last_error: null,
+        })
+        .eq("id", contact.id);
+      continue;
+    }
+
+    if (node.kind === "split") {
+      const splitAssignments = safeJsonObject(state.split_assignments);
+      const existingBranch = String(splitAssignments[node.id] || "").toLowerCase();
+      const hasAssignedBranch = existingBranch === "a" || existingBranch === "b";
+      const distribution = normalizeSplitDistribution(node.config);
+      const seed = `${String(workflow.id || "")}:${String(node.id || "")}:${String(contact.id || contact.email || "")}`;
+      const bucket = stablePercentageBucket(seed);
+      const selectedBranch = hasAssignedBranch
+        ? existingBranch
+        : bucket < distribution.percentageA
+          ? "a"
+          : "b";
+      const fallbackBranch = selectedBranch === "a" ? "b" : "a";
+
+      let next = outgoing.find((edge) => edge.sourceHandle === selectedBranch) || null;
+      if (!next) {
+        next = outgoing.find((edge) => edge.sourceHandle === fallbackBranch) || null;
+      }
+      if (!next) {
+        next = outgoing[0] || null;
+      }
+
+      const resolvedBranch =
+        next?.sourceHandle === "a" || next?.sourceHandle === "b"
+          ? next.sourceHandle
+          : selectedBranch;
+      const nextStep = currentStep + 1;
+      const nextState = {
+        ...state,
+        split_assignments: {
+          ...splitAssignments,
+          [node.id]: resolvedBranch,
+        },
+        current_node_id: next ? next.target : null,
+      };
+
+      await logAutomationEvent(
+        workflow,
+        contact.id,
+        "split_routed",
+        currentStep,
+        `A/B split routed contact to variant ${resolvedBranch.toUpperCase()}.`,
+        {
+          node_id: node.id,
+          branch: resolvedBranch,
+          seed_bucket: bucket,
+          percentage_a: Number(distribution.percentageA.toFixed(2)),
+          percentage_b: Number(distribution.percentageB.toFixed(2)),
+        }
+      );
+
+      if (!next) {
+        await completeContact(contact.id, nextStep, {
+          ...nextState,
+          current_node_id: null,
+        });
+        await logAutomationEvent(
+          workflow,
+          contact.id,
+          "workflow_completed",
+          nextStep,
+          "Workflow completed: split has no outbound target.",
+          { node_id: node.id }
+        );
+        return { completed: 1 };
+      }
+
+      currentStep = nextStep;
+      currentNodeId = next.target;
+      state = nextState;
 
       await admin
         .from("automation_contacts")

@@ -22,7 +22,7 @@ const mapLegacyTypeToKind = (type: AutomationStepType): WorkflowNodeKind => {
 };
 
 const mapLegacyRuleToGraphRule = (rule: LegacyConditionRule) => {
-  if (rule === "has_replied") return "email_opened";
+  if (rule === "has_replied") return "email_replied";
   if (rule === "email_domain_contains") return "user_property";
   if (rule === "company_contains") return "user_property";
   return "user_property";
@@ -50,27 +50,38 @@ const mapGraphRuleToLegacy = (
       return { rule: "job_title_contains", value, errors };
     }
 
-    errors.push(`Condition property "${property || "unknown"}" is not supported by the current runner.`);
+    errors.push(
+      `Condition property "${property || "unknown"}" is not representable in legacy flow fallback; using has_replied.`
+    );
+    return { rule: "has_replied", value: "", errors };
+  }
+
+  if (rule === "email_replied") {
     return { rule: "has_replied", value: "", errors };
   }
 
   if (rule === "email_opened") {
-    errors.push("Email opened condition is not yet supported by runner; fallback uses has_replied.");
+    errors.push("Email opened condition is not representable in legacy flow fallback; using has_replied.");
+    return { rule: "has_replied", value: "", errors };
+  }
+
+  if (rule === "email_reply_contains") {
+    errors.push("Email reply content condition is not representable in legacy flow fallback; using has_replied.");
     return { rule: "has_replied", value: "", errors };
   }
 
   if (rule === "email_clicked") {
-    errors.push("Email clicked condition is not yet supported by runner; fallback uses has_replied.");
+    errors.push("Email clicked condition is not representable in legacy flow fallback; using has_replied.");
     return { rule: "has_replied", value: "", errors };
   }
 
   if (rule === "tag_exists") {
-    errors.push("Tag based condition is not yet supported by runner; fallback uses has_replied.");
+    errors.push("Tag-based condition is not representable in legacy flow fallback; using has_replied.");
     return { rule: "has_replied", value: "", errors };
   }
 
   if (rule === "custom_event") {
-    errors.push("Custom event condition is not yet supported by runner; fallback uses has_replied.");
+    errors.push("Custom event condition is not representable in legacy flow fallback; using has_replied.");
     return { rule: "has_replied", value: "", errors };
   }
 
@@ -346,9 +357,16 @@ export const compileGraphToLegacyFlow = (graph: WorkflowGraph): { flow: Automati
     }
 
     if (node.kind === "split") {
-      errors.push(`Node type ${node.kind} is not supported by the current automation runner.`);
-      flow.push({ id: `${node.id}_stop`, name: "Stop", type: "stop", config: {} });
-      return { flow, errors };
+      const outgoing = outgoingFor(node.id);
+      const pickBranch = (handle: "a" | "b") =>
+        outgoing.find((edge) => String(edge.sourceHandle || "").toLowerCase() === handle) || null;
+      const next = pickBranch("a") || pickBranch("b") || outgoing[0] || null;
+      currentNodeId = next?.target || null;
+      if (!currentNodeId) {
+        flow.push({ id: `${node.id}_stop`, name: "Stop", type: "stop", config: {} });
+        return { flow, errors };
+      }
+      continue;
     }
 
     if (node.kind === "webhook") {

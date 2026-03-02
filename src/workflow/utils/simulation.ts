@@ -4,6 +4,8 @@ import { pickConditionBranch } from "@/workflow/utils/condition";
 
 export interface SimulationContext {
   userProperties?: Record<string, string>;
+  replied?: boolean;
+  replyText?: string;
   opened?: boolean;
   clicked?: boolean;
   tags?: string[];
@@ -18,10 +20,14 @@ const toConfigObject = (value: unknown): Record<string, unknown> =>
     : {};
 
 const pickSplitBranch = (config: Record<string, unknown>) => {
-  const a = Number(config.percentageA ?? 50);
-  const clampedA = Math.max(0, Math.min(100, a));
+  const rawA = Number(config.percentageA ?? 50);
+  const rawB = Number(config.percentageB ?? 50);
+  const a = Number.isFinite(rawA) ? Math.max(0, Math.min(100, rawA)) : 50;
+  const b = Number.isFinite(rawB) ? Math.max(0, Math.min(100, rawB)) : 50;
+  const total = a + b;
+  const thresholdA = total > 0 ? (a / total) * 100 : 50;
   const roll = Math.random() * 100;
-  return roll <= clampedA ? "a" : "b";
+  return roll < thresholdA ? "a" : "b";
 };
 
 const findOutgoingForHandle = (graph: WorkflowGraph, nodeId: string, handle: string) =>

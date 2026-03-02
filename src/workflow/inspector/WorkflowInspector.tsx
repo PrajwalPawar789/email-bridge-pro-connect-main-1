@@ -468,7 +468,11 @@ const WorkflowInspector = ({
               {conditionConfig.clauses.map((clause, index) => {
                 const label = conditionLabelForHandle(clause.id, index);
                 const isUserProperty = clause.rule === "user_property";
-                const requiresValue = clause.rule === "user_property" || clause.rule === "tag_exists" || clause.rule === "custom_event";
+                const requiresValue =
+                  clause.rule === "user_property" ||
+                  clause.rule === "tag_exists" ||
+                  clause.rule === "custom_event" ||
+                  clause.rule === "email_reply_contains";
 
                 const updateClause = (patch: Record<string, unknown>) => {
                   const nextClauses = conditionConfig.clauses.map((item, itemIndex) =>
@@ -506,6 +510,8 @@ const WorkflowInspector = ({
                         </SelectTrigger>
                         <SelectContent>
                           <SelectItem value="user_property">User property</SelectItem>
+                          <SelectItem value="email_replied">Email replied</SelectItem>
+                          <SelectItem value="email_reply_contains">Email reply contains</SelectItem>
                           <SelectItem value="email_opened">Email opened</SelectItem>
                           <SelectItem value="email_clicked">Email clicked</SelectItem>
                           <SelectItem value="tag_exists">Tag exists</SelectItem>
@@ -539,11 +545,23 @@ const WorkflowInspector = ({
 
                     {requiresValue ? (
                       <div className="space-y-2">
-                        <Label>{clause.rule === "custom_event" ? "Event name" : "Value"}</Label>
+                        <Label>
+                          {clause.rule === "custom_event"
+                            ? "Event name"
+                            : clause.rule === "email_reply_contains"
+                              ? "Reply text"
+                              : "Value"}
+                        </Label>
                         <Input
                           value={String(clause.value || "")}
                           onChange={(event) => updateClause({ value: event.target.value })}
-                          placeholder={clause.rule === "custom_event" ? "trial_started" : "enterprise"}
+                          placeholder={
+                            clause.rule === "custom_event"
+                              ? "trial_started"
+                              : clause.rule === "email_reply_contains"
+                                ? "pricing details"
+                                : "enterprise"
+                          }
                         />
                       </div>
                     ) : null}
@@ -579,8 +597,15 @@ const WorkflowInspector = ({
                     type="number"
                     min={0}
                     max={100}
-                    value={String(config.percentageA || 50)}
-                    onChange={(event) => onPatchConfig({ percentageA: Number(event.target.value || 50) })}
+                    value={String(config.percentageA ?? 50)}
+                    onChange={(event) => {
+                      const nextA = Math.max(0, Math.min(100, Number(event.target.value)));
+                      const safeA = Number.isFinite(nextA) ? nextA : 50;
+                      onPatchConfig({
+                        percentageA: safeA,
+                        percentageB: 100 - safeA,
+                      });
+                    }}
                   />
                 </div>
                 <div className="space-y-2">
@@ -589,11 +614,19 @@ const WorkflowInspector = ({
                     type="number"
                     min={0}
                     max={100}
-                    value={String(config.percentageB || 50)}
-                    onChange={(event) => onPatchConfig({ percentageB: Number(event.target.value || 50) })}
+                    value={String(config.percentageB ?? 50)}
+                    onChange={(event) => {
+                      const nextB = Math.max(0, Math.min(100, Number(event.target.value)));
+                      const safeB = Number.isFinite(nextB) ? nextB : 50;
+                      onPatchConfig({
+                        percentageB: safeB,
+                        percentageA: 100 - safeB,
+                      });
+                    }}
                   />
                 </div>
               </div>
+              <p className="text-xs text-slate-500">Variant A and Variant B always total 100%.</p>
             </div>
           ) : null}
 

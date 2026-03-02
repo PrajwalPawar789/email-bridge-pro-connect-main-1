@@ -4,6 +4,8 @@ export type WorkflowNodeStatus = "draft" | "live" | "error";
 
 export type ConditionRule =
   | "user_property"
+  | "email_replied"
+  | "email_reply_contains"
   | "email_opened"
   | "email_clicked"
   | "tag_exists"

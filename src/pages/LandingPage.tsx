@@ -5,6 +5,7 @@ import { Check, Globe } from 'lucide-react';
 import Navbar from '../components/Navbar';
 import Logo from '../components/Logo';
 import AIWorkflowShowcase from '../components/AIWorkflowShowcase';
+import WorkflowArchitectureSection from '../components/WorkflowArchitectureSection';
 import { supabase } from '@/integrations/supabase/client';
 
 const stats = [
@@ -550,6 +551,8 @@ const LandingPage = () => {
             </motion.div>
           </div>
         </section>
+
+        <WorkflowArchitectureSection />
 
         <AIWorkflowShowcase />
 

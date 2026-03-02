@@ -13,14 +13,6 @@ const supabaseServiceKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? "";
 const supabase =
   supabaseUrl && supabaseServiceKey ? createClient(supabaseUrl, supabaseServiceKey) : null;
 
-const getEnv = (name: string) => {
-  const value = Deno.env.get(name);
-  if (!value) {
-    throw new Error(`Missing required env var: ${name}`);
-  }
-  return value;
-};
-
 const escapeHtml = (value: string) =>
   value
     .replace(/&/g, "&amp;")
@@ -28,6 +20,47 @@ const escapeHtml = (value: string) =>
     .replace(/>/g, "&gt;")
     .replace(/"/g, "&quot;")
     .replace(/'/g, "&#39;");
+
+type SmtpConfig = {
+  host: string;
+  port: number;
+  secure: boolean;
+  user: string;
+  pass: string;
+};
+
+const smtpPlaceholderHosts = new Set([
+  "smtp.yourprovider.com",
+  "smtp.example.com",
+  "mail.yourprovider.com",
+  "mail.example.com",
+]);
+
+const parseBoolean = (value: string | null | undefined) =>
+  String(value ?? "")
+    .trim()
+    .toLowerCase() === "true";
+
+const parsePort = (value: string | null | undefined, fallback: number) => {
+  const numeric = Number(value);
+  return Number.isFinite(numeric) && numeric > 0 ? numeric : fallback;
+};
+
+const isPlaceholderHost = (host: string) => smtpPlaceholderHosts.has(host.trim().toLowerCase());
+
+const loadEnvSmtpConfig = (): SmtpConfig => {
+  const secure = parseBoolean(Deno.env.get("DEMO_SMTP_SECURE"));
+  return {
+    host: (Deno.env.get("DEMO_SMTP_HOST") ?? "").trim(),
+    port: parsePort(Deno.env.get("DEMO_SMTP_PORT"), secure ? 465 : 587),
+    user: (Deno.env.get("DEMO_SMTP_USER") ?? "").trim(),
+    pass: (Deno.env.get("DEMO_SMTP_PASS") ?? "").trim(),
+    secure,
+  };
+};
+
+const isEnvSmtpConfigUsable = (config: SmtpConfig) =>
+  Boolean(config.host && config.user && config.pass) && !isPlaceholderHost(config.host);
 
 type DbEmailConfig = {
   smtp_host: string;
@@ -75,6 +108,33 @@ const loadDbSmtpConfig = async () => {
   };
 };
 
+const resolveSmtpConfig = async (): Promise<SmtpConfig> => {
+  const useDbConfig = parseBoolean(Deno.env.get("DEMO_USE_DB_CONFIG"));
+  if (useDbConfig) {
+    return await loadDbSmtpConfig();
+  }
+
+  const envConfig = loadEnvSmtpConfig();
+  if (isEnvSmtpConfigUsable(envConfig)) {
+    return envConfig;
+  }
+
+  try {
+    console.warn("book-demo: falling back to DB SMTP config because DEMO_SMTP_* is missing or placeholder.");
+    return await loadDbSmtpConfig();
+  } catch {
+    if (isPlaceholderHost(envConfig.host)) {
+      throw new Error(
+        "SMTP host is still set to a placeholder value. Configure DEMO_SMTP_* secrets with a real provider host or set DEMO_USE_DB_CONFIG=true and ensure email_configs has valid credentials."
+      );
+    }
+
+    throw new Error(
+      "SMTP is not configured. Set DEMO_SMTP_HOST, DEMO_SMTP_USER, DEMO_SMTP_PASS (and optional DEMO_SMTP_PORT/DEMO_SMTP_SECURE) or use DEMO_USE_DB_CONFIG=true."
+    );
+  }
+};
+
 serve(async (req) => {
   if (req.method === "OPTIONS") {
     return new Response(null, { headers: corsHeaders });
@@ -98,6 +158,12 @@ serve(async (req) => {
       crm = "",
       message = "",
       website = "",
+      source = "",
+      requestedPlan = "",
+      requestedBillingCycle = "",
+      currentPlanId = "",
+      currentPlanName = "",
+      userId = "",
     } = payload ?? {};
 
     if (website) {
@@ -121,16 +187,7 @@ serve(async (req) => {
       });
     }
 
-    const useDbConfig = (Deno.env.get("DEMO_USE_DB_CONFIG") ?? "false") === "true";
-    const smtpConfig = useDbConfig
-      ? await loadDbSmtpConfig()
-      : {
-          host: getEnv("DEMO_SMTP_HOST"),
-          port: Number(Deno.env.get("DEMO_SMTP_PORT") ?? "587"),
-          user: getEnv("DEMO_SMTP_USER"),
-          pass: getEnv("DEMO_SMTP_PASS"),
-          secure: (Deno.env.get("DEMO_SMTP_SECURE") ?? "false") === "true",
-        };
+    const smtpConfig = await resolveSmtpConfig();
 
     const fromEmail = Deno.env.get("DEMO_FROM_EMAIL") ?? smtpConfig.user;
     const fromName = Deno.env.get("DEMO_FROM_NAME") ?? "EmailBridge Pro";
@@ -161,6 +218,12 @@ serve(async (req) => {
       `Role: ${role || "-"}`,
       `Team size: ${teamSize || "-"}`,
       `CRM: ${crm || "-"}`,
+      `Source: ${source || "-"}`,
+      `Requested plan: ${requestedPlan || "-"}`,
+      `Requested billing cycle: ${requestedBillingCycle || "-"}`,
+      `Current plan id: ${currentPlanId || "-"}`,
+      `Current plan name: ${currentPlanName || "-"}`,
+      `User ID: ${userId || "-"}`,
       `Message: ${message || "-"}`,
       `Submitted: ${submittedAt}`,
     ].join("\n");
@@ -174,6 +237,12 @@ serve(async (req) => {
       <p><strong>Role:</strong> ${escapeHtml(role || "-")}</p>
       <p><strong>Team size:</strong> ${escapeHtml(teamSize || "-")}</p>
       <p><strong>CRM:</strong> ${escapeHtml(crm || "-")}</p>
+      <p><strong>Source:</strong> ${escapeHtml(source || "-")}</p>
+      <p><strong>Requested plan:</strong> ${escapeHtml(requestedPlan || "-")}</p>
+      <p><strong>Requested billing cycle:</strong> ${escapeHtml(requestedBillingCycle || "-")}</p>
+      <p><strong>Current plan ID:</strong> ${escapeHtml(currentPlanId || "-")}</p>
+      <p><strong>Current plan name:</strong> ${escapeHtml(currentPlanName || "-")}</p>
+      <p><strong>User ID:</strong> ${escapeHtml(userId || "-")}</p>
       <p><strong>Message:</strong><br />${safeMessage}</p>
       <p><strong>Submitted:</strong> ${escapeHtml(submittedAt)}</p>
     `;

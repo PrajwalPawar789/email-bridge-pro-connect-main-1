@@ -65,6 +65,18 @@ export default {
 					'accent-foreground': 'hsl(var(--sidebar-accent-foreground))',
 					border: 'hsl(var(--sidebar-border))',
 					ring: 'hsl(var(--sidebar-ring))'
+				},
+				success: 'hsl(var(--success))',
+				warning: 'hsl(var(--warning))',
+				info: 'hsl(var(--info))',
+				canvas: {
+					bg: 'hsl(var(--canvas-bg))',
+					dot: 'hsl(var(--canvas-dot))'
+				},
+				block: {
+					hover: 'hsl(var(--block-hover))',
+					selected: 'hsl(var(--block-selected))',
+					border: 'hsl(var(--block-border))'
 				}
 			},
 			borderRadius: {

@@ -9,6 +9,9 @@ verify_jwt = false
 [functions.monitor-campaigns]
 verify_jwt = false
 
+[functions.send-campaign-batch]
+verify_jwt = false
+
 [functions.sync-mailbox]
 verify_jwt = false
 
@@ -22,6 +25,12 @@ verify_jwt = false
 verify_jwt = false
 
 [functions.automation-webhook]
+verify_jwt = false
+
+[functions.resolve-site-domain]
+verify_jwt = false
+
+[functions.verify-site-domain]
 verify_jwt = false
 
 [db]

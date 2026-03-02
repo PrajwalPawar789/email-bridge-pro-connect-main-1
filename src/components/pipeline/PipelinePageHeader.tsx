@@ -37,39 +37,72 @@ const PipelinePageHeader: React.FC<PipelinePageHeaderProps> = ({
   canEdit = true,
 }) => {
   const activePipeline = pipelines.find((pipeline) => pipeline.id === pipelineId);
+  const pipelineCountLabel = `${pipelines.length} pipeline${pipelines.length === 1 ? "" : "s"}`;
 
   return (
-    <div className="relative overflow-hidden rounded-3xl border border-[var(--shell-border)] bg-gradient-to-br from-white via-white to-emerald-50/40 p-5 shadow-[0_14px_30px_rgba(15,23,42,0.08)] md:p-6">
-      <div className="pointer-events-none absolute -right-14 -top-14 h-44 w-44 rounded-full bg-emerald-200/35 blur-3xl" />
-      <div className="relative flex flex-col gap-6 xl:flex-row xl:items-start xl:justify-between">
-        <div className="space-y-4">
-          <div className="flex items-center gap-2 text-[11px] uppercase tracking-[0.24em] text-slate-400">
-            <span>Workspace</span>
-            <span className="flex items-center gap-1 rounded-full border border-emerald-200 bg-emerald-50 px-2 py-0.5 text-[10px] text-emerald-700">
-              <span className="h-1.5 w-1.5 rounded-full bg-emerald-500" />
-              Live
-            </span>
-          </div>
-          <div className="flex flex-wrap items-center gap-3">
-            <h1 className="text-3xl font-semibold tracking-tight text-[var(--shell-ink)]">Pipeline</h1>
-            {activePipeline && (
-              <Badge variant="secondary" className="border border-emerald-200 bg-emerald-50 text-emerald-700">
-                {activePipeline.name}
-              </Badge>
-            )}
-          </div>
-          <p className="max-w-2xl text-sm text-[var(--shell-muted)]">
-            Turn replies into qualified opportunities and keep next steps moving.
-          </p>
-        </div>
+    <div className="relative overflow-hidden rounded-[30px] border border-[var(--shell-border)] bg-[var(--shell-surface-strong)] shadow-[0_22px_48px_rgba(15,23,42,0.12)]">
+      <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_9%_12%,rgba(16,185,129,0.18),transparent_34%),linear-gradient(155deg,rgba(255,255,255,0.96),rgba(248,250,252,0.92)_48%,rgba(255,255,255,0.96))]" />
+      <div className="pointer-events-none absolute inset-0 opacity-40 [background-image:linear-gradient(135deg,rgba(148,163,184,0.14)_1px,transparent_1px)] [background-size:26px_26px]" />
 
-        <div className="w-full max-w-[560px] rounded-2xl border border-[var(--shell-border)] bg-white/90 p-3 backdrop-blur-sm sm:p-4">
-          <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">
-            Active pipeline
-          </p>
-          <div className="mt-2 grid gap-2 sm:grid-cols-[minmax(0,1fr)_auto_auto]">
+      <div className="relative grid xl:grid-cols-[minmax(0,1fr)_420px]">
+        <section className="relative p-6 md:p-8 xl:pr-10">
+          <div className="pointer-events-none absolute bottom-8 left-0 top-8 hidden w-1.5 rounded-r-full bg-gradient-to-b from-emerald-500 via-teal-500 to-amber-400 xl:block" />
+
+          <div className="animate-[pipeline-fade-up_500ms_cubic-bezier(0.22,1,0.36,1)_both] space-y-5">
+            <div className="flex flex-wrap items-center gap-2 text-[11px] uppercase tracking-[0.22em] text-slate-500">
+              <span>Workspace</span>
+              <span className="inline-flex items-center gap-1 rounded-full border border-emerald-300/80 bg-emerald-50 px-2.5 py-1 text-[10px] text-emerald-700">
+                <span className="h-1.5 w-1.5 rounded-full bg-emerald-500 shadow-[0_0_8px_rgba(16,185,129,0.5)]" />
+                Live
+              </span>
+              <span className="text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-400">{pipelineCountLabel}</span>
+            </div>
+
+            <div>
+              <div className="flex flex-wrap items-center gap-3">
+                <h1
+                  className="text-4xl font-semibold tracking-tight text-[var(--shell-ink)] md:text-5xl"
+                  style={{ fontFamily: "var(--shell-font-display)" }}
+                >
+                  Pipeline
+                </h1>
+                {activePipeline && (
+                  <Badge
+                    variant="secondary"
+                    className="rounded-full border border-[var(--shell-border)] bg-white/85 px-3 py-1 text-[11px] font-semibold text-[var(--shell-ink)]"
+                  >
+                    {activePipeline.name}
+                  </Badge>
+                )}
+              </div>
+              <p className="mt-3 max-w-2xl text-[15px] leading-relaxed text-[var(--shell-muted)]">
+                Turn replies into qualified opportunities and keep next steps moving.
+              </p>
+            </div>
+
+            <div className="flex flex-wrap gap-2 text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-500">
+              <span className="rounded-full border border-[var(--shell-border)] bg-white/85 px-3 py-1.5">Conversion focused</span>
+              <span className="rounded-full border border-[var(--shell-border)] bg-white/85 px-3 py-1.5">
+                {canEdit ? "Editing enabled" : "View only"}
+              </span>
+            </div>
+          </div>
+        </section>
+
+        <section className="relative overflow-hidden border-t border-white/20 bg-[linear-gradient(160deg,#0f766e_0%,#0f766e_35%,#115e59_100%)] p-5 text-emerald-50 xl:border-l xl:border-t-0 md:p-6">
+          <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_82%_14%,rgba(255,255,255,0.2),transparent_36%),linear-gradient(180deg,transparent,rgba(6,78,59,0.24))]" />
+          <div className="relative animate-[pipeline-fade-up_660ms_cubic-bezier(0.22,1,0.36,1)_both] space-y-4">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <p className="text-[11px] font-semibold uppercase tracking-[0.2em] text-emerald-100/90">Active pipeline</p>
+              <span className="rounded-full border border-emerald-100/40 bg-white/15 px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.18em] text-white/90">
+                {canEdit ? "Ready to update" : "Read only"}
+              </span>
+            </div>
+
+            <p className="text-lg font-semibold leading-tight text-white">{activePipeline?.name || "Select pipeline"}</p>
+
             <Select value={pipelineId} onValueChange={onPipelineChange} disabled={pipelines.length === 0}>
-              <SelectTrigger className="h-10 w-full border-[var(--shell-border)] bg-white">
+              <SelectTrigger className="h-11 rounded-xl border-emerald-100/40 bg-white/92 text-slate-700">
                 <SelectValue placeholder="Select pipeline" />
               </SelectTrigger>
               <SelectContent>
@@ -81,34 +114,36 @@ const PipelinePageHeader: React.FC<PipelinePageHeaderProps> = ({
               </SelectContent>
             </Select>
 
-            <Button
-              className="h-10 bg-emerald-600 px-4 hover:bg-emerald-700"
-              onClick={onNewOpportunity}
-              disabled={!canEdit}
-            >
-              <Plus className="mr-2 h-4 w-4" />
-              New opportunity
-            </Button>
+            <div className="grid grid-cols-[minmax(0,1fr)_auto] gap-2">
+              <Button
+                className="h-11 rounded-xl bg-white px-5 font-semibold text-teal-800 shadow-[0_10px_24px_rgba(15,23,42,0.22)] hover:bg-emerald-50"
+                onClick={onNewOpportunity}
+                disabled={!canEdit}
+              >
+                <Plus className="mr-2 h-4 w-4" />
+                New opportunity
+              </Button>
 
-            <DropdownMenu>
-              <DropdownMenuTrigger asChild>
-                <Button variant="outline" className="h-10 border-[var(--shell-border)] bg-white px-3">
-                  <MoreHorizontal className="h-4 w-4" />
-                </Button>
-              </DropdownMenuTrigger>
-              <DropdownMenuContent align="end">
-                <DropdownMenuItem onSelect={onNewPipeline}>
-                  <Plus className="mr-2 h-4 w-4" />
-                  New pipeline
-                </DropdownMenuItem>
-                <DropdownMenuItem onSelect={onOpenSettings}>
-                  <Settings className="mr-2 h-4 w-4" />
-                  Pipeline settings
-                </DropdownMenuItem>
-              </DropdownMenuContent>
-            </DropdownMenu>
+              <DropdownMenu>
+                <DropdownMenuTrigger asChild>
+                  <Button variant="outline" className="h-11 rounded-xl border-emerald-100/40 bg-white/15 px-3 text-white hover:bg-white/25">
+                    <MoreHorizontal className="h-4 w-4" />
+                  </Button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="end">
+                  <DropdownMenuItem onSelect={onNewPipeline}>
+                    <Plus className="mr-2 h-4 w-4" />
+                    New pipeline
+                  </DropdownMenuItem>
+                  <DropdownMenuItem onSelect={onOpenSettings}>
+                    <Settings className="mr-2 h-4 w-4" />
+                    Pipeline settings
+                  </DropdownMenuItem>
+                </DropdownMenuContent>
+              </DropdownMenu>
+            </div>
           </div>
-        </div>
+        </section>
       </div>
     </div>
   );

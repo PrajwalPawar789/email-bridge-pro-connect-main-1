@@ -92,7 +92,7 @@ export const nodePlugins: NodePlugin[] = [
     description: "Split traffic for A/B testing.",
     icon: Shuffle,
     toneClass: "from-fuchsia-500/20 to-fuchsia-100/80 border-fuchsia-300",
-    supportsRunner: false,
+    supportsRunner: true,
     ports: [
       { id: "in", type: "target", position: Position.Top },
       { id: "a", label: "A", type: "source", position: Position.Right },

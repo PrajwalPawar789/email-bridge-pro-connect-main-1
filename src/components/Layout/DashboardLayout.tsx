@@ -67,6 +67,7 @@ const DashboardLayout = ({
         onTabChange={onTabChange} 
         isCollapsed={isSidebarCollapsed}
         toggleSidebar={() => setIsSidebarCollapsed((prev) => !prev)}
+        user={user}
       />
       <div className={cn(
         "fixed top-0 right-0 z-20 transition-all duration-300",

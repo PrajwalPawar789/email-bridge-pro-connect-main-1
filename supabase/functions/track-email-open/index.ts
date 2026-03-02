@@ -17,7 +17,7 @@ const transparentPixel = new Uint8Array([
 ]);
 
 const BOT_SCORE_THRESHOLD = 70;
-const SPEED_TRAP_CRITICAL_MS = 5000;
+const SPEED_TRAP_CRITICAL_MS = 10000;
 const SPEED_TRAP_SUSPICIOUS_MS = 30000;
 const SPEED_TRAP_MILD_MS = 120000;
 const IP_BURST_WINDOW_MS = 60000;

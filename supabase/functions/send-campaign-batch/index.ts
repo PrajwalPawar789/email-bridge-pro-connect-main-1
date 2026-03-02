@@ -14,6 +14,7 @@ const supabase = createClient(
   Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? ""
 );
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL") ?? "";
+const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? "";
 
 interface EmailConfig {
   host: string;
@@ -68,6 +69,11 @@ type PersonalizationData = {
   sender_email?: string;
 };
 
+type RequestAuthContext = {
+  isInternal: boolean;
+  userId: string | null;
+};
+
 // Utility functions
 const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 
@@ -95,6 +101,37 @@ const getErrorMessage = (error: unknown) => {
   } catch (_) {
     return 'Unknown error';
   }
+};
+
+const getBearerToken = (req: Request) => {
+  const authHeader = req.headers.get("authorization") || req.headers.get("Authorization") || "";
+  if (!authHeader.toLowerCase().startsWith("bearer ")) {
+    return "";
+  }
+  return authHeader.slice(7).trim();
+};
+
+const resolveRequestAuthContext = async (req: Request): Promise<RequestAuthContext> => {
+  const bearerToken = getBearerToken(req);
+  const apiKey = (req.headers.get("apikey") || "").trim();
+
+  if (
+    SUPABASE_SERVICE_ROLE_KEY &&
+    (bearerToken === SUPABASE_SERVICE_ROLE_KEY || apiKey === SUPABASE_SERVICE_ROLE_KEY)
+  ) {
+    return { isInternal: true, userId: null };
+  }
+
+  if (!bearerToken) {
+    throw new Error("Missing bearer token");
+  }
+
+  const { data, error } = await supabase.auth.getUser(bearerToken);
+  if (error || !data.user) {
+    throw new Error("Invalid JWT");
+  }
+
+  return { isInternal: false, userId: data.user.id };
 };
 
 const consumeUserCredits = async (
@@ -528,16 +565,27 @@ const sendEmail = async (
 };
 
 // Process a single batch of emails (max 3 emails to stay within 150s limit)
-const processBatch = async (campaignId: string, batchSize = 3, step = 0, emailConfigId?: string) => {
+const processBatch = async (
+  campaignId: string,
+  batchSize = 3,
+  step = 0,
+  emailConfigId?: string,
+  authContext?: RequestAuthContext
+) => {
   console.log(`Processing batch for campaign: ${campaignId} (max ${batchSize} emails, step ${step}, config ${emailConfigId || 'default'})`);
   
   try {
     // Get campaign data
-    const { data: campaign, error: campaignError } = await supabase
+    let campaignQuery = supabase
       .from('campaigns')
       .select('*')
-      .eq('id', campaignId)
-      .single();
+      .eq('id', campaignId);
+
+    if (!authContext?.isInternal && authContext?.userId) {
+      campaignQuery = campaignQuery.eq('user_id', authContext.userId);
+    }
+
+    const { data: campaign, error: campaignError } = await campaignQuery.single();
 
     if (campaignError || !campaign) {
       throw new Error(`Campaign not found: ${campaignError?.message}`);
@@ -1166,6 +1214,19 @@ serve(async (req: Request) => {
   }
 
   try {
+    let authContext: RequestAuthContext;
+    try {
+      authContext = await resolveRequestAuthContext(req);
+    } catch (authError) {
+      return new Response(
+        JSON.stringify({ code: 401, message: getErrorMessage(authError) }),
+        {
+          status: 401,
+          headers: { "Content-Type": "application/json", ...corsHeaders }
+        }
+      );
+    }
+
     const { campaignId, batchSize, step, emailConfigId } = await req.json();
     
     if (!campaignId) {
@@ -1178,7 +1239,7 @@ serve(async (req: Request) => {
       );
     }
 
-    const result = await processBatch(campaignId, batchSize, step || 0, emailConfigId);
+    const result = await processBatch(campaignId, batchSize, step || 0, emailConfigId, authContext);
     
     return new Response(
       JSON.stringify(result),

@@ -32,7 +32,13 @@ export const buildPublishChecklist = (graph: WorkflowGraph): WorkflowReviewItem[
     }
   });
 
-  const unsupported = graph.nodes.filter((node) => node.kind === "split");
+  const splitNodes = graph.nodes.filter((node) => node.kind === "split");
+  const invalidSplits = splitNodes.filter((node) => {
+    const outgoing = getOutgoingEdges(graph.edges, node.id);
+    const hasA = outgoing.some((edge) => String(edge.sourceHandle || "").toLowerCase() === "a");
+    const hasB = outgoing.some((edge) => String(edge.sourceHandle || "").toLowerCase() === "b");
+    return !hasA || !hasB;
+  });
 
   const disconnected = graph.nodes.filter((node) => {
     if (node.kind === "trigger") return false;
@@ -101,13 +107,13 @@ export const buildPublishChecklist = (graph: WorkflowGraph): WorkflowReviewItem[
           : `${unreachable.length} node(s) are unreachable from the trigger.`,
     },
     {
-      id: "runner",
-      label: "Runner-compatible blocks only (split still pending support)",
-      pass: unsupported.length === 0,
+      id: "splits",
+      label: "A/B split nodes map both Variant A and Variant B branches",
+      pass: invalidSplits.length === 0,
       detail:
-        unsupported.length === 0
+        invalidSplits.length === 0
           ? "Ready"
-          : `${unsupported.length} split block(s) need runner support before publish.`,
+          : `${invalidSplits.length} split block(s) are missing Variant A or Variant B connections.`,
     },
   ];
 

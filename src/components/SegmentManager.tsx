@@ -111,7 +111,12 @@ const ruleId = () => `r_${Date.now().toString(36)}_${Math.random().toString(36).
 const ruleKind = (field: SegmentField) => (field === "list_id" ? "list" : behaviorSet.has(field) ? "behavior" : "text");
 const opsFor = (field: SegmentField) => (ruleKind(field) === "list" ? listOps : ruleKind(field) === "behavior" ? behaviorOps : textOps);
 const newRule = (): SegmentRule => ({ id: ruleId(), field: "company", operator: "contains", value: "", lookback_days: "" });
-const needsValue = (rule: SegmentRule) => ruleKind(rule.field) === "list" || !["is_empty", "is_not_empty"].includes(rule.operator);
+const needsValue = (rule: SegmentRule) => {
+  const kind = ruleKind(rule.field);
+  if (kind === "list") return true;
+  if (kind === "behavior") return false;
+  return !["is_empty", "is_not_empty"].includes(rule.operator);
+};
 
 const parseRules = (raw: unknown): SegmentRule[] => {
   if (!Array.isArray(raw)) return [];

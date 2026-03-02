@@ -1,0 +1,246 @@
+<svg width="1700" height="760" viewBox="0 0 1700 760" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="workflow-bg" x1="130" y1="60" x2="1570" y2="710" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#091f22"/>
+      <stop offset="1" stop-color="#041416"/>
+    </linearGradient>
+    <radialGradient id="workflow-glow-left" cx="0" cy="0" r="1" gradientUnits="userSpaceOnUse" gradientTransform="translate(280 120) rotate(15) scale(420 260)">
+      <stop stop-color="#ff5c3b" stop-opacity="0.24"/>
+      <stop offset="1" stop-color="#ff5c3b" stop-opacity="0"/>
+    </radialGradient>
+    <radialGradient id="workflow-glow-right" cx="0" cy="0" r="1" gradientUnits="userSpaceOnUse" gradientTransform="translate(1420 620) rotate(-12) scale(520 300)">
+      <stop stop-color="#2dd4bf" stop-opacity="0.2"/>
+      <stop offset="1" stop-color="#2dd4bf" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="workflow-line-in" x1="376" y1="130" x2="810" y2="408" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#4df0cc" stop-opacity="0.42"/>
+      <stop offset="0.56" stop-color="#2dd4bf" stop-opacity="0.85"/>
+      <stop offset="1" stop-color="#66f8dd" stop-opacity="0.32"/>
+    </linearGradient>
+    <linearGradient id="workflow-line-out" x1="860" y1="160" x2="1500" y2="450" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#2dd4bf" stop-opacity="0.95"/>
+      <stop offset="1" stop-color="#59f3dd" stop-opacity="0.36"/>
+    </linearGradient>
+    <linearGradient id="workflow-card-fill" x1="0" y1="0" x2="0" y2="1">
+      <stop stop-color="#f6fffd" stop-opacity="0.98"/>
+      <stop offset="1" stop-color="#e9f6f3" stop-opacity="0.94"/>
+    </linearGradient>
+    <linearGradient id="workflow-card-fill-dark" x1="0" y1="0" x2="0" y2="1">
+      <stop stop-color="#112c30"/>
+      <stop offset="1" stop-color="#0a1f22"/>
+    </linearGradient>
+    <radialGradient id="workflow-core-glow" cx="0" cy="0" r="1" gradientUnits="userSpaceOnUse" gradientTransform="translate(800 360) scale(184)">
+      <stop stop-color="#2dd4bf" stop-opacity="0.33"/>
+      <stop offset="1" stop-color="#2dd4bf" stop-opacity="0"/>
+    </radialGradient>
+    <pattern id="workflow-grid" width="80" height="80" patternUnits="userSpaceOnUse">
+      <path d="M40 18V30" stroke="#8db3ad" stroke-opacity="0.2" stroke-width="1.4" stroke-linecap="round"/>
+      <path d="M34 24H46" stroke="#8db3ad" stroke-opacity="0.2" stroke-width="1.4" stroke-linecap="round"/>
+    </pattern>
+    <filter id="workflow-soft-shadow" x="-20%" y="-20%" width="140%" height="140%" color-interpolation-filters="sRGB">
+      <feOffset dy="12"/>
+      <feGaussianBlur stdDeviation="16"/>
+      <feColorMatrix type="matrix" values="0 0 0 0 0.02 0 0 0 0 0.12 0 0 0 0 0.12 0 0 0 0.36 0"/>
+      <feBlend in="SourceGraphic" mode="normal"/>
+    </filter>
+    <filter id="workflow-line-glow" x="-20%" y="-20%" width="140%" height="140%" color-interpolation-filters="sRGB">
+      <feGaussianBlur stdDeviation="3" result="blur"/>
+      <feMerge>
+        <feMergeNode in="blur"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+  </defs>
+
+  <rect width="1700" height="760" rx="36" fill="url(#workflow-bg)"/>
+  <rect width="1700" height="760" rx="36" fill="url(#workflow-grid)" opacity="0.8"/>
+  <rect width="1700" height="760" rx="36" fill="url(#workflow-glow-left)"/>
+  <rect width="1700" height="760" rx="36" fill="url(#workflow-glow-right)"/>
+
+  <g filter="url(#workflow-line-glow)" stroke-linecap="round">
+    <path id="workflow-in-1" d="M380 145C560 145 624 268 742 322" stroke="url(#workflow-line-in)" stroke-width="3.2" stroke-dasharray="8 11">
+      <animate attributeName="stroke-dashoffset" from="0" to="-210" dur="8s" repeatCount="indefinite"/>
+    </path>
+    <path id="workflow-in-2" d="M380 275C560 275 632 316 742 346" stroke="url(#workflow-line-in)" stroke-width="3.2" stroke-dasharray="8 11">
+      <animate attributeName="stroke-dashoffset" from="0" to="-210" dur="8.4s" repeatCount="indefinite"/>
+    </path>
+    <path id="workflow-in-3" d="M380 405C560 405 632 386 742 374" stroke="url(#workflow-line-in)" stroke-width="3.2" stroke-dasharray="8 11">
+      <animate attributeName="stroke-dashoffset" from="0" to="-210" dur="8.8s" repeatCount="indefinite"/>
+    </path>
+    <path id="workflow-in-4" d="M380 535C560 535 622 456 742 400" stroke="url(#workflow-line-in)" stroke-width="3.2" stroke-dasharray="8 11">
+      <animate attributeName="stroke-dashoffset" from="0" to="-210" dur="9.2s" repeatCount="indefinite"/>
+    </path>
+
+    <path id="workflow-out-1" d="M860 330C968 245 1014 154 1110 120" stroke="url(#workflow-line-out)" stroke-width="3" stroke-dasharray="7 10">
+      <animate attributeName="stroke-dashoffset" from="0" to="-190" dur="8s" repeatCount="indefinite"/>
+    </path>
+    <path id="workflow-out-2" d="M860 340C970 286 1026 240 1110 230" stroke="url(#workflow-line-out)" stroke-width="3" stroke-dasharray="7 10">
+      <animate attributeName="stroke-dashoffset" from="0" to="-190" dur="8.2s" repeatCount="indefinite"/>
+    </path>
+    <path id="workflow-out-3" d="M860 360C978 350 1030 340 1110 340" stroke="url(#workflow-line-out)" stroke-width="3" stroke-dasharray="7 10">
+      <animate attributeName="stroke-dashoffset" from="0" to="-190" dur="8.4s" repeatCount="indefinite"/>
+    </path>
+    <path id="workflow-out-4" d="M860 382C968 434 1024 450 1110 450" stroke="url(#workflow-line-out)" stroke-width="3" stroke-dasharray="7 10">
+      <animate attributeName="stroke-dashoffset" from="0" to="-190" dur="8.7s" repeatCount="indefinite"/>
+    </path>
+
+    <path d="M860 326C992 228 1092 142 1280 120" stroke="url(#workflow-line-out)" stroke-width="2.6" stroke-opacity="0.8" stroke-dasharray="7 10">
+      <animate attributeName="stroke-dashoffset" from="0" to="-180" dur="9s" repeatCount="indefinite"/>
+    </path>
+    <path d="M860 334C1002 184 1146 124 1450 120" stroke="url(#workflow-line-out)" stroke-width="2.6" stroke-opacity="0.76" stroke-dasharray="7 10">
+      <animate attributeName="stroke-dashoffset" from="0" to="-180" dur="9.6s" repeatCount="indefinite"/>
+    </path>
+    <path d="M860 348C1002 286 1114 238 1280 230" stroke="url(#workflow-line-out)" stroke-width="2.6" stroke-opacity="0.8" stroke-dasharray="7 10">
+      <animate attributeName="stroke-dashoffset" from="0" to="-180" dur="9.1s" repeatCount="indefinite"/>
+    </path>
+    <path d="M860 354C1006 244 1162 218 1450 230" stroke="url(#workflow-line-out)" stroke-width="2.6" stroke-opacity="0.8" stroke-dasharray="7 10">
+      <animate attributeName="stroke-dashoffset" from="0" to="-180" dur="9.8s" repeatCount="indefinite"/>
+    </path>
+    <path d="M860 368C1006 368 1116 338 1280 340" stroke="url(#workflow-line-out)" stroke-width="2.6" stroke-opacity="0.8" stroke-dasharray="7 10">
+      <animate attributeName="stroke-dashoffset" from="0" to="-180" dur="9.2s" repeatCount="indefinite"/>
+    </path>
+    <path d="M860 370C1016 426 1170 398 1450 340" stroke="url(#workflow-line-out)" stroke-width="2.6" stroke-opacity="0.78" stroke-dasharray="7 10">
+      <animate attributeName="stroke-dashoffset" from="0" to="-180" dur="9.9s" repeatCount="indefinite"/>
+    </path>
+    <path d="M860 390C996 484 1120 470 1280 450" stroke="url(#workflow-line-out)" stroke-width="2.6" stroke-opacity="0.78" stroke-dasharray="7 10">
+      <animate attributeName="stroke-dashoffset" from="0" to="-180" dur="9.4s" repeatCount="indefinite"/>
+    </path>
+    <path d="M860 398C996 548 1178 540 1450 450" stroke="url(#workflow-line-out)" stroke-width="2.6" stroke-opacity="0.74" stroke-dasharray="7 10">
+      <animate attributeName="stroke-dashoffset" from="0" to="-180" dur="10.1s" repeatCount="indefinite"/>
+    </path>
+  </g>
+
+  <g>
+    <circle cx="800" cy="360" r="184" fill="url(#workflow-core-glow)"/>
+    <circle cx="800" cy="360" r="112" fill="#062329" stroke="#2dd4bf" stroke-opacity="0.5" stroke-width="3"/>
+    <circle cx="800" cy="360" r="95" fill="url(#workflow-card-fill-dark)" stroke="#2dd4bf" stroke-opacity="0.7" stroke-width="2"/>
+    <circle cx="800" cy="360" r="77" fill="#08191c" stroke="#1f8f83" stroke-opacity="0.7"/>
+    <circle cx="800" cy="360" r="112" stroke="#2dd4bf" stroke-opacity="0.45" stroke-width="2" fill="none">
+      <animate attributeName="r" values="112;118;112" dur="4.2s" repeatCount="indefinite"/>
+      <animate attributeName="stroke-opacity" values="0.45;0.18;0.45" dur="4.2s" repeatCount="indefinite"/>
+    </circle>
+
+    <path d="M770 334H806C811.523 334 816 338.477 816 344V375C816 380.523 811.523 385 806 385H770C764.477 385 760 380.523 760 375V344C760 338.477 764.477 334 770 334Z" fill="#0D3430" stroke="#2dd4bf" stroke-opacity="0.75"/>
+    <path d="M786 346L800 359.5L786 373" stroke="#2dd4bf" stroke-width="4.2" stroke-linecap="round" stroke-linejoin="round"/>
+    <path d="M803 346L817 359.5L803 373" stroke="#2dd4bf" stroke-width="4.2" stroke-linecap="round" stroke-linejoin="round"/>
+
+    <text x="800" y="430" text-anchor="middle" fill="#e6fffa" font-family="'Plus Jakarta Sans', Inter, Arial, sans-serif" font-size="22" font-weight="700" letter-spacing="0.04em">AUTOMATION CORE</text>
+    <text x="800" y="456" text-anchor="middle" fill="#8ec5bd" font-family="Inter, Arial, sans-serif" font-size="16" font-weight="500">Trigger -> Logic -> Actions</text>
+  </g>
+
+  <g filter="url(#workflow-soft-shadow)">
+    <g>
+      <rect x="80" y="100" width="300" height="90" rx="18" fill="url(#workflow-card-fill)" stroke="#68ceb7" stroke-width="2"/>
+      <rect x="98" y="125" width="24" height="24" rx="8" fill="#e0faf5" stroke="#1c9d8f"/>
+      <circle cx="110" cy="137" r="5" fill="#17a98f"/>
+      <text x="136" y="140" fill="#113437" font-family="Inter, Arial, sans-serif" font-size="22" font-weight="700">Contact Enters Segment</text>
+      <text x="136" y="163" fill="#3d6967" font-family="Inter, Arial, sans-serif" font-size="15" font-weight="500">Trigger: list_joined</text>
+    </g>
+
+    <g>
+      <rect x="80" y="230" width="300" height="90" rx="18" fill="url(#workflow-card-fill)" stroke="#68ceb7" stroke-width="2"/>
+      <rect x="98" y="255" width="24" height="24" rx="8" fill="#e0faf5" stroke="#1c9d8f"/>
+      <path d="M106 263H114L110 271L114 279H106" stroke="#17a98f" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+      <text x="136" y="270" fill="#113437" font-family="Inter, Arial, sans-serif" font-size="22" font-weight="700">Webhook Event Received</text>
+      <text x="136" y="293" fill="#3d6967" font-family="Inter, Arial, sans-serif" font-size="15" font-weight="500">Trigger: custom_event</text>
+    </g>
+
+    <g>
+      <rect x="80" y="360" width="300" height="90" rx="18" fill="url(#workflow-card-fill)" stroke="#68ceb7" stroke-width="2"/>
+      <rect x="98" y="385" width="24" height="24" rx="8" fill="#e0faf5" stroke="#1c9d8f"/>
+      <path d="M106 391H114V403H106Z" fill="#17a98f"/>
+      <path d="M110 395V399" stroke="#e0faf5" stroke-width="1.8" stroke-linecap="round"/>
+      <text x="136" y="400" fill="#113437" font-family="Inter, Arial, sans-serif" font-size="22" font-weight="700">Manual Enrollment</text>
+      <text x="136" y="423" fill="#3d6967" font-family="Inter, Arial, sans-serif" font-size="15" font-weight="500">Trigger: manual</text>
+    </g>
+
+    <g>
+      <rect x="80" y="490" width="300" height="90" rx="18" fill="url(#workflow-card-fill)" stroke="#68ceb7" stroke-width="2"/>
+      <rect x="98" y="515" width="24" height="24" rx="8" fill="#e0faf5" stroke="#1c9d8f"/>
+      <path d="M105 529H115" stroke="#17a98f" stroke-width="2" stroke-linecap="round"/>
+      <path d="M110 524V534" stroke="#17a98f" stroke-width="2" stroke-linecap="round"/>
+      <text x="136" y="530" fill="#113437" font-family="Inter, Arial, sans-serif" font-size="22" font-weight="700">CRM Field Updated</text>
+      <text x="136" y="553" fill="#3d6967" font-family="Inter, Arial, sans-serif" font-size="15" font-weight="500">Behavior + attributes</text>
+    </g>
+  </g>
+
+  <g filter="url(#workflow-soft-shadow)" font-family="Inter, Arial, sans-serif">
+    <g>
+      <rect x="1110" y="80" width="146" height="80" rx="16" fill="url(#workflow-card-fill)" stroke="#bcd9d4"/>
+      <text x="1183" y="122" text-anchor="middle" fill="#123639" font-size="18" font-weight="700">Send Email</text>
+    </g>
+    <g>
+      <rect x="1280" y="80" width="146" height="80" rx="16" fill="url(#workflow-card-fill)" stroke="#bcd9d4"/>
+      <text x="1353" y="122" text-anchor="middle" fill="#123639" font-size="18" font-weight="700">Wait Window</text>
+    </g>
+    <g>
+      <rect x="1450" y="80" width="146" height="80" rx="16" fill="url(#workflow-card-fill)" stroke="#bcd9d4"/>
+      <text x="1523" y="122" text-anchor="middle" fill="#123639" font-size="18" font-weight="700">Condition</text>
+    </g>
+
+    <g>
+      <rect x="1110" y="190" width="146" height="80" rx="16" fill="url(#workflow-card-fill)" stroke="#bcd9d4"/>
+      <text x="1183" y="232" text-anchor="middle" fill="#123639" font-size="18" font-weight="700">A/B Split</text>
+    </g>
+    <g>
+      <rect x="1280" y="190" width="146" height="80" rx="16" fill="url(#workflow-card-fill)" stroke="#bcd9d4"/>
+      <text x="1353" y="232" text-anchor="middle" fill="#123639" font-size="18" font-weight="700">Webhook</text>
+    </g>
+    <g>
+      <rect x="1450" y="190" width="146" height="80" rx="16" fill="url(#workflow-card-fill)" stroke="#bcd9d4"/>
+      <text x="1523" y="232" text-anchor="middle" fill="#123639" font-size="18" font-weight="700">CRM Sync</text>
+    </g>
+
+    <g>
+      <rect x="1110" y="300" width="146" height="80" rx="16" fill="url(#workflow-card-fill)" stroke="#bcd9d4"/>
+      <text x="1183" y="342" text-anchor="middle" fill="#123639" font-size="18" font-weight="700">Segment Tag</text>
+    </g>
+    <g>
+      <rect x="1280" y="300" width="146" height="80" rx="16" fill="url(#workflow-card-fill)" stroke="#bcd9d4"/>
+      <text x="1353" y="342" text-anchor="middle" fill="#123639" font-size="18" font-weight="700">Lead Score</text>
+    </g>
+    <g>
+      <rect x="1450" y="300" width="146" height="80" rx="16" fill="url(#workflow-card-fill)" stroke="#bcd9d4"/>
+      <text x="1523" y="342" text-anchor="middle" fill="#123639" font-size="18" font-weight="700">Slack Alert</text>
+    </g>
+
+    <g>
+      <rect x="1110" y="410" width="146" height="80" rx="16" fill="url(#workflow-card-fill)" stroke="#bcd9d4"/>
+      <text x="1183" y="452" text-anchor="middle" fill="#123639" font-size="18" font-weight="700">Follow Up</text>
+    </g>
+    <g>
+      <rect x="1280" y="410" width="146" height="80" rx="16" fill="url(#workflow-card-fill)" stroke="#bcd9d4"/>
+      <text x="1353" y="452" text-anchor="middle" fill="#123639" font-size="18" font-weight="700">Task Create</text>
+    </g>
+    <g>
+      <rect x="1450" y="410" width="146" height="80" rx="16" fill="url(#workflow-card-fill)" stroke="#bcd9d4"/>
+      <text x="1523" y="452" text-anchor="middle" fill="#123639" font-size="18" font-weight="700">Exit Flow</text>
+    </g>
+  </g>
+
+  <g>
+    <circle r="5" fill="#66ffe3">
+      <animateMotion dur="3.8s" repeatCount="indefinite" rotate="auto">
+        <mpath href="#workflow-in-2"/>
+      </animateMotion>
+    </circle>
+    <circle r="4" fill="#2dd4bf" opacity="0.9">
+      <animateMotion dur="4.4s" repeatCount="indefinite" rotate="auto" begin="0.6s">
+        <mpath href="#workflow-in-4"/>
+      </animateMotion>
+    </circle>
+    <circle r="5" fill="#66ffe3">
+      <animateMotion dur="4.2s" repeatCount="indefinite" rotate="auto" begin="0.4s">
+        <mpath href="#workflow-out-1"/>
+      </animateMotion>
+    </circle>
+    <circle r="4" fill="#66ffe3" opacity="0.92">
+      <animateMotion dur="4.6s" repeatCount="indefinite" rotate="auto" begin="0.9s">
+        <mpath href="#workflow-out-3"/>
+      </animateMotion>
+    </circle>
+  </g>
+
+  <text x="82" y="62" fill="#9dc4be" font-family="Inter, Arial, sans-serif" font-size="16" font-weight="600" letter-spacing="0.24em">WORKFLOW ARCHITECTURE</text>
+  <text x="1110" y="535" fill="#8fbdb6" font-family="Inter, Arial, sans-serif" font-size="14" font-weight="500">Execution blocks aligned with your live automation builder.</text>
+</svg>
