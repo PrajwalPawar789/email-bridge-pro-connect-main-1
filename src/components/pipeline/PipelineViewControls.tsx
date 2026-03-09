@@ -43,7 +43,7 @@ const PipelineViewControls: React.FC<PipelineViewControlsProps> = ({
   onExpandAll,
 }) => {
   return (
-    <div className="flex flex-wrap items-center justify-between gap-3">
+    <div className="flex flex-wrap items-center justify-between gap-3 rounded-[22px] border border-[var(--shell-border)] bg-[var(--shell-surface-strong)]/95 px-3 py-2.5 shadow-[0_10px_20px_rgba(15,23,42,0.05)]">
       <div className="flex flex-wrap items-center gap-2">
         <ToggleGroup
           type="single"
@@ -77,7 +77,7 @@ const PipelineViewControls: React.FC<PipelineViewControlsProps> = ({
         </ToggleGroup>
 
         <Select value={swimlane} onValueChange={(value) => onSwimlaneChange(value as SwimlaneMode)}>
-          <SelectTrigger className="h-9 w-[160px] bg-white/80 border-slate-200">
+          <SelectTrigger className="h-9 w-[160px] border-slate-200 bg-white">
             <SelectValue placeholder="Swimlanes" />
           </SelectTrigger>
           <SelectContent>
@@ -89,16 +89,16 @@ const PipelineViewControls: React.FC<PipelineViewControlsProps> = ({
 
         <Button
           variant={activeStagesOnly ? "secondary" : "outline"}
-          className="h-9 border-slate-200"
+          className="h-9 border-slate-200 bg-white"
           onClick={() => onActiveStagesOnlyChange(!activeStagesOnly)}
         >
           <SlidersHorizontal className="h-4 w-4 mr-2" />
-          {activeStagesOnly ? "Active stages" : "All stages"}
+          {activeStagesOnly ? "Only active stages" : "All stages"}
         </Button>
       </div>
 
       <div className="flex flex-wrap items-center gap-2">
-        <Badge variant="outline" className="text-[10px] text-slate-500">
+        <Badge variant="outline" className="rounded-full text-[10px] text-slate-500">
           {collapsedCount} collapsed
         </Badge>
         <Button variant="ghost" size="sm" onClick={onExpandAll}>

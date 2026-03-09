@@ -209,8 +209,9 @@ export default function SiteConnectorPage() {
             const dns = statusConfig[domain.dnsStatus];
             const ssl = statusConfig[domain.sslStatus];
             const linkedPage = domain.linkedPageId ? pageById.get(domain.linkedPageId) : null;
-            const customDomainUrl = `https://${domain.domain}`;
-            const customDomainSlugUrl = linkedPage?.slug ? `${customDomainUrl}/${linkedPage.slug}` : customDomainUrl;
+            const customDomainProtocol = domain.sslStatus === 'active' ? 'https' : 'http';
+            const customDomainRootUrl = `${customDomainProtocol}://${domain.domain}`;
+            const customDomainSlugUrl = linkedPage?.slug ? `${customDomainRootUrl}/${linkedPage.slug}` : '';
             const publishedSlugUrl = linkedPage?.slug ? `${getOrigin()}/pages/${linkedPage.slug}` : '';
             const hasPublishedLinkedPage = Boolean(linkedPage?.published);
             return (
@@ -323,14 +324,59 @@ export default function SiteConnectorPage() {
                   {linkedPage && (
                     <div className="mt-3 rounded-lg border border-border bg-muted/40 p-3 space-y-2">
                       {hasPublishedLinkedPage ? (
+                        <div className="space-y-1">
+                          <div className="flex items-center justify-between gap-2 text-xs">
+                            <span className="text-muted-foreground">Selected Domain URL</span>
+                            <div className="flex items-center gap-1">
+                              <a
+                                href={customDomainRootUrl}
+                                target="_blank"
+                                rel="noreferrer"
+                                className="font-mono text-primary hover:underline break-all"
+                              >
+                                {customDomainRootUrl}
+                              </a>
+                              <Button
+                                type="button"
+                                variant="ghost"
+                                size="icon"
+                                className="h-7 w-7"
+                                onClick={() => void copyToClipboard(customDomainRootUrl)}
+                              >
+                                <Copy className="w-3.5 h-3.5" />
+                              </Button>
+                              <Button
+                                type="button"
+                                variant="ghost"
+                                size="icon"
+                                className="h-7 w-7"
+                                onClick={() => window.open(customDomainRootUrl, '_blank', 'noopener,noreferrer')}
+                              >
+                                <ExternalLink className="w-3.5 h-3.5" />
+                              </Button>
+                            </div>
+                          </div>
+                          {domain.sslStatus !== 'active' && (
+                            <p className="text-[11px] text-muted-foreground">
+                              SSL is still provisioning. Use the HTTP URL until SSL status becomes Active.
+                            </p>
+                          )}
+                        </div>
+                      ) : (
+                        <p className="text-xs text-muted-foreground">
+                          Linked page is not published yet. Publish it to use domain URL.
+                        </p>
+                      )}
+
+                      {hasPublishedLinkedPage && customDomainSlugUrl && (
                         <div className="flex items-center justify-between gap-2 text-xs">
-                          <span className="text-muted-foreground">Published URL</span>
+                          <span className="text-muted-foreground">Slug URL</span>
                           <div className="flex items-center gap-1">
                             <a
                               href={customDomainSlugUrl}
                               target="_blank"
                               rel="noreferrer"
-                              className="font-mono text-primary hover:underline break-all"
+                              className="font-mono text-muted-foreground hover:underline break-all"
                             >
                               {customDomainSlugUrl}
                             </a>
@@ -343,21 +389,8 @@ export default function SiteConnectorPage() {
                             >
                               <Copy className="w-3.5 h-3.5" />
                             </Button>
-                            <Button
-                              type="button"
-                              variant="ghost"
-                              size="icon"
-                              className="h-7 w-7"
-                              onClick={() => window.open(customDomainSlugUrl, '_blank', 'noopener,noreferrer')}
-                            >
-                              <ExternalLink className="w-3.5 h-3.5" />
-                            </Button>
                           </div>
                         </div>
-                      ) : (
-                        <p className="text-xs text-muted-foreground">
-                          Linked page is not published yet. Publish it to use domain URL.
-                        </p>
                       )}
 
                       {publishedSlugUrl && (

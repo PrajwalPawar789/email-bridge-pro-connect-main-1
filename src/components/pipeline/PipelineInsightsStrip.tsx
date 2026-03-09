@@ -47,36 +47,52 @@ const toneDotClasses: Record<NonNullable<InsightItem["tone"]>, string> = {
 
 const PipelineInsightsStrip: React.FC<PipelineInsightsStripProps> = ({ items }) => {
   return (
-    <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
+    <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-4">
       {items.map((item, index) => {
         const tone = item.tone || "slate";
         return (
           <Card
             key={item.id}
             className={cn(
-              "group relative overflow-hidden rounded-[24px] border shadow-[0_14px_30px_rgba(15,23,42,0.1)] transition-all duration-300 hover:-translate-y-1 hover:shadow-[0_22px_40px_rgba(15,23,42,0.14)] animate-[pipeline-fade-up_620ms_cubic-bezier(0.22,1,0.36,1)_both]",
+              "group relative overflow-hidden rounded-[18px] border shadow-[0_8px_22px_rgba(15,23,42,0.07)] transition-all duration-300 hover:-translate-y-0.5 hover:shadow-[0_12px_28px_rgba(15,23,42,0.1)] animate-[pipeline-fade-up_620ms_cubic-bezier(0.22,1,0.36,1)_both]",
               toneCardClasses[tone]
             )}
             style={{ animationDelay: `${index * 85}ms` }}
           >
-            <div className={cn("absolute inset-y-0 left-0 w-1.5", toneRailClasses[tone])} />
-            <div className="pointer-events-none absolute inset-0 bg-[linear-gradient(180deg,rgba(255,255,255,0.28),transparent_48%)]" />
+            <div className={cn("absolute inset-x-0 top-0 h-1", toneRailClasses[tone])} />
+            <CardContent className="relative flex min-h-[104px] flex-col justify-between p-3.5">
+              <div className="flex items-center justify-between gap-2">
+                <p className="text-[10px] font-semibold uppercase tracking-[0.17em] text-[var(--shell-muted)]">
+                  {item.label}
+                </p>
+                <span className="inline-flex items-center gap-1 text-[9px] font-semibold uppercase tracking-[0.14em] text-slate-500">
+                  <span className={cn("h-1.5 w-1.5 rounded-full", toneDotClasses[tone])} />
+                  Live
+                </span>
+              </div>
 
-            <CardContent className="relative flex min-h-[176px] flex-col p-5 pl-6 sm:p-6 sm:pl-7">
-              <div className="flex items-start justify-between gap-4">
-                <div>
-                  <p className="text-[11px] font-semibold uppercase tracking-[0.2em] text-[var(--shell-muted)]">
-                    {item.label}
-                  </p>
-                  <span className="mt-2 inline-flex items-center gap-2 text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">
-                    <span className={cn("h-2 w-2 rounded-full", toneDotClasses[tone])} />
-                    Updated live
-                  </span>
+              <div className="mt-2 flex items-end justify-between gap-2">
+                <div className="flex min-w-0 items-center gap-2">
+                  <p className="text-[1.9rem] font-semibold leading-none tracking-tight text-[var(--shell-ink)]">{item.value}</p>
+                  {item.tooltip && (
+                    <Tooltip>
+                      <TooltipTrigger asChild>
+                        <button
+                          type="button"
+                          className="h-5 w-5 rounded-full border border-slate-200 bg-white text-[9px] font-semibold text-slate-500"
+                          aria-label={`${item.label} info`}
+                        >
+                          i
+                        </button>
+                      </TooltipTrigger>
+                      <TooltipContent>{item.tooltip}</TooltipContent>
+                    </Tooltip>
+                  )}
                 </div>
                 {item.icon && (
                   <div
                     className={cn(
-                      "flex h-11 w-11 shrink-0 items-center justify-center rounded-xl border",
+                      "flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border",
                       toneIconClasses[tone]
                     )}
                   >
@@ -85,25 +101,7 @@ const PipelineInsightsStrip: React.FC<PipelineInsightsStripProps> = ({ items }) 
                 )}
               </div>
 
-              <div className="mt-7 flex items-center gap-2">
-                <p className="text-4xl font-semibold leading-none tracking-tight text-[var(--shell-ink)]">{item.value}</p>
-                {item.tooltip && (
-                  <Tooltip>
-                    <TooltipTrigger asChild>
-                      <button
-                        type="button"
-                        className="h-6 w-6 rounded-full border border-slate-200 bg-white text-[10px] font-semibold text-slate-500"
-                        aria-label={`${item.label} info`}
-                      >
-                        i
-                      </button>
-                    </TooltipTrigger>
-                    <TooltipContent>{item.tooltip}</TooltipContent>
-                  </Tooltip>
-                )}
-              </div>
-
-              <p className="mt-auto pt-4 text-sm text-[var(--shell-muted)]">{item.helper || "No context yet"}</p>
+              <p className="mt-1 truncate text-[11px] text-[var(--shell-muted)]">{item.helper || "No context yet"}</p>
             </CardContent>
           </Card>
         );

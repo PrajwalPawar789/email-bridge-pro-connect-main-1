@@ -67,7 +67,6 @@ serve(async (request: Request) => {
       .from("site_domains")
       .select("id, domain, linked_page_id, dns_status, ssl_status")
       .eq("domain", host)
-      .eq("dns_status", "verified")
       .not("linked_page_id", "is", null)
       .maybeSingle();
 

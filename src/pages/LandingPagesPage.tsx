@@ -41,6 +41,7 @@ import {
   createLandingPageBlock,
   getLandingPageTemplateById,
 } from '@/lib/landingPageTemplates';
+import { AiLandingPageDialog } from '@/components/ai/AiLandingPageDialog';
 
 const lpBlockTypes: { type: LPBlockType; label: string; icon: any }[] = [
   { type: 'navbar', label: 'Navbar', icon: Menu },
@@ -412,6 +413,7 @@ export default function LandingPagesPage() {
   } = useLandingPageStore();
 
   const [templateId, setTemplateId] = useState(DEFAULT_LANDING_PAGE_TEMPLATE_ID);
+  const [isAiDialogOpen, setIsAiDialogOpen] = useState(false);
   const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 5 } }));
 
   useEffect(() => {
@@ -427,6 +429,42 @@ export default function LandingPagesPage() {
 
   const openLivePage = (slug: string) => {
     window.open(`/pages/${slug}`, '_blank', 'noopener,noreferrer');
+  };
+
+  const applyAiPageResult = (result: Record<string, any>) => {
+    const blocks = Array.isArray(result?.blocks)
+      ? result.blocks.map((block: any) => ({
+          id: String(block?.id || crypto.randomUUID()),
+          type: String(block?.type || 'text') as any,
+          content: block?.content && typeof block.content === 'object' ? block.content : {},
+          styles: block?.styles && typeof block.styles === 'object' ? block.styles : {},
+        }))
+      : [];
+
+    const generatedName = String(result?.name || currentPage?.name || 'AI Landing Page');
+    const generatedSlug = slugifyValue(String(result?.slug || generatedName));
+
+    if (currentPage) {
+      if (currentPage.blocks.length > 0) {
+        const shouldReplace = window.confirm('Replace current sections with the AI-generated draft?');
+        if (!shouldReplace) return;
+      }
+
+      updatePageField('name', generatedName);
+      updatePageField('slug', generatedSlug);
+      updatePageField('blocks', blocks);
+      updatePageField('published', false);
+      selectBlock(null);
+      return;
+    }
+
+    createNewPage({
+      name: generatedName,
+      slug: generatedSlug,
+      blocks,
+      published: false,
+      createdAt: new Date(),
+    });
   };
 
   const applyTemplateToCurrentPage = () => {
@@ -476,6 +514,9 @@ export default function LandingPagesPage() {
             <p className="text-sm text-muted-foreground mt-1">Build, edit, and publish landing pages</p>
           </div>
           <div className="flex items-center gap-2">
+            <Button onClick={() => setIsAiDialogOpen(true)} disabled={isSaving} variant="outline">
+              <Sparkles className="w-4 h-4 mr-1" /> AI Generate
+            </Button>
             <Button onClick={() => createNewPage()} disabled={isSaving} variant="outline">
               <Plus className="w-4 h-4 mr-1" /> Blank Page
             </Button>
@@ -493,6 +534,9 @@ export default function LandingPagesPage() {
             <h3 className="font-semibold text-foreground mb-2">No pages yet</h3>
             <p className="text-sm text-muted-foreground mb-4">Start from a template or create a blank page</p>
             <div className="flex items-center justify-center gap-2">
+              <Button onClick={() => setIsAiDialogOpen(true)} disabled={isSaving} variant="outline">
+                <Sparkles className="w-4 h-4 mr-1" /> Generate With AI
+              </Button>
               <Button onClick={() => createFromTemplate(templateId)} disabled={isSaving}>
                 <Sparkles className="w-4 h-4 mr-1" /> Start From Template
               </Button>
@@ -577,6 +621,12 @@ export default function LandingPagesPage() {
             ))}
           </div>
         </div>
+
+        <AiLandingPageDialog
+          open={isAiDialogOpen}
+          onOpenChange={setIsAiDialogOpen}
+          onGenerated={({ result }) => applyAiPageResult(result)}
+        />
       </div>
     );
   }
@@ -617,6 +667,9 @@ export default function LandingPagesPage() {
           </Select>
           <Button size="sm" variant="outline" onClick={applyTemplateToCurrentPage} disabled={isSaving}>
             <Sparkles className="w-4 h-4 mr-1" /> Apply Template
+          </Button>
+          <Button size="sm" variant="outline" onClick={() => setIsAiDialogOpen(true)} disabled={isSaving}>
+            <Sparkles className="w-4 h-4 mr-1" /> AI Assist
           </Button>
         </div>
         <div className="flex items-center gap-2">
@@ -709,6 +762,13 @@ export default function LandingPagesPage() {
           onUpdate={updateBlock}
         />
       </div>
+
+      <AiLandingPageDialog
+        open={isAiDialogOpen}
+        onOpenChange={setIsAiDialogOpen}
+        currentPage={currentPage}
+        onGenerated={({ result }) => applyAiPageResult(result)}
+      />
     </div>
   );
 }

@@ -1,4 +1,5 @@
 import { supabase } from '@/integrations/supabase/client';
+import { buildLandingEmbeddingText, indexAiBuilderObject } from '@/lib/aiBuilder';
 
 export type LandingPageBlockType =
   | 'hero'
@@ -320,7 +321,23 @@ export const saveLandingPage = async (page: LandingPageRecord): Promise<LandingP
     .single();
 
   if (error) throw error;
-  return toLandingPageRecord(data);
+  const savedPage = toLandingPageRecord(data);
+
+  // Index latest page content asynchronously for semantic retrieval.
+  void indexAiBuilderObject({
+    mode: 'landing',
+    objectId: savedPage.id,
+    text: buildLandingEmbeddingText(savedPage),
+    metadata: {
+      name: savedPage.name,
+      slug: savedPage.slug,
+      published: savedPage.published,
+    },
+  }).catch((indexError) => {
+    console.warn('AI indexing skipped for landing page:', indexError?.message || indexError);
+  });
+
+  return savedPage;
 };
 
 export const getPublishedLandingPage = async (slug: string) => {

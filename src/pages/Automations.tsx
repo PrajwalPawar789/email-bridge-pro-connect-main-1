@@ -54,6 +54,13 @@ import {
 import { getBillingSnapshot } from "@/lib/billing";
 import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/providers/AuthProvider";
+import { useWorkspace } from "@/providers/WorkspaceProvider";
+import {
+  approvalLabel,
+  getApprovalBadgeClass,
+  normalizeTeamErrorMessage,
+  submitApprovalRequest,
+} from "@/lib/teamManagement";
 import WorkflowBuilder from "@/workflow/WorkflowBuilder";
 import WorkflowCanvas from "@/workflow/canvas/WorkflowCanvas";
 import {
@@ -162,6 +169,7 @@ const getTemplatePreviewGraph = (template: AutomationWorkflowTemplate): Workflow
 
 const Automations = () => {
   const { user, loading } = useAuth();
+  const { workspace } = useWorkspace();
   const navigate = useNavigate();
 
   const [initializing, setInitializing] = useState(true);
@@ -184,6 +192,16 @@ const Automations = () => {
   const [showWorkflowSettings, setShowWorkflowSettings] = useState(false);
   const [workspaceMode, setWorkspaceMode] = useState(false);
   const [workspaceModeTouched, setWorkspaceModeTouched] = useState(false);
+  const requiresAutomationApproval = Boolean(workspace?.requiresApproval.automation);
+
+  const getWorkflowApprovalStatus = useCallback(
+    (workflow: AutomationWorkflow | null | undefined) => {
+      const explicitStatus = String(workflow?.approval_status || "").trim();
+      if (explicitStatus) return explicitStatus;
+      return requiresAutomationApproval ? "draft" : "approved";
+    },
+    [requiresAutomationApproval]
+  );
 
   useEffect(() => {
     if (!loading && !user) {
@@ -489,6 +507,12 @@ const Automations = () => {
     };
   }, [builderPayload, editor]);
 
+  const selectedApprovalStatus = getWorkflowApprovalStatus(editor);
+  const automationApprovalPending = selectedApprovalStatus === "pending_approval";
+  const canSubmitAutomationForApproval =
+    requiresAutomationApproval &&
+    ["draft", "changes_requested", "rejected"].includes(selectedApprovalStatus);
+
   const persistWorkflow = useCallback(
     async (
       options: {
@@ -543,6 +567,43 @@ const Automations = () => {
     [editor, resolvePayload]
   );
 
+  const submitWorkflowForApproval = useCallback(async () => {
+    if (!editor) return;
+
+    const payload = resolvePayload();
+    if (!payload) return;
+
+    if (!payload.checklistPass) {
+      toast({
+        title: "Submit blocked",
+        description: "Fix the publish checklist before submitting for approval.",
+        variant: "destructive",
+      });
+      return;
+    }
+
+    await persistWorkflow({
+      statusOverride: "draft",
+      quiet: true,
+      payloadOverride: payload,
+    });
+
+    await submitApprovalRequest("automation", editor.id, {
+      reason: "Automation activation review",
+      comments: `Submitted workflow "${editor.name}" for go-live approval.`,
+      metadata: {
+        desired_status: "live",
+      },
+    });
+
+    toast({
+      title: "Submitted for approval",
+      description: "Automation activation is now waiting in the approval queue.",
+    });
+
+    await loadData();
+  }, [editor, loadData, persistWorkflow, resolvePayload]);
+
   const action = async (name: string, work: () => Promise<void>) => {
     setBusy(name);
     try {
@@ -550,7 +611,7 @@ const Automations = () => {
     } catch (error: unknown) {
       toast({
         title: "Action failed",
-        description: getErrorMessage(error),
+        description: normalizeTeamErrorMessage(error) || getErrorMessage(error),
         variant: "destructive",
       });
     } finally {
@@ -994,6 +1055,11 @@ const Automations = () => {
                             {AUTOMATION_STATUS_LABELS[workflow.status]}
                           </span>
                         </div>
+                        <div className="mt-2 flex flex-wrap items-center gap-2">
+                          <Badge className={getApprovalBadgeClass(getWorkflowApprovalStatus(workflow))}>
+                            {approvalLabel(getWorkflowApprovalStatus(workflow))}
+                          </Badge>
+                        </div>
                         <p className="mt-1 line-clamp-2 text-xs text-[var(--shell-muted)]">
                           {workflow.description || "No description"}
                         </p>
@@ -1066,9 +1132,14 @@ const Automations = () => {
               <Card className="border-[var(--shell-border)] bg-[var(--shell-surface)]">
                 <CardContent className="space-y-3 p-4">
                   <div className="flex flex-wrap items-center justify-between gap-2">
-                    <Badge className={cn("border", statusTone[editor.status])}>
-                      {AUTOMATION_STATUS_LABELS[editor.status]}
-                    </Badge>
+                    <div className="flex flex-wrap items-center gap-2">
+                      <Badge className={cn("border", statusTone[editor.status])}>
+                        {AUTOMATION_STATUS_LABELS[editor.status]}
+                      </Badge>
+                      <Badge className={getApprovalBadgeClass(selectedApprovalStatus)}>
+                        {approvalLabel(selectedApprovalStatus)}
+                      </Badge>
+                    </div>
 
                     <div className="flex flex-wrap gap-2">
                       <Button
@@ -1116,17 +1187,31 @@ const Automations = () => {
                       </Button>
 
                       {editor.status !== "live" ? (
-                        <Button
-                          onClick={() =>
-                            action("live", async () => {
-                              await persistWorkflow({ statusOverride: "live", quiet: false });
-                            })
-                          }
-                          disabled={!!busy || !!builderPayload && !builderPayload.checklistPass}
-                        >
-                          <Play className="mr-2 h-4 w-4" />
-                          Go live
-                        </Button>
+                        canSubmitAutomationForApproval || automationApprovalPending ? (
+                          <Button
+                            onClick={() => action("approval", submitWorkflowForApproval)}
+                            disabled={!!busy || automationApprovalPending || (!!builderPayload && !builderPayload.checklistPass)}
+                          >
+                            <Play className="mr-2 h-4 w-4" />
+                            {automationApprovalPending
+                              ? "Awaiting approval"
+                              : selectedApprovalStatus === "changes_requested" || selectedApprovalStatus === "rejected"
+                                ? "Resubmit for approval"
+                                : "Submit for approval"}
+                          </Button>
+                        ) : (
+                          <Button
+                            onClick={() =>
+                              action("live", async () => {
+                                await persistWorkflow({ statusOverride: "live", quiet: false });
+                              })
+                            }
+                            disabled={!!busy || !!builderPayload && !builderPayload.checklistPass}
+                          >
+                            <Play className="mr-2 h-4 w-4" />
+                            Go live
+                          </Button>
+                        )
                       ) : (
                         <Button
                           variant="outline"
@@ -1164,6 +1249,12 @@ const Automations = () => {
                       </Button>
                     </div>
                   </div>
+
+                  {requiresAutomationApproval && selectedApprovalStatus !== "approved" ? (
+                    <div className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
+                      Workflow activation is blocked until this automation is approved.
+                    </div>
+                  ) : null}
 
                   <div className="grid gap-3 lg:grid-cols-[minmax(0,1fr)_220px_220px_220px]">
                     <div className="space-y-2">

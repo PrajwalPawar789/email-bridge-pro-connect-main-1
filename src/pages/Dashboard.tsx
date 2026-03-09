@@ -105,6 +105,10 @@ const Dashboard = () => {
       navigate('/referrals');
       return;
     }
+    if (tab === 'team') {
+      navigate('/team');
+      return;
+    }
     if (tab === 'email-builder' || tab === 'templates') {
       navigate('/email-builder');
       return;

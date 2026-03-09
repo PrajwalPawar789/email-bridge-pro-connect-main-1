@@ -138,6 +138,41 @@ const replacePipelineStageKeywords = async (rows: Array<{ stageId: string; keywo
   }
 };
 
+const buildTemplateKeywordRows = (templateId: string, stages: DbPipelineStage[]) => {
+  const template = PIPELINE_TEMPLATES.find((item) => item.id === templateId) || DEFAULT_TEMPLATE;
+  const templateKeywordsByStageId = new Map(
+    template.stages.map((stage) => [stage.id, sanitizeStageKeywords(stage.keywords)])
+  );
+
+  return stages
+    .map((stage) => ({
+      stageId: stage.id,
+      keywords: templateKeywordsByStageId.get(stage.template_stage_id || '') || [],
+    }))
+    .filter((row) => row.keywords.length > 0);
+};
+
+export const ensurePipelineTemplateKeywords = async (
+  pipelineId: string,
+  templateId: string,
+  stagesInput?: DbPipelineStage[]
+) => {
+  const stages = stagesInput || await fetchPipelineStages(pipelineId);
+  if (!stages || stages.length === 0) return;
+
+  const templateKeywordRows = buildTemplateKeywordRows(templateId, stages);
+  if (templateKeywordRows.length === 0) return;
+
+  const existingKeywordsByStageId = await fetchPipelineStageKeywords(pipelineId);
+  const missingKeywordRows = templateKeywordRows.filter((row) => {
+    const existingKeywords = existingKeywordsByStageId[row.stageId] || [];
+    return existingKeywords.length === 0;
+  });
+
+  if (missingKeywordRows.length === 0) return;
+  await replacePipelineStageKeywords(missingKeywordRows);
+};
+
 export const ensurePipelineForTemplate = async (userId: string, templateId: string) => {
   const { data: existing, error } = await supabase
     .from('pipelines')
@@ -381,6 +416,7 @@ export const ensurePipelineStages = async (pipelineId: string, templateId: strin
   if (error) throw error;
 
   if (existingStages && existingStages.length > 0) {
+    await ensurePipelineTemplateKeywords(pipelineId, templateId, existingStages as DbPipelineStage[]);
     return existingStages as DbPipelineStage[];
   }
 
@@ -406,6 +442,7 @@ export const ensurePipelineStages = async (pipelineId: string, templateId: strin
     .order('sort_order', { ascending: true });
 
   if (fetchError) throw fetchError;
+  await ensurePipelineTemplateKeywords(pipelineId, templateId, inserted as DbPipelineStage[]);
   return inserted as DbPipelineStage[];
 };
 

@@ -17,6 +17,13 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { toast } from '@/hooks/use-toast';
 import { ChevronDown, ChevronLeft, ChevronRight, Download, FileSpreadsheet, Loader2, MoreHorizontal, Search } from 'lucide-react';
 import { getBillingSnapshot, type BillingSnapshot } from '@/lib/billing';
+import { useWorkspace } from '@/providers/WorkspaceProvider';
+import {
+  approvalLabel,
+  getApprovalBadgeClass,
+  normalizeTeamErrorMessage,
+  submitApprovalRequest
+} from '@/lib/teamManagement';
 import {
   AlertDialog,
   AlertDialogAction,
@@ -164,10 +171,14 @@ const resolveEmailConfigErrorMessage = (error: any) => {
   if (message.toLowerCase().includes('mailbox limit reached')) {
     return message;
   }
+  if (message.toLowerCase().includes('approval')) {
+    return message;
+  }
   return message || 'Failed to save email configuration.';
 };
 
 const EmailConfig: React.FC<EmailConfigProps> = ({ onConfigAdded }) => {
+  const { workspace } = useWorkspace();
   const [form, setForm] = useState<FormState>({ ...emptyForm });
   const [loading, setLoading] = useState(false);
   const [configs, setConfigs] = useState<any[]>([]);
@@ -182,8 +193,10 @@ const EmailConfig: React.FC<EmailConfigProps> = ({ onConfigAdded }) => {
   const [deleteTarget, setDeleteTarget] = useState<any | null>(null);
   const [bulkImporting, setBulkImporting] = useState(false);
   const [bulkImportSummary, setBulkImportSummary] = useState<BulkImportSummary | null>(null);
+  const [approvalSubmitting, setApprovalSubmitting] = useState<Set<string>>(new Set());
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const itemsPerPage = 8;
+  const requiresSenderApproval = Boolean(workspace?.requiresApproval.sender);
 
   useEffect(() => {
     fetchConfigs();
@@ -200,6 +213,59 @@ const EmailConfig: React.FC<EmailConfigProps> = ({ onConfigAdded }) => {
     const limit = Number(billingSnapshot.mailbox_limit || 0);
     return limit > 0 && used >= limit;
   }, [billingSnapshot]);
+
+  const getSenderApprovalStatus = (config: any) => {
+    const explicitStatus = String(config?.approval_status || '').trim();
+    if (explicitStatus) return explicitStatus;
+    return config?.is_active === false ? 'draft' : 'approved';
+  };
+
+  const requestSenderApproval = async (
+    config: any,
+    options: {
+      silent?: boolean;
+      refreshAfter?: boolean;
+      source?: string;
+    } = {}
+  ) => {
+    if (!config?.id || approvalSubmitting.has(config.id)) {
+      return;
+    }
+
+    setApprovalSubmitting((prev) => new Set(prev).add(config.id));
+    try {
+      await submitApprovalRequest('sender_account', config.id, {
+        reason: 'Sender activation review',
+        comments: options.source || `Submitted sender ${config.smtp_username || config.id} for activation approval.`,
+      });
+
+      if (!options.silent) {
+        toast({
+          title: 'Submitted for approval',
+          description: 'Sender activation is now waiting in the approval queue.',
+        });
+      }
+    } catch (error) {
+      if (!options.silent) {
+        toast({
+          title: 'Approval request failed',
+          description: normalizeTeamErrorMessage(error),
+          variant: 'destructive',
+        });
+      }
+      throw error;
+    } finally {
+      setApprovalSubmitting((prev) => {
+        const next = new Set(prev);
+        next.delete(config.id);
+        return next;
+      });
+
+      if (options.refreshAfter !== false) {
+        await fetchConfigs();
+      }
+    }
+  };
 
   const fetchConfigs = async () => {
     try {
@@ -307,24 +373,41 @@ const EmailConfig: React.FC<EmailConfigProps> = ({ onConfigAdded }) => {
           );
         }
 
-        const { error } = await supabase.from('email_configs').insert({
-          user_id: user.id,
-          sender_name: form.sender_name.trim(),
-          smtp_username: form.smtp_username.trim(),
-          smtp_password: form.smtp_password,
-          smtp_host: form.smtp_host,
-          smtp_port: form.smtp_port,
-          imap_host: form.imap_host,
-          imap_port: form.imap_port,
-          security: form.security
-        });
+        const { data: createdConfig, error } = await supabase
+          .from('email_configs')
+          .insert({
+            user_id: user.id,
+            sender_name: form.sender_name.trim(),
+            smtp_username: form.smtp_username.trim(),
+            smtp_password: form.smtp_password,
+            smtp_host: form.smtp_host,
+            smtp_port: form.smtp_port,
+            imap_host: form.imap_host,
+            imap_port: form.imap_port,
+            security: form.security
+          })
+          .select('*')
+          .single();
 
         if (error) throw error;
 
-        toast({
-          title: 'Success',
-          description: 'Email configuration saved successfully!',
-        });
+        if (requiresSenderApproval && createdConfig) {
+          await requestSenderApproval(createdConfig, {
+            silent: true,
+            refreshAfter: false,
+            source: `Submitted new sender ${form.smtp_username.trim()} for activation approval.`
+          });
+
+          toast({
+            title: 'Saved and submitted',
+            description: 'Sender account was saved and routed for activation approval.',
+          });
+        } else {
+          toast({
+            title: 'Success',
+            description: 'Email configuration saved successfully!',
+          });
+        }
       } else if (activeConfig) {
         const updates: any = {
           sender_name: form.sender_name.trim(),
@@ -340,17 +423,36 @@ const EmailConfig: React.FC<EmailConfigProps> = ({ onConfigAdded }) => {
           updates.smtp_password = form.smtp_password;
         }
 
-        const { error } = await supabase
+        const { data: updatedConfig, error } = await supabase
           .from('email_configs')
           .update(updates)
-          .eq('id', activeConfig.id);
+          .eq('id', activeConfig.id)
+          .select('*')
+          .single();
 
         if (error) throw error;
 
-        toast({
-          title: 'Updated',
-          description: 'Email configuration updated successfully!',
-        });
+        const approvalStatus = getSenderApprovalStatus(activeConfig);
+        const shouldResubmitForApproval =
+          requiresSenderApproval && ['draft', 'changes_requested', 'rejected'].includes(approvalStatus);
+
+        if (shouldResubmitForApproval && updatedConfig) {
+          await requestSenderApproval(updatedConfig, {
+            silent: true,
+            refreshAfter: false,
+            source: `Resubmitted sender ${form.smtp_username.trim()} for activation approval after updates.`
+          });
+
+          toast({
+            title: 'Updated and resubmitted',
+            description: 'Sender account changes were saved and sent back for approval.',
+          });
+        } else {
+          toast({
+            title: 'Updated',
+            description: 'Email configuration updated successfully!',
+          });
+        }
       }
 
       setForm({ ...emptyForm });
@@ -793,6 +895,11 @@ const EmailConfig: React.FC<EmailConfigProps> = ({ onConfigAdded }) => {
                 </p>
               </div>
             )}
+            {requiresSenderApproval && (
+              <div className="rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
+                New sender accounts stay inactive until an approver activates them.
+              </div>
+            )}
             {configs.length === 0 ? (
               <div className="rounded-2xl border border-dashed border-slate-200 bg-white/70 p-6 text-sm text-slate-500">
                 No email accounts yet. Add one to start sending campaigns.
@@ -806,10 +913,10 @@ const EmailConfig: React.FC<EmailConfigProps> = ({ onConfigAdded }) => {
                 {pagedConfigs.map((config) => {
                   const providerLabel = resolveProviderLabel(config.smtp_host || '');
                   const displayName = config.sender_name || 'Sender name missing';
-                  const statusLabel = config.sender_name ? 'Active' : 'Needs info';
-                  const statusStyles = config.sender_name
-                    ? 'border-emerald-200 bg-emerald-50 text-emerald-700'
-                    : 'border-amber-200 bg-amber-50 text-amber-700';
+                  const approvalStatus = getSenderApprovalStatus(config);
+                  const activationLabel = config.is_active === false ? 'Inactive' : 'Active';
+                  const canSubmitForApproval =
+                    requiresSenderApproval && ['draft', 'changes_requested', 'rejected'].includes(approvalStatus);
                   return (
                     <div
                       key={config.id}
@@ -828,7 +935,16 @@ const EmailConfig: React.FC<EmailConfigProps> = ({ onConfigAdded }) => {
                         </div>
                       </div>
                       <div className="flex items-center gap-2">
-                        <Badge className={statusStyles}>{statusLabel}</Badge>
+                        <Badge className={getApprovalBadgeClass(approvalStatus)}>{approvalLabel(approvalStatus)}</Badge>
+                        <Badge
+                          className={
+                            config.is_active === false
+                              ? 'border border-slate-200 bg-slate-50 text-slate-700'
+                              : 'border border-emerald-200 bg-emerald-50 text-emerald-700'
+                          }
+                        >
+                          {activationLabel}
+                        </Badge>
                         <DropdownMenu>
                           <DropdownMenuTrigger asChild>
                             <Button variant="ghost" size="icon" className="h-9 w-9 rounded-full">
@@ -839,6 +955,18 @@ const EmailConfig: React.FC<EmailConfigProps> = ({ onConfigAdded }) => {
                             <DropdownMenuItem onSelect={() => openEditForm(config)}>
                               Edit Configuration
                             </DropdownMenuItem>
+                            {canSubmitForApproval ? (
+                              <DropdownMenuItem
+                                disabled={approvalSubmitting.has(config.id)}
+                                onSelect={() => {
+                                  void requestSenderApproval(config, {
+                                    source: `Submitted sender ${config.smtp_username || config.id} for activation approval.`
+                                  });
+                                }}
+                              >
+                                {approvalSubmitting.has(config.id) ? 'Submitting...' : 'Submit for approval'}
+                              </DropdownMenuItem>
+                            ) : null}
                             <DropdownMenuSeparator />
                             <DropdownMenuItem className="text-rose-600" onSelect={() => handleRequestDelete(config)}>
                               Disconnect Account
@@ -1100,7 +1228,13 @@ const EmailConfig: React.FC<EmailConfigProps> = ({ onConfigAdded }) => {
                 disabled={loading}
                 className="flex-1 rounded-full"
               >
-                {loading ? 'Saving...' : mode === 'edit' ? 'Save changes' : 'Save configuration'}
+                {loading
+                  ? 'Saving...'
+                  : requiresSenderApproval && mode === 'create'
+                    ? 'Save and submit'
+                    : mode === 'edit'
+                      ? 'Save changes'
+                      : 'Save configuration'}
               </Button>
             </div>
           </CardContent>

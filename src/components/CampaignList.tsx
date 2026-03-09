@@ -1,10 +1,28 @@
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { supabase } from '@/integrations/supabase/client';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Input } from '@/components/ui/input';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
+import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group';
+import {
+  Pagination,
+  PaginationContent,
+  PaginationEllipsis,
+  PaginationItem,
+  PaginationLink,
+  PaginationNext,
+  PaginationPrevious,
+} from '@/components/ui/pagination';
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from '@/components/ui/table';
 import { format, formatDistanceToNow } from 'date-fns';
 import { 
   Send,
@@ -24,12 +42,21 @@ import {
   Activity,
   MessageSquare,
   AlertTriangle,
-  CheckCircle2
+  CheckCircle2,
+  LayoutGrid,
+  List
 } from 'lucide-react';
 import { toast } from '@/hooks/use-toast';
 import { useCampaignSender } from '@/hooks/useCampaignSender';
 import { useRealtimeCampaigns } from '@/hooks/useRealtimeCampaigns';
 import { useCampaignManager } from '@/hooks/useCampaignManager';
+import { useWorkspace } from '@/providers/WorkspaceProvider';
+import {
+  approvalLabel,
+  getApprovalBadgeClass,
+  normalizeTeamErrorMessage,
+  submitApprovalRequest,
+} from '@/lib/teamManagement';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import FollowUpStatusDialog from './FollowUpStatusDialog';
 
@@ -37,22 +64,86 @@ interface CampaignListProps {
   onCreateCampaign?: () => void;
 }
 
+type CampaignViewMode = 'cards' | 'table';
+
+const ITEMS_PER_PAGE_OPTIONS = [6, 12, 24, 48];
+
 const CampaignList = ({ onCreateCampaign }: CampaignListProps) => {
   const navigate = useNavigate();
   const { campaigns, loading, refetch, resumeStuckCampaigns } = useRealtimeCampaigns();
   const { startSending, isSending } = useCampaignSender();
   const { restartCampaign, pauseCampaign, isManaging } = useCampaignManager();
+  const { workspace } = useWorkspace();
   const [searchQuery, setSearchQuery] = useState('');
   const [statusFilter, setStatusFilter] = useState('all');
   const [sortBy, setSortBy] = useState('recent');
+  const [viewMode, setViewMode] = useState<CampaignViewMode>('cards');
+  const [itemsPerPage, setItemsPerPage] = useState(6);
+  const [currentPage, setCurrentPage] = useState(1);
   const [selectedCampaign, setSelectedCampaign] = useState<any>(null);
   const [detailsOpen, setDetailsOpen] = useState(false);
   const [followUpDetailsOpen, setFollowUpDetailsOpen] = useState(false);
   const [selectedFollowUpCampaign, setSelectedFollowUpCampaign] = useState<any>(null);
+  const [approvalSubmitting, setApprovalSubmitting] = useState<Set<string>>(new Set());
 
-  const startCampaign = async (campaignId: string) => {
+  const requiresCampaignApproval = Boolean(workspace?.requiresApproval.campaign);
+
+  const getCampaignApprovalStatus = (campaign: any) => {
+    const explicitStatus = String(campaign?.approval_status || '').trim();
+    if (explicitStatus) return explicitStatus;
+    return requiresCampaignApproval ? 'draft' : 'approved';
+  };
+
+  const isApprovalSubmissionPending = (campaignId: string) => approvalSubmitting.has(campaignId);
+
+  const submitCampaignForApproval = async (campaign: any) => {
+    if (approvalSubmitting.has(campaign.id)) {
+      return;
+    }
+
+    setApprovalSubmitting((prev) => new Set(prev).add(campaign.id));
     try {
-      await startSending(campaignId);
+      const desiredStatus = campaign.status === 'scheduled' ? 'scheduled' : 'ready';
+      await submitApprovalRequest('campaign', campaign.id, {
+        reason: 'Campaign launch review',
+        comments: `Submitted from campaign list for ${desiredStatus} status.`,
+        metadata: {
+          desired_status: desiredStatus,
+        },
+      });
+
+      toast({
+        title: 'Submitted for approval',
+        description: 'Campaign launch is now waiting in the approval queue.',
+      });
+      await refetch();
+    } catch (error) {
+      toast({
+        title: 'Approval request failed',
+        description: normalizeTeamErrorMessage(error),
+        variant: 'destructive',
+      });
+    } finally {
+      setApprovalSubmitting((prev) => {
+        const next = new Set(prev);
+        next.delete(campaign.id);
+        return next;
+      });
+    }
+  };
+
+  const startCampaign = async (campaign: any) => {
+    if (getCampaignApprovalStatus(campaign) !== 'approved') {
+      toast({
+        title: 'Approval required',
+        description: 'Submit this campaign for approval before launching it.',
+        variant: 'destructive',
+      });
+      return;
+    }
+
+    try {
+      await startSending(campaign.id);
       await refetch();
     } catch (error: any) {
       console.error('Error starting campaign:', error);
@@ -65,8 +156,17 @@ const CampaignList = ({ onCreateCampaign }: CampaignListProps) => {
   };
 
   // Use the enhanced restart functionality from the hook
-  const handleRestartCampaign = async (campaignId: string) => {
-    await restartCampaign(campaignId);
+  const handleRestartCampaign = async (campaign: any) => {
+    if (getCampaignApprovalStatus(campaign) !== 'approved') {
+      toast({
+        title: 'Approval required',
+        description: 'This campaign cannot resume until approval is granted.',
+        variant: 'destructive',
+      });
+      return;
+    }
+
+    await restartCampaign(campaign.id);
     await refetch();
   };
 
@@ -100,6 +200,22 @@ const CampaignList = ({ onCreateCampaign }: CampaignListProps) => {
         variant: "destructive",
       });
     }
+  };
+
+  const openCampaignDetails = (campaign: any) => {
+    setSelectedCampaign(campaign);
+    setDetailsOpen(true);
+  };
+
+  const openFollowUpDetails = (campaign: any) => {
+    setSelectedFollowUpCampaign(campaign);
+    setFollowUpDetailsOpen(true);
+  };
+
+  const resetFilters = () => {
+    setSearchQuery('');
+    setStatusFilter('all');
+    setSortBy('recent');
   };
 
   const getActualTrackingStats = (campaign: any) => {
@@ -432,6 +548,197 @@ const CampaignList = ({ onCreateCampaign }: CampaignListProps) => {
   }, [enrichedCampaigns, searchQuery, statusFilter, sortBy]);
 
   const hasActiveFilters = searchQuery.trim().length > 0 || statusFilter !== 'all' || sortBy !== 'recent';
+  const totalPages = Math.max(1, Math.ceil(filteredCampaigns.length / itemsPerPage));
+  const activePage = Math.min(currentPage, totalPages);
+  const pageStart = filteredCampaigns.length === 0 ? 0 : (activePage - 1) * itemsPerPage + 1;
+  const pageEnd = filteredCampaigns.length === 0 ? 0 : Math.min(activePage * itemsPerPage, filteredCampaigns.length);
+
+  const paginatedCampaigns = useMemo(() => {
+    const startIndex = (activePage - 1) * itemsPerPage;
+    return filteredCampaigns.slice(startIndex, startIndex + itemsPerPage);
+  }, [activePage, filteredCampaigns, itemsPerPage]);
+
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [searchQuery, statusFilter, sortBy, itemsPerPage]);
+
+  useEffect(() => {
+    if (currentPage !== activePage) {
+      setCurrentPage(activePage);
+    }
+  }, [activePage, currentPage]);
+
+  const getPaginationItems = (page: number, total: number) => {
+    const pages = new Set<number>([1, total, page, page - 1, page + 1]);
+    const sorted = Array.from(pages)
+      .filter((p) => p >= 1 && p <= total)
+      .sort((a, b) => a - b);
+
+    const items: Array<number | 'ellipsis'> = [];
+    let previous = 0;
+
+    sorted.forEach((p) => {
+      if (p - previous > 1 && previous !== 0) {
+        items.push('ellipsis');
+      }
+      items.push(p);
+      previous = p;
+    });
+
+    return items;
+  };
+
+  const paginationItems = getPaginationItems(activePage, totalPages);
+
+  const handlePageChange = (page: number) => {
+    setCurrentPage(Math.min(Math.max(page, 1), totalPages));
+  };
+
+  const renderCampaignActions = (item: any, compact = false) => {
+    const { campaign, hasFollowups, isFollowUpMode, stats } = item;
+    const approvalStatus = getCampaignApprovalStatus(campaign);
+    const launchBlocked = approvalStatus !== 'approved';
+    const canSubmitForApproval =
+      requiresCampaignApproval && ['draft', 'changes_requested', 'rejected'].includes(approvalStatus);
+    const approvalBusy = isApprovalSubmissionPending(campaign.id);
+    const actionClassName = compact
+      ? 'h-8 rounded-full text-[11px] font-semibold'
+      : 'h-9 rounded-full text-xs font-semibold';
+
+    return (
+      <div className={`flex flex-wrap gap-2 ${compact ? 'justify-end' : ''}`}>
+        <Button
+          variant="outline"
+          size="sm"
+          onClick={() => navigate(`/campaign/${campaign.id}`)}
+          className={`border-[var(--camp-border)] bg-white/80 text-[var(--camp-ink)] ${actionClassName}`}
+        >
+          <BarChart2 className="h-4 w-4 mr-2" />
+          Track
+        </Button>
+
+        <Button
+          variant="outline"
+          size="sm"
+          onClick={() => openCampaignDetails(campaign)}
+          className={`border-[var(--camp-border)] bg-white/80 text-[var(--camp-ink)] ${actionClassName}`}
+        >
+          <Eye className="h-4 w-4 mr-2" />
+          Quick view
+        </Button>
+
+        {hasFollowups && (
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => openFollowUpDetails(campaign)}
+            className={`border-[var(--camp-border)] bg-white/80 text-[var(--camp-ink)] ${actionClassName}`}
+          >
+            <Clock className="h-4 w-4 mr-2" />
+            Follow-up status
+          </Button>
+        )}
+
+        {(campaign.status === 'draft' || campaign.status === 'ready') && canSubmitForApproval && (
+          <Button
+            size="sm"
+            onClick={() => submitCampaignForApproval(campaign)}
+            disabled={approvalBusy}
+            className={`bg-[var(--camp-ink)] text-white hover:bg-black/90 disabled:opacity-60 ${actionClassName}`}
+          >
+            <Clock className="h-4 w-4 mr-2" />
+            {approvalBusy
+              ? 'Submitting...'
+              : approvalStatus === 'rejected' || approvalStatus === 'changes_requested'
+                ? 'Resubmit'
+                : 'Submit for approval'}
+          </Button>
+        )}
+
+        {(campaign.status === 'draft' || campaign.status === 'ready') && !launchBlocked && (
+          <Button
+            size="sm"
+            onClick={() => startCampaign(campaign)}
+            disabled={isSending(campaign.id)}
+            className={`bg-[var(--camp-accent)] text-white hover:bg-emerald-900/90 disabled:opacity-60 ${actionClassName}`}
+          >
+            <Play className="h-4 w-4 mr-2" />
+            {isSending(campaign.id) ? 'Starting...' : 'Start'}
+          </Button>
+        )}
+
+        {(campaign.status === 'draft' || campaign.status === 'ready') && requiresCampaignApproval && approvalStatus === 'pending_approval' && (
+          <Button
+            size="sm"
+            disabled
+            className={`bg-amber-100 text-amber-800 hover:bg-amber-100 disabled:opacity-100 ${actionClassName}`}
+          >
+            <Clock className="h-4 w-4 mr-2" />
+            Awaiting approval
+          </Button>
+        )}
+
+        {(campaign.status === 'sending' || (campaign.status === 'sent' && isFollowUpMode)) && (
+          <>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => pauseCampaign(campaign.id)}
+              className={`border-amber-200 bg-amber-50 text-amber-700 hover:bg-amber-100 ${actionClassName}`}
+            >
+              <Pause className="h-4 w-4 mr-2" />
+              Pause
+            </Button>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => handleRestartCampaign(campaign)}
+              disabled={isManaging(campaign.id)}
+              className={`border-[var(--camp-border)] bg-white/80 text-[var(--camp-ink)] disabled:opacity-60 ${actionClassName}`}
+            >
+              <RotateCcw className="h-4 w-4 mr-2" />
+              {isManaging(campaign.id) ? 'Restarting...' : 'Restart'}
+            </Button>
+          </>
+        )}
+
+        {campaign.status === 'paused' && (
+          <Button
+            size="sm"
+            onClick={() => handleRestartCampaign(campaign)}
+            disabled={isManaging(campaign.id) || isSending(campaign.id) || launchBlocked}
+            className={`bg-[var(--camp-accent)] text-white hover:bg-emerald-900/90 disabled:opacity-60 ${actionClassName}`}
+          >
+            <Play className="h-4 w-4 mr-2" />
+            {launchBlocked ? 'Approval required' : isManaging(campaign.id) || isSending(campaign.id) ? 'Starting...' : 'Resume'}
+          </Button>
+        )}
+
+        {campaign.status === 'failed' && stats.pending > 0 && (
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => handleRestartCampaign(campaign)}
+            disabled={isManaging(campaign.id) || launchBlocked}
+            className={`border-rose-200 bg-rose-50 text-rose-700 hover:bg-rose-100 disabled:opacity-60 ${actionClassName}`}
+          >
+            <RotateCcw className="h-4 w-4 mr-2" />
+            {launchBlocked ? 'Approval required' : isManaging(campaign.id) ? 'Restarting...' : 'Restart failed'}
+          </Button>
+        )}
+
+        <Button
+          variant="outline"
+          size="sm"
+          onClick={() => deleteCampaign(campaign.id)}
+          className={`border-rose-200 bg-white/80 text-rose-600 hover:bg-rose-50 ${actionClassName}`}
+        >
+          <Trash2 className="h-4 w-4 mr-2" />
+          Delete
+        </Button>
+      </div>
+    );
+  };
 
   if (loading) {
     return (
@@ -599,6 +906,84 @@ const CampaignList = ({ onCreateCampaign }: CampaignListProps) => {
           </div>
         </section>
       <section className="space-y-4">
+        {filteredCampaigns.length > 0 && (
+          <div className="camp-rise rounded-[26px] border border-[var(--camp-border)] bg-white/85 p-4 shadow-[0_16px_32px_rgba(15,23,42,0.08)]">
+            <div className="flex flex-col gap-3 xl:flex-row xl:items-center xl:justify-between">
+              <div className="flex flex-wrap items-center gap-2 text-sm text-[var(--camp-muted)]">
+                <span className="font-semibold text-[var(--camp-ink)]">
+                  Showing {pageStart}-{pageEnd}
+                </span>
+                <span>of {filteredCampaigns.length.toLocaleString()} campaigns</span>
+                <Badge
+                  variant="outline"
+                  className="h-6 rounded-full border-[var(--camp-border)] bg-white/80 px-3 text-[10px] font-semibold uppercase tracking-[0.16em] text-[var(--camp-ink)]"
+                >
+                  Page {activePage} of {totalPages}
+                </Badge>
+              </div>
+
+              <div className="flex flex-wrap items-center gap-2">
+                <ToggleGroup
+                  type="single"
+                  value={viewMode}
+                  onValueChange={(value) => {
+                    if (value) {
+                      setViewMode(value as CampaignViewMode);
+                    }
+                  }}
+                  variant="outline"
+                  size="sm"
+                  className="rounded-full border border-[var(--camp-border)] bg-white/80 p-1"
+                >
+                  <ToggleGroupItem
+                    value="cards"
+                    aria-label="Card view"
+                    className="rounded-full px-3 text-xs font-semibold text-[var(--camp-ink)] data-[state=on]:bg-[var(--camp-ink)] data-[state=on]:text-white"
+                  >
+                    <LayoutGrid className="mr-2 h-4 w-4" />
+                    Cards
+                  </ToggleGroupItem>
+                  <ToggleGroupItem
+                    value="table"
+                    aria-label="Table view"
+                    className="rounded-full px-3 text-xs font-semibold text-[var(--camp-ink)] data-[state=on]:bg-[var(--camp-ink)] data-[state=on]:text-white"
+                  >
+                    <List className="mr-2 h-4 w-4" />
+                    Table
+                  </ToggleGroupItem>
+                </ToggleGroup>
+
+                <div className="flex items-center gap-2 rounded-full border border-[var(--camp-border)] bg-white/80 px-3 py-1.5">
+                  <span className="text-[11px] font-semibold uppercase tracking-[0.16em] text-[var(--camp-muted)]">
+                    Items per page
+                  </span>
+                  <Select value={String(itemsPerPage)} onValueChange={(value) => setItemsPerPage(Number(value))}>
+                    <SelectTrigger className="h-8 w-[84px] rounded-full border border-[var(--camp-border)] bg-white text-xs font-semibold text-[var(--camp-ink)]">
+                      <SelectValue placeholder="Items" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {ITEMS_PER_PAGE_OPTIONS.map((option) => (
+                        <SelectItem key={option} value={String(option)}>
+                          {option}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+
+                {hasActiveFilters && (
+                  <Button
+                    variant="outline"
+                    onClick={resetFilters}
+                    className="h-9 rounded-full border-[var(--camp-border)] bg-white/80 text-xs font-semibold text-[var(--camp-ink)]"
+                  >
+                    Reset filters
+                  </Button>
+                )}
+              </div>
+            </div>
+          </div>
+        )}
         {filteredCampaigns.length === 0 ? (
           <div className="camp-rise rounded-[26px] border border-[var(--camp-border)] bg-white/90 p-10 text-center shadow-[0_18px_36px_rgba(15,23,42,0.08)]">
             <div className="mx-auto flex h-16 w-16 items-center justify-center rounded-2xl bg-[var(--camp-ink)] text-white shadow-[0_12px_24px_rgba(15,23,42,0.2)]">
@@ -629,11 +1014,7 @@ const CampaignList = ({ onCreateCampaign }: CampaignListProps) => {
                   {hasActiveFilters && (
                     <Button
                       variant="outline"
-                      onClick={() => {
-                        setSearchQuery('');
-                        setStatusFilter('all');
-                        setSortBy('recent');
-                      }}
+                      onClick={resetFilters}
                       className="h-9 rounded-full border-[var(--camp-border)] bg-white/80 text-xs font-semibold text-[var(--camp-ink)]"
                     >
                       Reset filters
@@ -650,9 +1031,9 @@ const CampaignList = ({ onCreateCampaign }: CampaignListProps) => {
               )}
             </div>
           </div>
-        ) : (
+        ) : viewMode === 'cards' ? (
           <div className="grid gap-4 lg:grid-cols-2">
-            {filteredCampaigns.map((item, index) => {
+            {paginatedCampaigns.map((item, index) => {
               const {
                 campaign,
                 stats,
@@ -682,6 +1063,7 @@ const CampaignList = ({ onCreateCampaign }: CampaignListProps) => {
               const scheduledAt = campaign.scheduled_at ? new Date(campaign.scheduled_at) : null;
               const showSchedule = campaign.status === 'scheduled' && scheduledAt;
               const FailureIcon = stats.failed > 0 ? AlertTriangle : CheckCircle2;
+              const approvalStatus = getCampaignApprovalStatus(campaign);
 
               return (
                 <div
@@ -698,6 +1080,9 @@ const CampaignList = ({ onCreateCampaign }: CampaignListProps) => {
                             className={`h-6 rounded-full border px-3 text-[10px] font-semibold uppercase tracking-[0.16em] ${statusMeta.className}`}
                           >
                             {statusMeta.label}
+                          </Badge>
+                          <Badge className={`h-6 rounded-full px-3 text-[10px] font-semibold uppercase tracking-[0.16em] ${getApprovalBadgeClass(approvalStatus)}`}>
+                            {approvalLabel(approvalStatus)}
                           </Badge>
                           {isFollowUpMode && (
                             <Badge
@@ -722,6 +1107,11 @@ const CampaignList = ({ onCreateCampaign }: CampaignListProps) => {
                         <p className="text-sm text-[var(--camp-muted)]">
                           {campaign.subject || 'No subject'}
                         </p>
+                        {approvalStatus !== 'approved' && (
+                          <p className="text-xs font-medium text-amber-700">
+                            Launch stays blocked until this campaign is approved.
+                          </p>
+                        )}
                         <p className="text-[11px] text-[var(--camp-muted)]">ID: {campaign.id}</p>
                       </div>
 
@@ -882,120 +1272,247 @@ const CampaignList = ({ onCreateCampaign }: CampaignListProps) => {
                       </div>
                     )}
 
-                    <div className="flex flex-wrap gap-2">
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        onClick={() => navigate(`/campaign/${campaign.id}`)}
-                        className="h-9 rounded-full border-[var(--camp-border)] bg-white/80 text-xs font-semibold text-[var(--camp-ink)]"
-                      >
-                        <BarChart2 className="h-4 w-4 mr-2" />
-                        Track
-                      </Button>
-
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        onClick={() => {
-                          setSelectedCampaign(campaign);
-                          setDetailsOpen(true);
-                        }}
-                        className="h-9 rounded-full border-[var(--camp-border)] bg-white/80 text-xs font-semibold text-[var(--camp-ink)]"
-                      >
-                        <Eye className="h-4 w-4 mr-2" />
-                        Quick view
-                      </Button>
-
-                      {hasFollowups && (
-                        <Button
-                          variant="outline"
-                          size="sm"
-                          onClick={() => {
-                            setSelectedFollowUpCampaign(campaign);
-                            setFollowUpDetailsOpen(true);
-                          }}
-                          className="h-9 rounded-full border-[var(--camp-border)] bg-white/80 text-xs font-semibold text-[var(--camp-ink)]"
-                        >
-                          <Clock className="h-4 w-4 mr-2" />
-                          Follow-up status
-                        </Button>
-                      )}
-
-                      {(campaign.status === 'draft' || campaign.status === 'ready') && (
-                        <Button
-                          size="sm"
-                          onClick={() => startCampaign(campaign.id)}
-                          disabled={isSending(campaign.id)}
-                          className="h-9 rounded-full bg-[var(--camp-accent)] text-xs font-semibold text-white hover:bg-emerald-900/90 disabled:opacity-60"
-                        >
-                          <Play className="h-4 w-4 mr-2" />
-                          {isSending(campaign.id) ? 'Starting...' : 'Start'}
-                        </Button>
-                      )}
-
-                      {(campaign.status === 'sending' || (campaign.status === 'sent' && isFollowUpMode)) && (
-                        <>
-                          <Button
-                            variant="outline"
-                            size="sm"
-                            onClick={() => pauseCampaign(campaign.id)}
-                            className="h-9 rounded-full border-amber-200 bg-amber-50 text-xs font-semibold text-amber-700 hover:bg-amber-100"
-                          >
-                            <Pause className="h-4 w-4 mr-2" />
-                            Pause
-                          </Button>
-                          <Button
-                            variant="outline"
-                            size="sm"
-                            onClick={() => handleRestartCampaign(campaign.id)}
-                            disabled={isManaging(campaign.id)}
-                            className="h-9 rounded-full border-[var(--camp-border)] bg-white/80 text-xs font-semibold text-[var(--camp-ink)] disabled:opacity-60"
-                          >
-                            <RotateCcw className="h-4 w-4 mr-2" />
-                            {isManaging(campaign.id) ? 'Restarting...' : 'Restart'}
-                          </Button>
-                        </>
-                      )}
-
-                      {campaign.status === 'paused' && (
-                        <Button
-                          size="sm"
-                          onClick={() => handleRestartCampaign(campaign.id)}
-                          disabled={isManaging(campaign.id) || isSending(campaign.id)}
-                          className="h-9 rounded-full bg-[var(--camp-accent)] text-xs font-semibold text-white hover:bg-emerald-900/90 disabled:opacity-60"
-                        >
-                          <Play className="h-4 w-4 mr-2" />
-                          {isManaging(campaign.id) || isSending(campaign.id) ? 'Starting...' : 'Resume'}
-                        </Button>
-                      )}
-
-                      {campaign.status === 'failed' && stats.pending > 0 && (
-                        <Button
-                          variant="outline"
-                          size="sm"
-                          onClick={() => handleRestartCampaign(campaign.id)}
-                          disabled={isManaging(campaign.id)}
-                          className="h-9 rounded-full border-rose-200 bg-rose-50 text-xs font-semibold text-rose-700 hover:bg-rose-100 disabled:opacity-60"
-                        >
-                          <RotateCcw className="h-4 w-4 mr-2" />
-                          {isManaging(campaign.id) ? 'Restarting...' : 'Restart failed'}
-                        </Button>
-                      )}
-
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        onClick={() => deleteCampaign(campaign.id)}
-                        className="h-9 rounded-full border-rose-200 bg-white/80 text-xs font-semibold text-rose-600 hover:bg-rose-50"
-                      >
-                        <Trash2 className="h-4 w-4 mr-2" />
-                        Delete
-                      </Button>
-                    </div>
+                    {renderCampaignActions(item)}
                   </div>
                 </div>
               );
             })}
+          </div>
+        ) : (
+          <div className="camp-rise overflow-hidden rounded-[26px] border border-[var(--camp-border)] bg-[var(--camp-surface)] shadow-[0_16px_32px_rgba(15,23,42,0.08)]">
+            <Table className="min-w-[1100px]">
+              <TableHeader className="bg-white/70">
+                <TableRow className="hover:bg-transparent">
+                  <TableHead className="text-[11px] font-semibold uppercase tracking-[0.18em] text-[var(--camp-muted)]">
+                    Campaign
+                  </TableHead>
+                  <TableHead className="text-[11px] font-semibold uppercase tracking-[0.18em] text-[var(--camp-muted)]">
+                    Status
+                  </TableHead>
+                  <TableHead className="text-[11px] font-semibold uppercase tracking-[0.18em] text-[var(--camp-muted)]">
+                    Recipients
+                  </TableHead>
+                  <TableHead className="text-[11px] font-semibold uppercase tracking-[0.18em] text-[var(--camp-muted)]">
+                    Performance
+                  </TableHead>
+                  <TableHead className="text-[11px] font-semibold uppercase tracking-[0.18em] text-[var(--camp-muted)]">
+                    Activity
+                  </TableHead>
+                  <TableHead className="text-right text-[11px] font-semibold uppercase tracking-[0.18em] text-[var(--camp-muted)]">
+                    Actions
+                  </TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {paginatedCampaigns.map((item, index) => {
+                  const {
+                    campaign,
+                    stats,
+                    trackingStats,
+                    delayMinutes,
+                    hasFollowups,
+                    totalSteps,
+                    recipientsEligibleForFollowups,
+                    isFollowUpMode,
+                    displayStatus,
+                    statusKey,
+                    openRate,
+                    replyRate,
+                    bounceRate,
+                    sentRate,
+                    trackingMismatch
+                  } = item;
+
+                  const statusLabel = displayStatus
+                    ? displayStatus.charAt(0).toUpperCase() + displayStatus.slice(1)
+                    : 'Unknown';
+                  const statusMeta = getStatusMeta(statusKey, statusLabel);
+                  const createdAt = campaign.created_at ? new Date(campaign.created_at) : null;
+                  const updatedAt = campaign.updated_at ? new Date(campaign.updated_at) : null;
+                  const lastActivity = updatedAt || createdAt;
+                  const scheduledAt = campaign.scheduled_at ? new Date(campaign.scheduled_at) : null;
+                  const showSchedule = campaign.status === 'scheduled' && scheduledAt;
+                  const approvalStatus = getCampaignApprovalStatus(campaign);
+
+                  return (
+                    <TableRow
+                      key={campaign.id}
+                      className="camp-rise border-[var(--camp-border)] bg-white/20 hover:bg-white/55"
+                      style={{ animationDelay: `${140 + index * 45}ms` }}
+                    >
+                      <TableCell className="min-w-[240px]">
+                        <div className="space-y-1">
+                          <p className="font-semibold text-[var(--camp-ink)]">
+                            {campaign.name || 'Untitled campaign'}
+                          </p>
+                          <p className="text-xs text-[var(--camp-muted)]">
+                            {campaign.subject || 'No subject'}
+                          </p>
+                          <p className="text-[11px] text-[var(--camp-muted)]">ID: {campaign.id}</p>
+                          {(campaign.bot_open_count > 0 || campaign.bot_click_count > 0) && (
+                            <p className="text-[11px] text-[var(--camp-muted)]">
+                              Bots filtered: {campaign.bot_open_count || 0} opens, {campaign.bot_click_count || 0} clicks
+                            </p>
+                          )}
+                        </div>
+                      </TableCell>
+
+                      <TableCell className="min-w-[200px]">
+                        <div className="space-y-2">
+                          <div className="flex flex-wrap items-center gap-2">
+                            <Badge
+                              variant="outline"
+                              className={`h-6 rounded-full border px-3 text-[10px] font-semibold uppercase tracking-[0.16em] ${statusMeta.className}`}
+                            >
+                              {statusMeta.label}
+                            </Badge>
+                            <Badge className={`h-6 rounded-full px-3 text-[10px] font-semibold uppercase tracking-[0.16em] ${getApprovalBadgeClass(approvalStatus)}`}>
+                              {approvalLabel(approvalStatus)}
+                            </Badge>
+                            {isFollowUpMode && (
+                              <Badge
+                                variant="outline"
+                                className="h-6 rounded-full border-orange-200 bg-orange-50 px-3 text-[10px] font-semibold uppercase tracking-[0.16em] text-orange-700"
+                              >
+                                Follow-ups running
+                              </Badge>
+                            )}
+                          </div>
+                          <div className="space-y-1 text-xs text-[var(--camp-muted)]">
+                            {showSchedule && scheduledAt && (
+                              <p>Scheduled {format(scheduledAt, 'MMM d, yyyy h:mm a')}</p>
+                            )}
+                            {trackingMismatch && (
+                              <p className="text-amber-700">
+                                Tracking sync in progress: {trackingStats.dbOpens} DB opens / {trackingStats.dbClicks} DB clicks
+                              </p>
+                            )}
+                            {stats.failed > 0 && (
+                              <p className="text-rose-700">{stats.failed} failed send(s) need review</p>
+                            )}
+                            {approvalStatus !== 'approved' && (
+                              <p className="text-amber-700">Approval is still required before launch.</p>
+                            )}
+                          </div>
+                        </div>
+                      </TableCell>
+
+                      <TableCell className="min-w-[180px]">
+                        <div className="space-y-1">
+                          <p className="font-semibold text-[var(--camp-ink)]">
+                            {stats.total.toLocaleString()} recipients
+                          </p>
+                          <p className="text-xs text-[var(--camp-muted)]">
+                            {stats.sent.toLocaleString()} sent, {stats.pending} pending
+                            {stats.processing > 0 ? `, ${stats.processing} processing` : ''}
+                          </p>
+                          <p className="text-xs text-[var(--camp-muted)]">
+                            {hasFollowups
+                              ? `${recipientsEligibleForFollowups} queued for ${totalSteps} steps`
+                              : 'No follow-ups configured'}
+                          </p>
+                        </div>
+                      </TableCell>
+
+                      <TableCell className="min-w-[200px]">
+                        <div className="space-y-1">
+                          <p className="font-semibold text-[var(--camp-ink)]">
+                            {sentRate}% sent
+                          </p>
+                          <p className="text-xs text-[var(--camp-muted)]">
+                            {openRate.toFixed(1)}% open, {replyRate.toFixed(1)}% reply
+                          </p>
+                          <p className="text-xs text-[var(--camp-muted)]">
+                            {trackingStats.actualOpens} opens, {stats.replied} replies, {stats.bounced} bounces ({bounceRate.toFixed(1)}% bounce)
+                          </p>
+                        </div>
+                      </TableCell>
+
+                      <TableCell className="min-w-[200px]">
+                        <div className="space-y-1">
+                          <p className="font-semibold text-[var(--camp-ink)]">
+                            {lastActivity ? formatDistanceToNow(lastActivity, { addSuffix: true }) : 'Unknown'}
+                          </p>
+                          <p className="text-xs text-[var(--camp-muted)]">
+                            Created {createdAt ? formatDistanceToNow(createdAt, { addSuffix: true }) : 'Unknown'}
+                          </p>
+                          <p className="text-xs text-[var(--camp-muted)]">
+                            {showSchedule && scheduledAt
+                              ? `Scheduled ${format(scheduledAt, 'MMM d, yyyy h:mm a')}`
+                              : `${delayMinutes} min delay`}
+                          </p>
+                        </div>
+                      </TableCell>
+
+                      <TableCell className="min-w-[280px]">
+                        {renderCampaignActions(item, true)}
+                      </TableCell>
+                    </TableRow>
+                  );
+                })}
+              </TableBody>
+            </Table>
+          </div>
+        )}
+
+        {filteredCampaigns.length > 0 && (
+          <div className="camp-rise rounded-[26px] border border-[var(--camp-border)] bg-white/85 p-4 shadow-[0_16px_32px_rgba(15,23,42,0.08)]">
+            <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+              <p className="text-sm text-[var(--camp-muted)]">
+                Showing {pageStart}-{pageEnd} of {filteredCampaigns.length.toLocaleString()} campaigns
+              </p>
+
+              {totalPages > 1 ? (
+                <Pagination className="w-auto justify-end">
+                  <PaginationContent>
+                    <PaginationItem>
+                      <PaginationPrevious
+                        href="#"
+                        onClick={(event) => {
+                          event.preventDefault();
+                          handlePageChange(activePage - 1);
+                        }}
+                        className={activePage === 1 ? 'pointer-events-none opacity-50' : ''}
+                      />
+                    </PaginationItem>
+                    {paginationItems.map((item, index) =>
+                      item === 'ellipsis' ? (
+                        <PaginationItem key={`campaign-page-ellipsis-${index}`}>
+                          <PaginationEllipsis />
+                        </PaginationItem>
+                      ) : (
+                        <PaginationItem key={item}>
+                          <PaginationLink
+                            href="#"
+                            isActive={item === activePage}
+                            onClick={(event) => {
+                              event.preventDefault();
+                              handlePageChange(item);
+                            }}
+                          >
+                            {item}
+                          </PaginationLink>
+                        </PaginationItem>
+                      )
+                    )}
+                    <PaginationItem>
+                      <PaginationNext
+                        href="#"
+                        onClick={(event) => {
+                          event.preventDefault();
+                          handlePageChange(activePage + 1);
+                        }}
+                        className={activePage === totalPages ? 'pointer-events-none opacity-50' : ''}
+                      />
+                    </PaginationItem>
+                  </PaginationContent>
+                </Pagination>
+              ) : (
+                <p className="text-xs font-semibold uppercase tracking-[0.16em] text-[var(--camp-muted)]">
+                  Single page
+                </p>
+              )}
+            </div>
           </div>
         )}
       </section>

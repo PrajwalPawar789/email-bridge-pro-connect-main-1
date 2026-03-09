@@ -222,7 +222,7 @@ const buildImapClient = (config) => {
 export class EmailService {
   constructor(options = {}) {
     this.referencesLimit = Number.isFinite(options.referencesLimit)
-      ? Math.max(5, Math.min(100, options.referencesLimit))
+      ? Math.max(1, Math.min(100, options.referencesLimit))
       : DEFAULT_REFERENCES_LIMIT;
     this.referencesCharLimit = Number.isFinite(options.referencesCharLimit)
       ? Math.max(200, options.referencesCharLimit)

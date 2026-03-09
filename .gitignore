@@ -33,3 +33,7 @@ tmpclaude-*-cwd
 create-flywheel-studio-main/
 build-log.txt
 check-output.txt
+tmp_test_write.txt
+claude-chat-canvas-main/
+onrender/
+onboarding/

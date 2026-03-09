@@ -1200,7 +1200,7 @@ export default function Subscription() {
               </div>
 
               <div className="flex flex-wrap items-center gap-2">
-                <Badge className="border border-slate-200 bg-white text-slate-700">
+                {/* <Badge className="border border-slate-200 bg-white text-slate-700">
                   Current: {currentPlanName}
                 </Badge>
                 <Badge className={`border ${snapshotStatusClass}`}>
@@ -1208,7 +1208,7 @@ export default function Subscription() {
                 </Badge>
                 <Badge className="border border-slate-200 bg-white text-slate-700">
                   Renewal: {periodEndLabel}
-                </Badge>
+                </Badge> */}
                 {annualSavings > 0 && (
                   <Badge className="border border-emerald-200 bg-emerald-50 text-emerald-700">
                     <BadgePercent className="mr-1 h-3.5 w-3.5" />
@@ -1239,7 +1239,7 @@ export default function Subscription() {
                   </TabsList>
                 </Tabs>
 
-                <Button
+                {/* <Button
                   type="button"
                   variant="outline"
                   className="border-[var(--shell-border)] bg-white text-[var(--shell-ink)] hover:bg-slate-50"
@@ -1247,7 +1247,7 @@ export default function Subscription() {
                 >
                   {showComparison ? 'Hide comparison table' : 'Compare all features'}
                   {showComparison ? <ChevronUp className="ml-2 h-4 w-4" /> : <ChevronDown className="ml-2 h-4 w-4" />}
-                </Button>
+                </Button> */}
               </div>
             </div>
 

@@ -1,21 +1,43 @@
-import { useEmailBuilderStore } from '@/stores/emailBuilderStore';
+import { useEmailBuilderStore, type EmailTemplate } from '@/stores/emailBuilderStore';
 import { Button } from '@/components/ui/button';
-import { Plus, Mail, Trash2 } from 'lucide-react';
+import { Eye, Mail, Pencil, Plus, Sparkles, Trash2 } from 'lucide-react';
 import { motion } from 'framer-motion';
 
-export function EmailTemplateList() {
-  const { templates, createNewTemplate, setCurrentTemplate, deleteTemplate, isLoading } = useEmailBuilderStore();
+type EmailTemplateListProps = {
+  onCreateTemplate: () => void;
+  onCreatePlainTextTemplate: () => void;
+  onCreateAiTemplate: () => void;
+  onEditTemplate: (template: EmailTemplate) => void;
+  onPreviewTemplate: (template: EmailTemplate) => void;
+};
+
+export function EmailTemplateList({
+  onCreateTemplate,
+  onCreatePlainTextTemplate,
+  onCreateAiTemplate,
+  onEditTemplate,
+  onPreviewTemplate,
+}: EmailTemplateListProps) {
+  const { templates, deleteTemplate, isLoading } = useEmailBuilderStore();
 
   return (
-    <div className="p-8 max-w-4xl mx-auto">
-      <div className="flex items-center justify-between mb-6">
+    <div className="mx-auto max-w-4xl p-8">
+      <div className="mb-6 flex items-center justify-between">
         <div>
           <h1 className="text-2xl font-bold text-foreground">Email Templates</h1>
-          <p className="text-sm text-muted-foreground mt-1">Create and manage your email templates</p>
+          <p className="mt-1 text-sm text-muted-foreground">Create and manage your email templates</p>
         </div>
-        <Button onClick={createNewTemplate}>
-          <Plus className="w-4 h-4 mr-1" /> New Template
-        </Button>
+        <div className="flex items-center gap-2">
+          <Button variant="outline" onClick={onCreateAiTemplate}>
+            <Sparkles className="mr-1 h-4 w-4" /> Create Email Template Using AI
+          </Button>
+          <Button variant="outline" onClick={onCreatePlainTextTemplate}>
+            <Mail className="mr-1 h-4 w-4" /> Plain Text
+          </Button>
+          <Button onClick={onCreateTemplate}>
+            <Plus className="mr-1 h-4 w-4" /> Create Template
+          </Button>
+        </div>
       </div>
 
       {isLoading ? (
@@ -26,49 +48,67 @@ export function EmailTemplateList() {
         <motion.div
           initial={{ opacity: 0, y: 10 }}
           animate={{ opacity: 1, y: 0 }}
-          className="border-2 border-dashed border-border rounded-xl p-12 text-center"
+          className="rounded-xl border-2 border-dashed border-border p-12 text-center"
         >
-          <div className="w-12 h-12 rounded-xl bg-primary/10 flex items-center justify-center mx-auto mb-4">
-            <Mail className="w-6 h-6 text-primary" />
+          <div className="mx-auto mb-4 flex h-12 w-12 items-center justify-center rounded-xl bg-primary/10">
+            <Mail className="h-6 w-6 text-primary" />
           </div>
-          <h3 className="font-semibold text-foreground mb-2">No templates yet</h3>
-          <p className="text-sm text-muted-foreground mb-4">Create your first email template to get started</p>
-          <Button onClick={createNewTemplate}>
-            <Plus className="w-4 h-4 mr-1" /> Create Template
-          </Button>
+          <h3 className="mb-2 font-semibold text-foreground">No templates yet</h3>
+          <p className="mb-4 text-sm text-muted-foreground">Create your first email template to get started</p>
+          <div className="flex items-center justify-center gap-2">
+            <Button variant="outline" onClick={onCreateAiTemplate}>
+              <Sparkles className="mr-1 h-4 w-4" /> Create Email Template Using AI
+            </Button>
+            <Button variant="outline" onClick={onCreatePlainTextTemplate}>
+              <Mail className="mr-1 h-4 w-4" /> Plain Text
+            </Button>
+            <Button onClick={onCreateTemplate}>
+              <Plus className="mr-1 h-4 w-4" /> Create Template
+            </Button>
+          </div>
         </motion.div>
       ) : (
         <div className="grid gap-4 md:grid-cols-2">
-          {templates.map((t) => (
+          {templates.map((template) => (
             <div
-              key={t.id}
-              className="bg-card border border-border rounded-xl p-5 hover:border-primary/30 hover:shadow-md transition-all cursor-pointer"
-              onClick={() => setCurrentTemplate(t)}
+              key={template.id}
+              className="rounded-xl border border-border bg-card p-5 transition-all hover:border-primary/30 hover:shadow-md"
             >
-              <div className="flex items-start justify-between">
+              <div className="flex items-start justify-between gap-3">
                 <div>
-                  <h3 className="font-semibold text-foreground">{t.name || 'Untitled'}</h3>
-                  <p className="text-xs text-muted-foreground mt-1">
-                    {t.blocks.length} blocks | {t.format}
+                  <h3 className="font-semibold text-foreground">{template.name || 'Untitled'}</h3>
+                  <p className="mt-1 text-xs text-muted-foreground">
+                    {template.blocks.length} blocks | {template.format}
                   </p>
                 </div>
                 <Button
                   variant="ghost"
                   size="icon"
-                  className="shrink-0 h-8 w-8"
-                  onClick={(event) => {
-                    event.stopPropagation();
-                    const shouldDelete = window.confirm(`Delete "${t.name || 'Untitled'}"?`);
+                  className="h-8 w-8 shrink-0"
+                  onClick={() => {
+                    const shouldDelete = window.confirm(`Delete "${template.name || 'Untitled'}"?`);
                     if (!shouldDelete) return;
-                    void deleteTemplate(t.id);
+                    void deleteTemplate(template.id);
                   }}
                 >
-                  <Trash2 className="w-4 h-4" />
+                  <Trash2 className="h-4 w-4" />
                 </Button>
               </div>
-              {t.subject && (
-                <p className="text-sm text-muted-foreground mt-2 truncate">Subject: {t.subject}</p>
-              )}
+
+              {template.subject ? (
+                <p className="mt-2 truncate text-sm text-muted-foreground">Subject: {template.subject}</p>
+              ) : null}
+
+              <div className="mt-4 flex items-center gap-2">
+                <Button size="sm" variant="outline" onClick={() => onEditTemplate(template)}>
+                  <Pencil className="mr-1 h-3.5 w-3.5" />
+                  Edit
+                </Button>
+                <Button size="sm" variant="outline" onClick={() => onPreviewTemplate(template)}>
+                  <Eye className="mr-1 h-3.5 w-3.5" />
+                  Preview
+                </Button>
+              </div>
             </div>
           ))}
         </div>
@@ -76,4 +116,3 @@ export function EmailTemplateList() {
     </div>
   );
 }
-

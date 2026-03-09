@@ -52,6 +52,7 @@ const createSupabaseProxy = (supabaseUrl: string, dnsServersRaw?: string) => {
 // https://vitejs.dev/config/
 export default defineConfig(({ mode }) => {
   const env = loadEnv(mode, process.cwd(), "");
+
   const useSupabaseDevProxy = mode === "development" && env.VITE_SUPABASE_DEV_PROXY !== "false";
   const proxy =
     useSupabaseDevProxy && env.VITE_SUPABASE_URL

@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import DashboardLayout from '@/components/Layout/DashboardLayout';
 import { useAuth } from '@/providers/AuthProvider';
+import { useWorkspace } from '@/providers/WorkspaceProvider';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
@@ -23,6 +24,12 @@ import {
   listBillingTransactions,
   listCreditLedger,
 } from '@/lib/billing';
+import {
+  getRoleBadgeClass,
+  getWorkspaceSpendingRollup,
+  roleLabel,
+  type WorkspaceSpendingRollup,
+} from '@/lib/teamManagement';
 import { supabase } from '@/integrations/supabase/client';
 import { RefreshCw } from 'lucide-react';
 
@@ -43,6 +50,7 @@ const formatEventType = (value: string) =>
 
 const Spending = () => {
   const { user, loading } = useAuth();
+  const { hasPermission } = useWorkspace();
   const navigate = useNavigate();
   const [activeTab] = useState('spending');
 
@@ -51,6 +59,11 @@ const Spending = () => {
   const [ledger, setLedger] = useState<CreditLedgerRow[]>([]);
   const [ledgerPage, setLedgerPage] = useState(1);
   const [transactions, setTransactions] = useState<BillingTransactionRow[]>([]);
+  const [teamRollup, setTeamRollup] = useState<WorkspaceSpendingRollup | null>(null);
+  const canViewTeamRollup =
+    hasPermission('manage_workspace') ||
+    hasPermission('view_workspace_dashboard') ||
+    hasPermission('view_team_dashboard');
 
   const handleTabChange = (tab: string) => {
     if (tab === 'home') navigate('/dashboard');
@@ -80,16 +93,18 @@ const Spending = () => {
     if (!user?.id) return;
     setLoadingData(true);
     try {
-      const [snapshotRow, ledgerRows, txRows] = await Promise.all([
+      const [snapshotRow, ledgerRows, txRows, teamRollupRow] = await Promise.all([
         getBillingSnapshot(user.id),
         listCreditLedger(user.id, 120),
         listBillingTransactions(user.id, 80),
+        canViewTeamRollup ? getWorkspaceSpendingRollup(30) : Promise.resolve(null),
       ]);
 
       setSnapshot(snapshotRow);
       setLedger(ledgerRows);
       setLedgerPage(1);
       setTransactions(txRows);
+      setTeamRollup(teamRollupRow);
     } catch (error: unknown) {
       console.error('Failed to load spending data:', error);
       toast({
@@ -100,7 +115,7 @@ const Spending = () => {
     } finally {
       setLoadingData(false);
     }
-  }, [user?.id]);
+  }, [canViewTeamRollup, user?.id]);
 
   useEffect(() => {
     if (!loading && !user) {
@@ -285,6 +300,94 @@ const Spending = () => {
             )}
           </CardContent>
         </Card>
+
+        {canViewTeamRollup && teamRollup && (
+          <Card>
+            <CardHeader>
+              <CardTitle>Team Spending Rollup</CardTitle>
+            </CardHeader>
+            <CardContent className="space-y-6">
+              <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
+                <div className="rounded-xl border border-slate-200 bg-slate-50 p-4">
+                  <p className="text-sm text-slate-500">Scoped credits used</p>
+                  <p className="mt-2 text-xl font-semibold text-slate-900">
+                    {Number(teamRollup.workspace.creditsUsed || 0).toLocaleString()}
+                  </p>
+                </div>
+                <div className="rounded-xl border border-slate-200 bg-slate-50 p-4">
+                  <p className="text-sm text-slate-500">Scoped sends</p>
+                  <p className="mt-2 text-xl font-semibold text-slate-900">
+                    {Number(teamRollup.workspace.sends || 0).toLocaleString()}
+                  </p>
+                </div>
+                <div className="rounded-xl border border-slate-200 bg-slate-50 p-4">
+                  <p className="text-sm text-slate-500">Window</p>
+                  <p className="mt-2 text-sm font-semibold text-slate-900">
+                    Since {formatDate(teamRollup.since)}
+                  </p>
+                </div>
+              </div>
+
+              <div className="grid gap-6 lg:grid-cols-2">
+                <div className="space-y-3">
+                  <h3 className="text-sm font-semibold text-slate-900">By manager</h3>
+                  <div className="overflow-x-auto">
+                    <table className="min-w-full text-sm">
+                      <thead>
+                        <tr className="border-b text-left text-slate-500">
+                          <th className="py-2 pr-4">Manager</th>
+                          <th className="py-2 pr-4">Role</th>
+                          <th className="py-2 pr-4">Credits</th>
+                          <th className="py-2 pr-4">Sends</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {teamRollup.byManager.map((row) => (
+                          <tr key={row.userId} className="border-b">
+                            <td className="py-2 pr-4">{row.name || row.email || row.userId}</td>
+                            <td className="py-2 pr-4">
+                              <Badge className={getRoleBadgeClass(row.role)}>{roleLabel(row.role)}</Badge>
+                            </td>
+                            <td className="py-2 pr-4">{Number(row.creditsUsed || 0).toLocaleString()}</td>
+                            <td className="py-2 pr-4">{Number(row.sends || 0).toLocaleString()}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+
+                <div className="space-y-3">
+                  <h3 className="text-sm font-semibold text-slate-900">By user</h3>
+                  <div className="overflow-x-auto">
+                    <table className="min-w-full text-sm">
+                      <thead>
+                        <tr className="border-b text-left text-slate-500">
+                          <th className="py-2 pr-4">User</th>
+                          <th className="py-2 pr-4">Role</th>
+                          <th className="py-2 pr-4">Credits</th>
+                          <th className="py-2 pr-4">Sends</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {teamRollup.byUser.map((row) => (
+                          <tr key={row.userId} className="border-b">
+                            <td className="py-2 pr-4">{row.name || row.email || row.userId}</td>
+                            <td className="py-2 pr-4">
+                              <Badge className={getRoleBadgeClass(row.role)}>{roleLabel(row.role)}</Badge>
+                            </td>
+                            <td className="py-2 pr-4">{Number(row.creditsUsed || 0).toLocaleString()}</td>
+                            <td className="py-2 pr-4">{Number(row.sends || 0).toLocaleString()}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              </div>
+            </CardContent>
+          </Card>
+        )}
 
         <Card>
           <CardHeader>

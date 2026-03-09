@@ -5,6 +5,44 @@ import { toast } from '@/hooks/use-toast';
 export const useCampaignManager = () => {
   const [managingCampaigns, setManagingCampaigns] = useState<Set<string>>(new Set());
 
+  const normalizeCampaignError = (error: unknown) => {
+    const message = error instanceof Error ? error.message : String(error || 'Failed to manage campaign');
+    const lowered = message.toLowerCase();
+
+    if (lowered.includes('approval')) {
+      return 'Campaign launch is blocked until approval is granted.';
+    }
+    if (lowered.includes('daily send limit')) {
+      return 'Daily send limit reached for this user allocation.';
+    }
+    if (lowered.includes('credit') || lowered.includes('quota')) {
+      return message;
+    }
+    return message;
+  };
+
+  const resolveAccessToken = useCallback(async () => {
+    const authErrorMessage = 'Your session is invalid. Please sign in again.';
+    const { data: sessionData, error: sessionError } = await supabase.auth.getSession();
+    if (sessionError) {
+      throw new Error(authErrorMessage);
+    }
+
+    const currentToken = sessionData.session?.access_token;
+    if (currentToken) {
+      return currentToken;
+    }
+
+    const { data: refreshData, error: refreshError } = await supabase.auth.refreshSession();
+    const refreshedToken = refreshData.session?.access_token;
+    if (refreshError || !refreshedToken) {
+      await supabase.auth.signOut();
+      throw new Error(authErrorMessage);
+    }
+
+    return refreshedToken;
+  }, []);
+
   const restartCampaign = useCallback(async (campaignId: string) => {
     if (managingCampaigns.has(campaignId)) {
       return;
@@ -14,6 +52,7 @@ export const useCampaignManager = () => {
 
     try {
       console.log(`Manual restart initiated for campaign: ${campaignId}`);
+      const accessToken = await resolveAccessToken();
       
       // First fix statistics
       const { error: fixError } = await supabase.rpc('fix_campaign_statistics');
@@ -36,7 +75,10 @@ export const useCampaignManager = () => {
         console.log(`Processing batch ${batchNumber} for campaign: ${campaignId}`);
         
         const { data, error } = await supabase.functions.invoke('send-campaign-batch', {
-          body: { campaignId, batchSize: 3 }
+          body: { campaignId, batchSize: 3 },
+          headers: {
+            Authorization: `Bearer ${accessToken}`,
+          },
         });
 
         if (error) {
@@ -66,7 +108,7 @@ export const useCampaignManager = () => {
       console.error('Error restarting campaign:', error);
       toast({
         title: "Error",
-        description: error.message || "Failed to restart campaign",
+        description: normalizeCampaignError(error),
         variant: "destructive",
       });
     } finally {
@@ -76,7 +118,7 @@ export const useCampaignManager = () => {
         return newSet;
       });
     }
-  }, [managingCampaigns]);
+  }, [managingCampaigns, resolveAccessToken]);
 
   const pauseCampaign = useCallback(async (campaignId: string) => {
     if (managingCampaigns.has(campaignId)) {

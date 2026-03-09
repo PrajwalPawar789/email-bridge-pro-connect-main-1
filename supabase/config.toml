@@ -33,6 +33,18 @@ verify_jwt = false
 [functions.verify-site-domain]
 verify_jwt = false
 
+[functions.ai-builder-generate]
+verify_jwt = false
+
+[functions.ai-builder-generate-stream]
+verify_jwt = false
+
+[functions.ai-builder-index]
+verify_jwt = false
+
+[functions.workspace-invite-member]
+verify_jwt = false
+
 [db]
 major_version = 15
 

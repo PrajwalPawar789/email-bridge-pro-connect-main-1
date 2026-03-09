@@ -21,6 +21,7 @@ export type PipelineFilters = {
   owner: string;
   campaign: string;
   staleOnly: boolean;
+  needsAttentionOnly: boolean;
   valueMin?: string;
   valueMax?: string;
   dateFrom?: string;
@@ -86,6 +87,12 @@ const PipelineFilterBar: React.FC<PipelineFilterBarProps> = ({
       onRemove: () => onFiltersChange({ ...filters, staleOnly: false }),
     });
   }
+  if (filters.needsAttentionOnly) {
+    chips.push({
+      label: "Needs follow-up",
+      onRemove: () => onFiltersChange({ ...filters, needsAttentionOnly: false }),
+    });
+  }
   if (filters.valueMin || filters.valueMax) {
     chips.push({
       label: `Value: ${filters.valueMin || "0"} - ${filters.valueMax || "8"}`,
@@ -103,70 +110,70 @@ const PipelineFilterBar: React.FC<PipelineFilterBarProps> = ({
   const activeCount = chips.length + (hasSearch ? 1 : 0);
 
   return (
-    <div className="rounded-3xl border border-[var(--shell-border)] bg-[var(--shell-surface-strong)]/95 p-4 shadow-[0_12px_24px_rgba(15,23,42,0.08)] md:p-5">
-      <div className="flex flex-col gap-5">
-        <div className="flex flex-wrap items-start justify-between gap-3">
-          <div>
-            <p className="text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-500">Filters</p>
-            <p className="mt-1 text-sm text-[var(--shell-muted)]">
-              Narrow your pipeline with saved views and quick filters.
-            </p>
+    <div className="rounded-[22px] border border-[var(--shell-border)] bg-[var(--shell-surface-strong)]/95 p-4 shadow-[0_12px_24px_rgba(15,23,42,0.06)]">
+      <div className="flex flex-col gap-4">
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div className="min-w-0 flex-1">
+            <p className="text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-500">Work queue</p>
+            <div className="mt-2 flex flex-wrap gap-2">
+              {savedViews.map((view) => {
+                const active = activeViewId === view.id;
+                return (
+                  <Button
+                    key={view.id}
+                    type="button"
+                    variant={active ? "secondary" : "outline"}
+                    className={cn(
+                      "h-8 rounded-full px-3 text-xs",
+                      active
+                        ? "border-emerald-200 bg-emerald-50 text-emerald-700 hover:bg-emerald-50"
+                        : "border-slate-200 bg-white text-slate-600 hover:bg-slate-50"
+                    )}
+                    onClick={() => onSelectView(view.id)}
+                  >
+                    {view.name}
+                  </Button>
+                );
+              })}
+            </div>
           </div>
-          <Badge
-            variant="outline"
-            className={cn(
-              "text-[10px]",
-              activeCount > 0 ? "border-emerald-200 bg-emerald-50 text-emerald-700" : "text-slate-500"
-            )}
-          >
-            {activeCount > 0 ? `${activeCount} active` : "Ready"}
-          </Badge>
+
+          <div className="flex flex-wrap items-center gap-2">
+            <Badge
+              variant="outline"
+              className={cn(
+                "rounded-full px-2.5 py-1 text-[10px]",
+                activeCount > 0 ? "border-emerald-200 bg-emerald-50 text-emerald-700" : "text-slate-500"
+              )}
+            >
+              {activeCount > 0 ? `${activeCount} active` : "Ready"}
+            </Badge>
+            <Button variant="outline" className="h-9 border-[var(--shell-border)] bg-white" onClick={onSaveView}>
+              Save current view
+            </Button>
+            <Button
+              variant="ghost"
+              className="h-9 text-xs text-slate-500"
+              onClick={onClearFilters}
+              disabled={activeCount === 0}
+            >
+              Clear
+            </Button>
+          </div>
         </div>
 
-        <div className="grid gap-3 lg:grid-cols-[minmax(0,1fr)_220px_auto]">
+        <div className="grid gap-2 xl:grid-cols-[minmax(0,1.6fr)_minmax(0,0.9fr)_minmax(0,0.9fr)_minmax(0,0.9fr)_auto_auto]">
           <div className="relative">
             <Search className="absolute left-3 top-3 h-4 w-4 text-slate-400" />
             <Input
               ref={searchRef}
-              placeholder="Search name, company, or email"
+              placeholder="Search company, contact, or email"
               className="h-10 border-[var(--shell-border)] bg-white pl-9"
               value={filters.search}
               onChange={(event) => onFiltersChange({ ...filters, search: event.target.value })}
             />
           </div>
 
-          <Select value={activeViewId || "none"} onValueChange={onSelectView}>
-            <SelectTrigger className="h-10 w-full border-[var(--shell-border)] bg-white">
-              <SelectValue placeholder="Saved views" />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="none">Saved views</SelectItem>
-              {savedViews.map((view) => (
-                <SelectItem key={view.id} value={view.id}>
-                  {view.name}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-
-          <div className="flex items-center gap-2 lg:justify-end">
-            <Button variant="outline" className="h-10 border-[var(--shell-border)]" onClick={onSaveView}>
-              Save view
-            </Button>
-            <Button
-              variant="ghost"
-              className="h-10 text-xs text-slate-500"
-              onClick={onClearFilters}
-              disabled={activeCount === 0}
-            >
-              Clear filters
-            </Button>
-          </div>
-        </div>
-
-        <div className="h-px bg-[var(--shell-border)]/80" />
-
-        <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_minmax(0,1fr)_auto_auto]">
           <Select value={filters.stage} onValueChange={(value) => onFiltersChange({ ...filters, stage: value })}>
             <SelectTrigger className="h-10 w-full border-[var(--shell-border)] bg-white">
               <SelectValue placeholder="All stages" />
@@ -180,6 +187,7 @@ const PipelineFilterBar: React.FC<PipelineFilterBarProps> = ({
               ))}
             </SelectContent>
           </Select>
+
           <Select value={filters.owner} onValueChange={(value) => onFiltersChange({ ...filters, owner: value })}>
             <SelectTrigger className="h-10 w-full border-[var(--shell-border)] bg-white">
               <SelectValue placeholder="All owners" />
@@ -193,6 +201,7 @@ const PipelineFilterBar: React.FC<PipelineFilterBarProps> = ({
               ))}
             </SelectContent>
           </Select>
+
           <Select value={filters.campaign} onValueChange={(value) => onFiltersChange({ ...filters, campaign: value })}>
             <SelectTrigger className="h-10 w-full border-[var(--shell-border)] bg-white">
               <SelectValue placeholder="All campaigns" />
@@ -206,19 +215,23 @@ const PipelineFilterBar: React.FC<PipelineFilterBarProps> = ({
               ))}
             </SelectContent>
           </Select>
+
           <Button
             variant={filters.staleOnly ? "secondary" : "outline"}
-            className="h-10 border-[var(--shell-border)] bg-white px-4"
+            className={cn(
+              "h-10 border-[var(--shell-border)] px-4",
+              filters.staleOnly ? "bg-amber-50 text-amber-700 hover:bg-amber-50" : "bg-white"
+            )}
             onClick={() => onFiltersChange({ ...filters, staleOnly: !filters.staleOnly })}
           >
             <Filter className="mr-2 h-4 w-4" />
-            {filters.staleOnly ? "Showing stale" : "Stale only"}
+            Stale only
           </Button>
 
           <Popover>
             <PopoverTrigger asChild>
-              <Button variant="outline" className="h-10 border-[var(--shell-border)] px-4">
-                Advanced filters
+              <Button variant="outline" className="h-10 border-[var(--shell-border)] bg-white px-4">
+                Advanced
               </Button>
             </PopoverTrigger>
             <PopoverContent className="w-[340px]" align="end">
@@ -266,6 +279,13 @@ const PipelineFilterBar: React.FC<PipelineFilterBarProps> = ({
                     onCheckedChange={(value) => onFiltersChange({ ...filters, staleOnly: value })}
                   />
                 </div>
+                <div className="flex items-center justify-between">
+                  <Label className="text-xs text-slate-500">Needs follow-up</Label>
+                  <Switch
+                    checked={filters.needsAttentionOnly}
+                    onCheckedChange={(value) => onFiltersChange({ ...filters, needsAttentionOnly: value })}
+                  />
+                </div>
                 <div className="flex items-center justify-end gap-2">
                   <Button variant="ghost" size="sm" onClick={onClearFilters}>
                     Reset
@@ -277,9 +297,9 @@ const PipelineFilterBar: React.FC<PipelineFilterBarProps> = ({
         </div>
 
         {chips.length > 0 && (
-          <div className="flex flex-wrap gap-2 border-t border-dashed border-[var(--shell-border)] pt-4">
+          <div className="flex flex-wrap gap-2 border-t border-dashed border-[var(--shell-border)] pt-3">
             {chips.map((chip) => (
-              <Badge key={chip.label} variant="secondary" className="gap-1 rounded-full border border-slate-200 px-3 py-1">
+              <Badge key={chip.label} variant="secondary" className="gap-1 rounded-full border border-slate-200 bg-white px-3 py-1">
                 {chip.label}
                 <button
                   type="button"

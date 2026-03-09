@@ -21,8 +21,10 @@ import Subscription from "./pages/Subscription";
 import Billing from "./pages/Billing";
 import Spending from "./pages/Spending";
 import Referrals from "./pages/Referrals";
+import Team from "./pages/Team";
 import NotFound from "./pages/NotFound";
 import { AuthProvider } from "./providers/AuthProvider";
+import { WorkspaceProvider } from "./providers/WorkspaceProvider";
 import Onboarding from "./pages/Onboarding";
 import OnboardingGuard from "./components/onboarding/OnboardingGuard";
 
@@ -34,32 +36,35 @@ const App = () => (
       <Toaster />
       <Sonner />
       <AuthProvider>
-        <BrowserRouter>
-          <Routes>
-            <Route path="/" element={<RootPage />} />
-            <Route path="/pages/:slug" element={<PublishedLandingPage />} />
-            <Route path="/auth" element={<Auth />} />
-            <Route path="/onboarding" element={<Onboarding />} />
-            <Route element={<OnboardingGuard />}>
-              <Route path="/dashboard" element={<Dashboard />} />
-              <Route path="/profile" element={<Profile />} />
-              <Route path="/campaigns" element={<Campaigns />} />
-              <Route path="/inbox" element={<Inbox />} />
-              <Route path="/automations" element={<Automations />} />
-              <Route path="/pipeline" element={<Pipeline />} />
-              <Route path="/email-builder" element={<EmailBuilder />} />
-              <Route path="/landing-pages" element={<LandingPages />} />
-              <Route path="/site-connector" element={<SiteConnector />} />
-              <Route path="/subscription" element={<Subscription />} />
-              <Route path="/billing" element={<Billing />} />
-              <Route path="/spending" element={<Spending />} />
-              <Route path="/referrals" element={<Referrals />} />
-              <Route path="/campaign/:id" element={<CampaignTracker />} />
-            </Route>
-            {/* ADD ALL CUSTOM ROUTES ABOVE THE CATCH-ALL "*" ROUTE */}
-            <Route path="*" element={<NotFound />} />
-          </Routes>
-        </BrowserRouter>
+        <WorkspaceProvider>
+          <BrowserRouter>
+            <Routes>
+              <Route path="/" element={<RootPage />} />
+              <Route path="/pages/:slug" element={<PublishedLandingPage />} />
+              <Route path="/auth" element={<Auth />} />
+              <Route path="/onboarding" element={<Onboarding />} />
+              <Route element={<OnboardingGuard />}>
+                <Route path="/dashboard" element={<Dashboard />} />
+                <Route path="/profile" element={<Profile />} />
+                <Route path="/campaigns" element={<Campaigns />} />
+                <Route path="/inbox" element={<Inbox />} />
+                <Route path="/automations" element={<Automations />} />
+                <Route path="/pipeline" element={<Pipeline />} />
+                <Route path="/email-builder" element={<EmailBuilder />} />
+                <Route path="/landing-pages" element={<LandingPages />} />
+                <Route path="/site-connector" element={<SiteConnector />} />
+                <Route path="/subscription" element={<Subscription />} />
+                <Route path="/billing" element={<Billing />} />
+                <Route path="/spending" element={<Spending />} />
+                <Route path="/team" element={<Team />} />
+                <Route path="/referrals" element={<Referrals />} />
+                <Route path="/campaign/:id" element={<CampaignTracker />} />
+              </Route>
+              {/* ADD ALL CUSTOM ROUTES ABOVE THE CATCH-ALL "*" ROUTE */}
+              <Route path="*" element={<NotFound />} />
+            </Routes>
+          </BrowserRouter>
+        </WorkspaceProvider>
       </AuthProvider>
     </TooltipProvider>
   </QueryClientProvider>
