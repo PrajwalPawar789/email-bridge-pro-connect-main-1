@@ -2,30 +2,35 @@
 import { serve } from "https://deno.land/std@0.190.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 
-const corsHeaders = {
-  "Access-Control-Allow-Origin": "*",
-  "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
+const buildCorsHeaders = (req?: Request) => ({
+  "Access-Control-Allow-Origin": req?.headers.get("origin") || "*",
+  "Access-Control-Allow-Headers":
+    "authorization, x-client-info, apikey, content-type, accept, accept-language, content-language",
   "Access-Control-Allow-Methods": "POST, OPTIONS",
-};
+  "Access-Control-Max-Age": "86400",
+  Vary: "Origin",
+});
 
-const SUPABASE_URL = Deno.env.get("SUPABASE_URL") ?? "";
-const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? "";
-const APP_URL = Deno.env.get("APP_URL") || Deno.env.get("SITE_URL") || "";
-
-if (!SUPABASE_URL || !SUPABASE_SERVICE_ROLE_KEY) {
-  throw new Error("Missing SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY env");
-}
-
-const admin = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
-
-const jsonResponse = (payload: Record<string, unknown>, status = 200) =>
+const jsonResponse = (payload: Record<string, unknown>, status = 200, req?: Request) =>
   new Response(JSON.stringify(payload), {
     status,
     headers: {
       "Content-Type": "application/json",
-      ...corsHeaders,
+      ...buildCorsHeaders(req),
     },
   });
+
+const getRuntimeConfig = () => {
+  const supabaseUrl = Deno.env.get("SUPABASE_URL") ?? "";
+  const supabaseServiceRoleKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? "";
+  const appUrl = Deno.env.get("APP_URL") || Deno.env.get("SITE_URL") || "";
+
+  return {
+    supabaseUrl,
+    supabaseServiceRoleKey,
+    appUrl,
+  };
+};
 
 const getErrorMessage = (error: unknown) => {
   if (error instanceof Error) return error.message;
@@ -47,22 +52,32 @@ const allowedRoles = new Set(["admin", "sub_admin", "user", "reviewer"]);
 
 serve(async (req: Request) => {
   if (req.method === "OPTIONS") {
-    return new Response(null, { headers: corsHeaders });
+    return new Response(null, { headers: buildCorsHeaders(req) });
   }
 
   if (req.method !== "POST") {
-    return jsonResponse({ error: "Method not allowed" }, 405);
+    return jsonResponse({ error: "Method not allowed" }, 405, req);
   }
 
   try {
+    const { supabaseUrl, supabaseServiceRoleKey, appUrl } = getRuntimeConfig();
+    if (!supabaseUrl || !supabaseServiceRoleKey) {
+      return jsonResponse(
+        { error: "workspace-invite-member is missing SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY" },
+        500,
+        req,
+      );
+    }
+
+    const admin = createClient(supabaseUrl, supabaseServiceRoleKey);
     const token = getBearerToken(req);
     if (!token) {
-      return jsonResponse({ error: "Missing bearer token" }, 401);
+      return jsonResponse({ error: "Missing bearer token" }, 401, req);
     }
 
     const { data: authData, error: authError } = await admin.auth.getUser(token);
     if (authError || !authData.user) {
-      return jsonResponse({ error: "Unauthorized" }, 401);
+      return jsonResponse({ error: "Unauthorized" }, 401, req);
     }
 
     const actor = authData.user;
@@ -78,10 +93,10 @@ serve(async (req: Request) => {
       : "";
 
     if (!email || !email.includes("@")) {
-      return jsonResponse({ error: "A valid email is required" }, 400);
+      return jsonResponse({ error: "A valid email is required" }, 400, req);
     }
     if (!allowedRoles.has(role)) {
-      return jsonResponse({ error: "Invalid role" }, 400);
+      return jsonResponse({ error: "Invalid role" }, 400, req);
     }
 
     const { data: actorMembership, error: actorMembershipError } = await admin
@@ -94,10 +109,10 @@ serve(async (req: Request) => {
       throw new Error(actorMembershipError.message);
     }
     if (!actorMembership) {
-      return jsonResponse({ error: "Workspace membership not found" }, 403);
+      return jsonResponse({ error: "Workspace membership not found" }, 403, req);
     }
     if (actorMembership.status === "disabled") {
-      return jsonResponse({ error: "Your workspace membership is disabled" }, 403);
+      return jsonResponse({ error: "Your workspace membership is disabled" }, 403, req);
     }
 
     const requiresAdminPermission = role !== "user";
@@ -115,11 +130,15 @@ serve(async (req: Request) => {
     ]);
 
     if (!canCreate && !canManageWorkspace) {
-      return jsonResponse({ error: "You do not have permission to invite this role" }, 403);
+      return jsonResponse({ error: "You do not have permission to invite this role" }, 403, req);
     }
 
     if (actorMembership.role !== "owner" && role !== "user") {
-      return jsonResponse({ error: "Only workspace owners can invite admins, sub-admins, or reviewers" }, 403);
+      return jsonResponse(
+        { error: "Only workspace owners can invite admins, sub-admins, or reviewers" },
+        403,
+        req,
+      );
     }
 
     let parentUserId = requestedParentUserId || actor.id;
@@ -128,7 +147,7 @@ serve(async (req: Request) => {
     }
 
     if (!parentUserId) {
-      return jsonResponse({ error: "A parent admin is required" }, 400);
+      return jsonResponse({ error: "A parent admin is required" }, 400, req);
     }
 
     const { data: parentMembership, error: parentError } = await admin
@@ -141,14 +160,14 @@ serve(async (req: Request) => {
       throw new Error(parentError.message);
     }
     if (!parentMembership || parentMembership.workspace_id !== actorMembership.workspace_id) {
-      return jsonResponse({ error: "Parent admin is outside of your workspace" }, 400);
+      return jsonResponse({ error: "Parent admin is outside of your workspace" }, 400, req);
     }
     if (parentMembership.status === "disabled") {
-      return jsonResponse({ error: "Parent admin is disabled" }, 400);
+      return jsonResponse({ error: "Parent admin is disabled" }, 400, req);
     }
 
     if (actorMembership.role !== "owner" && parentUserId !== actor.id) {
-      return jsonResponse({ error: "Admins can only invite users under themselves" }, 403);
+      return jsonResponse({ error: "Admins can only invite users under themselves" }, 403, req);
     }
 
     const allocationMetadata = {
@@ -203,8 +222,8 @@ serve(async (req: Request) => {
     const inviteOptions: Record<string, unknown> = {
       data: inviteData,
     };
-    if (APP_URL) {
-      inviteOptions.redirectTo = `${APP_URL.replace(/\/+$/, "")}/auth`;
+    if (appUrl) {
+      inviteOptions.redirectTo = `${appUrl.replace(/\/+$/, "")}/auth`;
     }
 
     const { data: inviteDataResult, error: inviteError } = await admin.auth.admin.inviteUserByEmail(
@@ -216,14 +235,19 @@ serve(async (req: Request) => {
       throw new Error(inviteError.message);
     }
 
-    return jsonResponse({
-      success: true,
-      invitedUserId: inviteDataResult.user?.id || null,
-      email,
-      role,
-      workspaceId: actorMembership.workspace_id,
-    });
+    return jsonResponse(
+      {
+        success: true,
+        invitedUserId: inviteDataResult.user?.id || null,
+        email,
+        role,
+        workspaceId: actorMembership.workspace_id,
+      },
+      200,
+      req,
+    );
   } catch (error) {
-    return jsonResponse({ error: getErrorMessage(error) }, 500);
+    console.error("workspace-invite-member failed", error);
+    return jsonResponse({ error: getErrorMessage(error) }, 500, req);
   }
 });
