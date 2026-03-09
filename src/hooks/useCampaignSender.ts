@@ -5,6 +5,22 @@ import { toast } from '@/hooks/use-toast';
 export const useCampaignSender = () => {
   const [sending, setSending] = useState<Set<string>>(new Set());
 
+  const normalizeCampaignError = (error: unknown) => {
+    const message = error instanceof Error ? error.message : String(error || 'Failed to start campaign');
+    const lowered = message.toLowerCase();
+
+    if (lowered.includes('approval')) {
+      return 'Campaign launch is blocked until approval is granted.';
+    }
+    if (lowered.includes('daily send limit')) {
+      return 'Daily send limit reached for this user allocation.';
+    }
+    if (lowered.includes('credit') || lowered.includes('quota')) {
+      return message;
+    }
+    return message;
+  };
+
   const resolveAuthContext = async () => {
     const authErrorMessage = 'Your session is invalid. Please sign in again.';
 
@@ -87,7 +103,7 @@ export const useCampaignSender = () => {
       });
 
     } catch (error: unknown) {
-      const message = error instanceof Error ? error.message : "Failed to start sending campaign";
+      const message = normalizeCampaignError(error);
       console.error('Error starting campaign:', error);
       toast({
         title: "Error",

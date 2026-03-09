@@ -5,7 +5,6 @@ import { useMutation, useQueryClient } from "@tanstack/react-query";
 import DashboardLayout from "@/components/Layout/DashboardLayout";
 import PipelineBoard from "@/components/pipeline/PipelineBoard";
 import PipelinePageHeader from "@/components/pipeline/PipelinePageHeader";
-import PipelineInsightsStrip, { InsightItem } from "@/components/pipeline/PipelineInsightsStrip";
 import PipelineFilterBar, { PipelineFilters, SavedView } from "@/components/pipeline/PipelineFilterBar";
 import PipelineViewControls, { DensityMode, SwimlaneMode, ViewMode } from "@/components/pipeline/PipelineViewControls";
 import PipelineListView from "@/components/pipeline/PipelineListView";
@@ -26,7 +25,6 @@ import {
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Skeleton } from "@/components/ui/skeleton";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -48,6 +46,7 @@ import {
   createOpportunity,
   createPipelineWithStages,
   deleteOpportunity,
+  ensurePipelineTemplateKeywords,
   fetchPipelineStageKeywords,
   updatePipelineWithStages,
   updateOpportunity,
@@ -68,11 +67,7 @@ import {
 } from "@/lib/pipeline";
 import { supabase } from "@/integrations/supabase/client";
 import {
-  ArrowRight,
-  ClipboardCheck,
   Command as CommandIcon,
-  Filter,
-  Sparkles,
 } from "lucide-react";
 
 const DEFAULT_FILTERS: PipelineFilters = {
@@ -81,11 +76,24 @@ const DEFAULT_FILTERS: PipelineFilters = {
   owner: "all",
   campaign: "all",
   staleOnly: false,
+  needsAttentionOnly: false,
   valueMin: "",
   valueMax: "",
   dateFrom: "",
   dateTo: "",
 };
+
+const areFiltersEqual = (left: PipelineFilters, right: PipelineFilters) =>
+  left.search === right.search &&
+  left.stage === right.stage &&
+  left.owner === right.owner &&
+  left.campaign === right.campaign &&
+  left.staleOnly === right.staleOnly &&
+  left.needsAttentionOnly === right.needsAttentionOnly &&
+  (left.valueMin || "") === (right.valueMin || "") &&
+  (left.valueMax || "") === (right.valueMax || "") &&
+  (left.dateFrom || "") === (right.dateFrom || "") &&
+  (left.dateTo || "") === (right.dateTo || "");
 
 type NewOpportunityDraft = {
   contactName: string;
@@ -185,7 +193,7 @@ const createTemplateStageDrafts = (templateId?: string): EditableStageDraft[] =>
     templateStageId: stage.id,
     name: stage.name,
     description: stage.description || "",
-    keywordsText: "",
+    keywordsText: (stage.keywords || []).join(", "),
     tone: stage.tone || "slate",
     isWon: stage.id === "closed-won",
     isLost: stage.id === "closed-lost",
@@ -287,7 +295,8 @@ const Pipeline = () => {
   const [activePipelineId, setActivePipelineId] = useState("");
   const [filters, setFilters] = useState<PipelineFilters>(DEFAULT_FILTERS);
   const [savedViews, setSavedViews] = useState<SavedView[]>([
-    { id: "all", name: "All", filters: DEFAULT_FILTERS },
+    { id: "all", name: "All deals", filters: DEFAULT_FILTERS },
+    { id: "needs-follow-up", name: "Needs follow-up", filters: { ...DEFAULT_FILTERS, needsAttentionOnly: true } },
     { id: "stale", name: "Stale", filters: { ...DEFAULT_FILTERS, staleOnly: true } },
     { id: "unassigned", name: "Unassigned", filters: { ...DEFAULT_FILTERS, owner: "Unassigned" } },
     { id: "high-value", name: "High value", filters: { ...DEFAULT_FILTERS, valueMin: "25000" } },
@@ -424,6 +433,7 @@ const Pipeline = () => {
       if (filters.owner !== "all" && (opp.owner || "Unassigned") !== filters.owner) return false;
       if (filters.campaign !== "all" && (opp.sourceCampaign || "Unattributed") !== filters.campaign) return false;
       if (filters.staleOnly && !isOpportunityStale(opp)) return false;
+      if (filters.needsAttentionOnly && !((opp.nextStep || "").trim() === "" || isOpportunityStale(opp))) return false;
 
       const minValue = Number(filters.valueMin || 0);
       const maxValue = Number(filters.valueMax || 0);
@@ -609,6 +619,10 @@ const Pipeline = () => {
   const openOpportunities = mappedOpportunities.filter((opp) => opp.status === "open");
   const openValue = openOpportunities.reduce((sum, opp) => sum + (opp.value || 0), 0);
   const staleCount = openOpportunities.filter((opp) => isOpportunityStale(opp)).length;
+  const needsActionCount = openOpportunities.filter(
+    (opp) => isOpportunityStale(opp) || !(opp.nextStep || "").trim()
+  ).length;
+  const unassignedCount = openOpportunities.filter((opp) => !(opp.owner || "").trim()).length;
   const winCount = mappedOpportunities.filter((opp) => opp.status === "won").length;
   const meetingStageIds = new Set(
     mappedStages
@@ -618,42 +632,6 @@ const Pipeline = () => {
       .map((stage) => stage.id)
   );
   const meetingCount = openOpportunities.filter((opp) => meetingStageIds.has(opp.stageId)).length;
-
-  const insightItems: InsightItem[] = [
-    {
-      id: "open-value",
-      label: "Open pipeline",
-      value: formatCurrency(openValue),
-      helper: `${openOpportunities.length} active deals`,
-      tone: "sky",
-      icon: <Sparkles className="h-5 w-5" />,
-      tooltip: "Sum of all open opportunities",
-    },
-    {
-      id: "meetings",
-      label: "Meetings booked",
-      value: meetingCount,
-      helper: "Discovery + demos",
-      tone: "emerald",
-      icon: <ArrowRight className="h-5 w-5" />,
-    },
-    {
-      id: "stale",
-      label: "Stale deals",
-      value: staleCount,
-      helper: `No activity in ${STALE_DAYS}+ days`,
-      tone: "amber",
-      icon: <Filter className="h-5 w-5" />,
-    },
-    {
-      id: "won",
-      label: "Closed won",
-      value: winCount,
-      helper: "This quarter",
-      tone: "emerald",
-      icon: <Sparkles className="h-5 w-5" />,
-    },
-  ];
 
   const selectedOpportunity = mappedOpportunities.find((opp) => opp.id === selectedOpportunityId) || null;
 
@@ -842,6 +820,17 @@ const Pipeline = () => {
       description: `Saved "${name}" for quick access.`,
     });
   };
+
+  useEffect(() => {
+    setActiveViewId((prev) => {
+      if (prev) {
+        const currentView = savedViews.find((view) => view.id === prev);
+        if (currentView && areFiltersEqual(currentView.filters, filters)) return prev;
+      }
+      const matchedView = savedViews.find((view) => areFiltersEqual(view.filters, filters));
+      return matchedView?.id || null;
+    });
+  }, [filters, savedViews]);
 
   const toggleCollapse = (stageId: string) => {
     setCollapsedStageIds((prev) =>
@@ -1180,6 +1169,9 @@ const Pipeline = () => {
   const handleOpenSettings = async () => {
     if (!activePipeline) return;
     try {
+      if (activePipeline.template_id) {
+        await ensurePipelineTemplateKeywords(activePipeline.id, activePipeline.template_id, stageRows);
+      }
       const keywordsByStageId = await fetchPipelineStageKeywords(activePipeline.id);
       setSettingsDraft({
         name: activePipeline.name,
@@ -1326,6 +1318,7 @@ const Pipeline = () => {
     filters.owner,
     filters.campaign,
     filters.staleOnly,
+    filters.needsAttentionOnly,
     filters.valueMin,
     filters.valueMax,
     filters.dateFrom,
@@ -1349,7 +1342,7 @@ const Pipeline = () => {
       onLogout={handleLogout}
       contentClassName="max-w-[1440px]"
     >
-      <div className="space-y-6">
+      <div className="space-y-4">
         {/* Nielsen + Fitts: primary CTA is anchored near the title, secondary actions are tucked into overflow. */}
         <PipelinePageHeader
           pipelineId={activePipelineId}
@@ -1358,17 +1351,14 @@ const Pipeline = () => {
           onNewOpportunity={handleNewOpportunity}
           onNewPipeline={handleOpenNewPipeline}
           onOpenSettings={handleOpenSettings}
+          openDeals={openOpportunities.length}
+          openValue={formatCurrency(openValue)}
+          winCount={winCount}
+          needsActionCount={needsActionCount}
+          unassignedCount={unassignedCount}
+          staleCount={staleCount}
+          meetingCount={meetingCount}
         />
-
-        {bootstrapQuery.isLoading || stagesQuery.isLoading ? (
-          <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-4">
-            {Array.from({ length: 4 }).map((_, index) => (
-              <Skeleton key={index} className="h-28 w-full" />
-            ))}
-          </div>
-        ) : (
-          <PipelineInsightsStrip items={insightItems} />
-        )}
 
         {/* Hick + Miller: filter bar stays lean, advanced filters tucked into popover. */}
         <PipelineFilterBar
@@ -1384,23 +1374,6 @@ const Pipeline = () => {
           onClearFilters={clearFilters}
           searchRef={searchInputRef}
         />
-
-        {/* <div className="rounded-2xl border border-dashed border-[var(--shell-border)] bg-white/70 p-4 text-sm text-[var(--shell-muted)]">
-          <div className="flex flex-wrap items-center gap-3">
-            <div className="flex h-9 w-9 items-center justify-center rounded-full bg-emerald-50 text-emerald-600">
-              <ClipboardCheck className="h-4 w-4" />
-            </div>
-            <div className="flex-1">
-              <p className="font-semibold text-[var(--shell-ink)]">Pipeline updates happen in the Inbox</p>
-              <p className="text-xs text-[var(--shell-muted)]">
-                Classify replies as Interested, Not Interested, or Meeting Booked. Each action updates stages automatically.
-              </p>
-            </div>
-            <Button variant="outline" size="sm" onClick={() => navigate("/inbox")}>
-              View inbox
-            </Button>
-          </div>
-        </div> */}
 
         {/* Serial position: view + density controls are first in the board toolbar. */}
         <PipelineViewControls

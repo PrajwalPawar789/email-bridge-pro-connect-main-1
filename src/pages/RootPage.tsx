@@ -69,15 +69,6 @@ const RootPage = () => {
     return <LandingPage />;
   }
 
-  if (typeof window !== 'undefined' && resolvedDomain.page.slug) {
-    window.location.replace(`/${resolvedDomain.page.slug}`);
-    return (
-      <div className="flex min-h-screen items-center justify-center">
-        <div className="h-8 w-8 animate-spin rounded-full border-b-2 border-emerald-600"></div>
-      </div>
-    );
-  }
-
   return <div dangerouslySetInnerHTML={{ __html: extractHtmlBodyContent(resolvedDomain.page.contentHtml) }} />;
 };
 

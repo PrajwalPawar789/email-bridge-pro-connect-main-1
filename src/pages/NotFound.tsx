@@ -83,18 +83,7 @@ const NotFound = () => {
     const requestedSlug = normalizeSlugPath(location.pathname);
     const expectedSlug = normalizeSlugPath(resolvedDomain.page.slug || "");
 
-    if (!requestedSlug && expectedSlug) {
-      if (typeof window !== "undefined") {
-        window.location.replace(`/${expectedSlug}`);
-      }
-      return (
-        <div className="min-h-screen flex items-center justify-center bg-gray-100">
-          <div className="h-8 w-8 animate-spin rounded-full border-b-2 border-emerald-600"></div>
-        </div>
-      );
-    }
-
-    if (requestedSlug === expectedSlug || !expectedSlug) {
+    if (!requestedSlug || requestedSlug === expectedSlug || !expectedSlug) {
       return <div dangerouslySetInnerHTML={{ __html: extractHtmlBodyContent(resolvedDomain.page.contentHtml) }} />;
     }
   }

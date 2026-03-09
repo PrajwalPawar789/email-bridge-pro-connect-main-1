@@ -185,6 +185,57 @@ const refundUserCredits = async (
   return Number(row?.credits_remaining ?? NaN);
 };
 
+const consumeUserSendQuota = async (
+  userId: string,
+  amount: number,
+  eventType: string,
+  referenceId: string,
+  metadata: Record<string, unknown> = {}
+) => {
+  const { data, error } = await supabase.rpc('consume_user_send_quota', {
+    p_amount: amount,
+    p_event_type: eventType,
+    p_reference_id: referenceId,
+    p_metadata: metadata,
+    p_user_id: userId,
+  });
+
+  if (error) {
+    throw new Error(`Send quota consumption failed: ${error.message}`);
+  }
+
+  const row = Array.isArray(data) ? data[0] : data;
+  return {
+    allowed: Boolean(row?.allowed),
+    sendsRemaining: row?.sends_remaining === null ? null : Number(row?.sends_remaining ?? 0),
+    message: String(row?.message || ''),
+  };
+};
+
+const refundUserSendQuota = async (
+  userId: string,
+  amount: number,
+  eventType: string,
+  referenceId: string,
+  metadata: Record<string, unknown> = {}
+) => {
+  const { data, error } = await supabase.rpc('refund_user_send_quota', {
+    p_amount: amount,
+    p_event_type: eventType,
+    p_reference_id: referenceId,
+    p_metadata: metadata,
+    p_user_id: userId,
+  });
+
+  if (error) {
+    console.error(`Send quota refund failed for user ${userId}: ${error.message}`);
+    return null;
+  }
+
+  const row = Array.isArray(data) ? data[0] : data;
+  return row?.sends_remaining === null ? null : Number(row?.sends_remaining ?? NaN);
+};
+
 const escapeHtml = (value: string) =>
   value
     .replace(/&/g, '&amp;')
@@ -381,6 +432,7 @@ const fetchEmailConfigForCampaign = async (campaign: Campaign): Promise<EmailCon
       .from('email_configs')
       .select('id, smtp_host, smtp_port, smtp_username, smtp_password, security, sender_name')
       .eq('id', campaign.email_config_id)
+      .or('is_active.is.null,is_active.eq.true')
       .maybeSingle();
 
     if (error) {
@@ -395,6 +447,7 @@ const fetchEmailConfigForCampaign = async (campaign: Campaign): Promise<EmailCon
       .from('email_configs')
       .select('id, smtp_host, smtp_port, smtp_username, smtp_password, security, sender_name')
       .eq('user_id', campaign.user_id)
+      .or('is_active.is.null,is_active.eq.true')
       .order('created_at', { ascending: false })
       .limit(1)
       .maybeSingle();
@@ -958,11 +1011,13 @@ const processBatch = async (
     let emailsSent = 0;
     let creditExhausted = false;
     let creditsBlocked = false;
+    let sendQuotaBlocked = false;
 
     // Process each recipient in the batch
     for (let i = 0; i < recipients.length; i++) {
       const recipient = recipients[i];
       let creditDebited = false;
+      let sendQuotaReserved = false;
       
       try {
         // Determine which email config to use
@@ -985,10 +1040,11 @@ const processBatch = async (
           .from('email_configs')
           .select('*')
           .eq('id', configIdToUse)
+          .or('is_active.is.null,is_active.eq.true')
           .single();
 
         if (configError || !configData) {
-           throw new Error(`Email config not found: ${configIdToUse}`);
+           throw new Error(`Active sender account not found: ${configIdToUse}`);
         }
 
         const emailConfig = normalizeEmailConfig(configData);
@@ -1038,6 +1094,15 @@ const processBatch = async (
 
         const prospectData = prospectMap.get(recipient.email) || {};
 
+        if (sendQuotaBlocked) {
+          creditExhausted = true;
+          await supabase
+            .from('recipients')
+            .update({ status: step === 0 ? 'pending' : 'sent' })
+            .eq('id', recipient.id);
+          continue;
+        }
+
         if (creditsBlocked || (workspaceCreditsRemaining !== null && workspaceCreditsRemaining <= 0)) {
           creditExhausted = true;
           await supabase
@@ -1046,6 +1111,38 @@ const processBatch = async (
             .eq('id', recipient.id);
           continue;
         }
+
+        const sendQuotaReferenceId = `${campaignId}:${recipient.id}:${step}:send-quota`;
+        const sendQuotaMetadata = {
+          source: 'campaign',
+          campaign_id: campaignId,
+          recipient_id: recipient.id,
+          step,
+          email_config_id: configIdToUse || null
+        };
+
+        const sendQuotaResult = await consumeUserSendQuota(
+          campaign.user_id,
+          1,
+          'campaign_send_quota',
+          sendQuotaReferenceId,
+          sendQuotaMetadata
+        );
+
+        if (!sendQuotaResult.allowed) {
+          creditExhausted = true;
+          sendQuotaBlocked = true;
+          console.log(
+            `Skipping send for recipient ${recipient.id} due to daily send cap. Remaining: ${sendQuotaResult.sendsRemaining}`
+          );
+          await supabase
+            .from('recipients')
+            .update({ status: step === 0 ? 'pending' : 'sent' })
+            .eq('id', recipient.id);
+          continue;
+        }
+
+        sendQuotaReserved = true;
 
         const creditReferenceId = `${campaignId}:${recipient.id}:${step}`;
         const creditMetadata = {
@@ -1068,6 +1165,19 @@ const processBatch = async (
           creditExhausted = true;
           creditsBlocked = true;
           workspaceCreditsRemaining = 0;
+          if (sendQuotaReserved) {
+            await refundUserSendQuota(
+              campaign.user_id,
+              1,
+              'campaign_send_quota_refund',
+              sendQuotaReferenceId,
+              {
+                ...sendQuotaMetadata,
+                reason: 'credit_blocked'
+              }
+            );
+            sendQuotaReserved = false;
+          }
           console.log(
             `Skipping send for recipient ${recipient.id} due to insufficient credits. Remaining: ${creditResult.creditsRemaining}`
           );
@@ -1171,6 +1281,23 @@ const processBatch = async (
             workspaceCreditsRemaining += CREDIT_COST_PER_OUTBOUND_EMAIL;
           }
         }
+
+        if (sendQuotaReserved) {
+          await refundUserSendQuota(
+            campaign.user_id,
+            1,
+            'campaign_send_quota_refund',
+            `${campaignId}:${recipient.id}:${step}:send-quota`,
+            {
+              source: 'campaign',
+              campaign_id: campaignId,
+              recipient_id: recipient.id,
+              step,
+              reason: 'send_failure',
+              error: getErrorMessage(error)
+            }
+          );
+        }
         
         // Mark as failed so we don't retry indefinitely without intervention
         await supabase
@@ -1194,11 +1321,13 @@ const processBatch = async (
 
     return { 
       success: true, 
-      message: creditExhausted
+      message: sendQuotaBlocked
+        ? `Batch stopped by daily send limit. Sent ${emailsSent} emails.`
+        : creditExhausted
         ? `Batch stopped by credits. Sent ${emailsSent} emails.`
         : `Batch completed. Sent ${emailsSent} emails.`,
       emailsSent,
-      hasMore: creditExhausted ? true : false // Let the monitor handle re-triggering
+      hasMore: creditExhausted || sendQuotaBlocked ? true : false // Let the monitor handle re-triggering
     };
 
   } catch (error: unknown) {

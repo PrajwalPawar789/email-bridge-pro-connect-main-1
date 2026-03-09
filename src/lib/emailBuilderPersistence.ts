@@ -1,4 +1,5 @@
 import { supabase } from '@/integrations/supabase/client';
+import { buildEmailEmbeddingText, indexAiBuilderObject } from '@/lib/aiBuilder';
 
 export type EmailBuilderFormat = 'plain' | 'html';
 
@@ -26,15 +27,38 @@ export interface EmailBuilderBlock {
   styles: Record<string, any>;
 }
 
+export interface EmailBuilderTheme {
+  width: number;
+  bodyBackground: string;
+  contentBackground: string;
+  textColor: string;
+  headingColor: string;
+  linkColor: string;
+  fontFamily: string;
+}
+
+export const DEFAULT_EMAIL_BUILDER_THEME: EmailBuilderTheme = {
+  width: 640,
+  bodyBackground: '#f8fafc',
+  contentBackground: '#ffffff',
+  textColor: '#0f172a',
+  headingColor: '#0f172a',
+  linkColor: '#0f766e',
+  fontFamily: 'Arial, Helvetica, sans-serif',
+};
+
 export interface EmailBuilderTemplate {
   id: string;
   name: string;
   subject: string;
+  preheader: string;
   format: EmailBuilderFormat;
   blocks: EmailBuilderBlock[];
+  rawHtml?: string;
   audience: string;
   voice: string;
   goal: string;
+  theme: EmailBuilderTheme;
   createdAt: Date;
 }
 
@@ -77,6 +101,11 @@ const stripHtml = (value: string) =>
     .trim();
 
 const plainTextToHtml = (value: string) => escapeHtml(value).replace(/\n/g, '<br />');
+const sanitizeEmailHtml = (value: string) =>
+  String(value || '')
+    .replace(/<script[\s\S]*?<\/script>/gi, '')
+    .replace(/\son[a-z]+\s*=\s*(?:"[^"]*"|'[^']*'|[^\s>]+)/gi, '')
+    .trim();
 
 const toKebabCase = (value: string) => value.replace(/[A-Z]/g, (char) => `-${char.toLowerCase()}`);
 
@@ -119,6 +148,43 @@ const normalizeBlocks = (value: any): EmailBuilderBlock[] => {
   return value.map(normalizeBlock);
 };
 
+const clampNumber = (value: unknown, fallback: number, min: number, max: number) => {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric)) return fallback;
+  return Math.min(max, Math.max(min, Math.round(numeric)));
+};
+
+const normalizeTheme = (value: any): EmailBuilderTheme => {
+  const theme = value && typeof value === 'object' ? value : {};
+  return {
+    width: clampNumber(theme.width, DEFAULT_EMAIL_BUILDER_THEME.width, 360, 960),
+    bodyBackground:
+      typeof theme.bodyBackground === 'string' && theme.bodyBackground.trim()
+        ? theme.bodyBackground
+        : DEFAULT_EMAIL_BUILDER_THEME.bodyBackground,
+    contentBackground:
+      typeof theme.contentBackground === 'string' && theme.contentBackground.trim()
+        ? theme.contentBackground
+        : DEFAULT_EMAIL_BUILDER_THEME.contentBackground,
+    textColor:
+      typeof theme.textColor === 'string' && theme.textColor.trim()
+        ? theme.textColor
+        : DEFAULT_EMAIL_BUILDER_THEME.textColor,
+    headingColor:
+      typeof theme.headingColor === 'string' && theme.headingColor.trim()
+        ? theme.headingColor
+        : DEFAULT_EMAIL_BUILDER_THEME.headingColor,
+    linkColor:
+      typeof theme.linkColor === 'string' && theme.linkColor.trim()
+        ? theme.linkColor
+        : DEFAULT_EMAIL_BUILDER_THEME.linkColor,
+    fontFamily:
+      typeof theme.fontFamily === 'string' && theme.fontFamily.trim()
+        ? theme.fontFamily
+        : DEFAULT_EMAIL_BUILDER_THEME.fontFamily,
+  };
+};
+
 const fallbackBlocksFromTemplate = (content: string, isHtml: boolean): EmailBuilderBlock[] => {
   if (!content.trim()) return [];
 
@@ -156,10 +222,12 @@ const extractBuilderState = (html: string) => {
     return {
       cleanHtml: html,
       blocks: [] as EmailBuilderBlock[],
+      preheader: '',
       audience: DEFAULT_AUDIENCE,
       voice: DEFAULT_VOICE,
       goal: DEFAULT_GOAL,
       format: 'html' as EmailBuilderFormat,
+      theme: normalizeTheme(null),
     };
   }
 
@@ -173,19 +241,23 @@ const extractBuilderState = (html: string) => {
     return {
       cleanHtml,
       blocks: normalizeBlocks(parsed?.blocks),
+      preheader: typeof meta.preheader === 'string' ? meta.preheader : '',
       audience: typeof meta.audience === 'string' && meta.audience.trim() ? meta.audience : DEFAULT_AUDIENCE,
       voice: typeof meta.voice === 'string' && meta.voice.trim() ? meta.voice : DEFAULT_VOICE,
       goal: typeof meta.goal === 'string' && meta.goal.trim() ? meta.goal : DEFAULT_GOAL,
       format,
+      theme: normalizeTheme(meta.theme),
     };
   } catch {
     return {
       cleanHtml,
       blocks: [] as EmailBuilderBlock[],
+      preheader: '',
       audience: DEFAULT_AUDIENCE,
       voice: DEFAULT_VOICE,
       goal: DEFAULT_GOAL,
       format: 'html' as EmailBuilderFormat,
+      theme: normalizeTheme(null),
     };
   }
 };
@@ -203,7 +275,11 @@ const blockText = (block: EmailBuilderBlock) => {
       return [block.content.alt || 'Image', block.content.src].filter(Boolean).join(': ');
     case 'columns':
       return (Array.isArray(block.content.content) ? block.content.content : [])
-        .map((item: any) => String(item?.text || '').trim())
+        .map((item: any) => {
+          const plain = String(item?.text || '').trim();
+          if (plain) return plain;
+          return stripHtml(String(item?.html || item?.contentHtml || ''));
+        })
         .filter(Boolean)
         .join(' | ');
     case 'table':
@@ -220,7 +296,7 @@ const blockText = (block: EmailBuilderBlock) => {
   }
 };
 
-const blockHtml = (block: EmailBuilderBlock) => {
+const blockHtml = (block: EmailBuilderBlock, theme: EmailBuilderTheme) => {
   switch (block.type) {
     case 'heading':
     case 'text':
@@ -257,7 +333,11 @@ const blockHtml = (block: EmailBuilderBlock) => {
       const items = Array.isArray(block.content.content) ? block.content.content : [];
       if (items.length === 0) return '';
       const cells = items
-        .map((item: any) => `<td style="padding:8px;vertical-align:top;">${plainTextToHtml(String(item?.text || ''))}</td>`)
+        .map((item: any) => {
+          const richHtml = String(item?.html || item?.contentHtml || '').trim();
+          const plainHtml = plainTextToHtml(String(item?.text || ''));
+          return `<td style="padding:8px;vertical-align:top;">${richHtml || plainHtml}</td>`;
+        })
         .join('');
       return `<table role="presentation" width="100%" cellpadding="0" cellspacing="0"><tr>${cells}</tr></table>`;
     }
@@ -268,15 +348,22 @@ const blockHtml = (block: EmailBuilderBlock) => {
         .map((item: any) => {
           const platform = escapeHtml(String(item?.platform || 'Link'));
           const url = escapeHtml(String(item?.url || '#'));
-          return `<a href="${url}" style="margin-right:12px;text-decoration:none;">${platform}</a>`;
+          return `<a href="${url}" style="margin-right:12px;text-decoration:none;color:${escapeHtml(theme.linkColor)};">${platform}</a>`;
         })
         .join('');
       return `<div>${html}</div>`;
     }
     case 'video': {
       const url = String(block.content.url || '').trim();
-      if (!url) return '<p>Video</p>';
-      return `<p><a href="${escapeHtml(url)}">${escapeHtml(String(block.content.title || 'Watch video'))}</a></p>`;
+      const title = escapeHtml(String(block.content.title || 'Watch video'));
+      const thumbnail = String(block.content.thumbnail || '').trim();
+      if (thumbnail) {
+        return `<a href="${escapeHtml(url || '#')}" style="display:block;text-decoration:none;color:${escapeHtml(theme.linkColor)};"><img src="${escapeHtml(
+          thumbnail
+        )}" alt="${title}" style="display:block;width:100%;max-width:100%;height:auto;border-radius:12px;" /><span style="display:inline-block;margin-top:12px;font-weight:600;">${title}</span></a>`;
+      }
+      if (!url) return `<p>${title}</p>`;
+      return `<p><a href="${escapeHtml(url)}" style="color:${escapeHtml(theme.linkColor)};">${title}</a></p>`;
     }
     case 'countdown':
       return `<p>${escapeHtml(String(block.content.label || 'Countdown'))}</p>`;
@@ -308,17 +395,21 @@ const blockHtml = (block: EmailBuilderBlock) => {
       const title = escapeHtml(String(block.content.title || 'Link'));
       const description = escapeHtml(String(block.content.description || ''));
       const url = escapeHtml(String(block.content.url || '#'));
-      return `<p><a href="${url}"><strong>${title}</strong></a><br />${description}</p>`;
+      return `<p><a href="${url}" style="color:${escapeHtml(theme.linkColor)};"><strong>${title}</strong></a><br />${description}</p>`;
     }
     default:
       return plainTextToHtml(String(block.content.text || ''));
   }
 };
 
-const wrapBlockHtml = (block: EmailBuilderBlock) => {
-  const inner = blockHtml(block);
+const wrapBlockHtml = (block: EmailBuilderBlock, theme: EmailBuilderTheme) => {
+  const inner = blockHtml(block, theme);
   if (!inner) return '';
-  const styles = stylesToInline(block.styles || {});
+  const wrapperStyles = { ...(block.styles || {}) } as Record<string, any>;
+  if (block.type === 'heading' && !wrapperStyles.color) {
+    wrapperStyles.color = theme.headingColor;
+  }
+  const styles = stylesToInline(wrapperStyles);
   const wrapperStyle = styles ? ` style="${styles}"` : '';
   return `<div${wrapperStyle}>${inner}</div>`;
 };
@@ -328,10 +419,12 @@ const serializeBuilderState = (template: EmailBuilderTemplate) => {
     version: 1,
     blocks: template.blocks,
     meta: {
+      preheader: template.preheader,
       audience: template.audience,
       voice: template.voice,
       goal: template.goal,
       format: template.format,
+      theme: normalizeTheme(template.theme),
     },
   };
   return `<!-- VINTRO_EMAIL_BUILDER_STATE:${toBase64(JSON.stringify(payload))} -->`;
@@ -344,10 +437,11 @@ const normalizeTemplateSubject = (value: string) => value.trim();
 const toTemplate = (row: any): EmailBuilderTemplate => {
   const isHtml = Boolean(row?.is_html);
   const rawContent = String(row?.content || '');
-  const state = isHtml ? extractBuilderState(rawContent) : null;
-  const cleanContent = state?.cleanHtml || rawContent;
+  const hasBuilderState = EMAIL_BUILDER_STATE_REGEX.test(rawContent);
+  const state = extractBuilderState(rawContent);
+  const cleanContent = state.cleanHtml || rawContent;
   const blocks =
-    state && state.blocks.length > 0
+    state.blocks.length > 0
       ? state.blocks
       : fallbackBlocksFromTemplate(cleanContent, isHtml);
 
@@ -355,18 +449,32 @@ const toTemplate = (row: any): EmailBuilderTemplate => {
     id: String(row.id),
     name: String(row.name || ''),
     subject: String(row.subject || ''),
-    format: state?.format || (isHtml ? 'html' : 'plain'),
+    preheader: hasBuilderState ? state.preheader || '' : '',
+    format: hasBuilderState ? state.format : isHtml ? 'html' : 'plain',
     blocks,
-    audience: state?.audience || DEFAULT_AUDIENCE,
-    voice: state?.voice || DEFAULT_VOICE,
-    goal: state?.goal || DEFAULT_GOAL,
+    rawHtml: isHtml ? cleanContent || undefined : undefined,
+    audience: hasBuilderState ? state.audience || DEFAULT_AUDIENCE : DEFAULT_AUDIENCE,
+    voice: hasBuilderState ? state.voice || DEFAULT_VOICE : DEFAULT_VOICE,
+    goal: hasBuilderState ? state.goal || DEFAULT_GOAL : DEFAULT_GOAL,
+    theme: hasBuilderState ? state.theme || normalizeTheme(null) : normalizeTheme(null),
     createdAt: row?.created_at ? new Date(row.created_at) : new Date(),
   };
 };
 
 export const renderEmailTemplateHtml = (template: EmailBuilderTemplate) => {
-  const body = template.blocks.map(wrapBlockHtml).filter(Boolean).join('\n');
-  return `<div style="max-width:640px;margin:0 auto;font-family:Arial,Helvetica,sans-serif;color:#0f172a;line-height:1.5;">${body}</div>`;
+  const directHtml = String(template.rawHtml || '').trim();
+  const theme = normalizeTheme(template.theme);
+  const preheader = String(template.preheader || '').trim();
+  const preheaderHtml = preheader
+    ? `<div style="display:none;overflow:hidden;line-height:1px;opacity:0;max-height:0;max-width:0;color:transparent;">${escapeHtml(
+        preheader
+      )}</div>`
+    : '';
+  if (directHtml) return `${preheaderHtml}${sanitizeEmailHtml(directHtml)}`;
+  const body = template.blocks.map((block) => wrapBlockHtml(block, theme)).filter(Boolean).join('\n');
+  return `<div style="margin:0;padding:28px 12px;background:${escapeHtml(theme.bodyBackground)};">${preheaderHtml}<div style="max-width:${theme.width}px;margin:0 auto;background:${escapeHtml(
+    theme.contentBackground
+  )};font-family:${escapeHtml(theme.fontFamily)};color:${escapeHtml(theme.textColor)};line-height:1.6;border-radius:20px;overflow:hidden;border:1px solid rgba(148,163,184,0.16);box-shadow:0 14px 40px rgba(15,23,42,0.08);"><div style="padding:24px;">${body}</div></div></div>`;
 };
 
 export const renderEmailTemplateText = (template: EmailBuilderTemplate) =>
@@ -409,16 +517,22 @@ export const saveEmailBuilderTemplate = async (
     id: template.id || crypto.randomUUID(),
     name: normalizeTemplateName(template.name || ''),
     subject: normalizeTemplateSubject(template.subject || ''),
+    preheader: String(template.preheader || '').trim(),
     blocks: normalizeBlocks(template.blocks),
+    rawHtml: sanitizeEmailHtml(String(template.rawHtml || '')) || undefined,
     audience: template.audience || DEFAULT_AUDIENCE,
     voice: template.voice || DEFAULT_VOICE,
     goal: template.goal || DEFAULT_GOAL,
+    theme: normalizeTheme(template.theme),
   };
 
-  const html = renderEmailTemplateHtml(normalizedTemplate);
-  const text = renderEmailTemplateText(normalizedTemplate);
   const isHtml = normalizedTemplate.format === 'html';
-  const content = isHtml ? `${html}\n${serializeBuilderState(normalizedTemplate)}` : text;
+  const html = renderEmailTemplateHtml(normalizedTemplate);
+  const text =
+    normalizedTemplate.rawHtml && normalizedTemplate.blocks.length === 0
+      ? stripHtml(html)
+      : renderEmailTemplateText(normalizedTemplate);
+  const content = `${isHtml ? html : text}\n${serializeBuilderState(normalizedTemplate)}`;
 
   const { data, error } = await supabase
     .from('email_templates')
@@ -439,7 +553,25 @@ export const saveEmailBuilderTemplate = async (
     .single();
 
   if (error) throw error;
-  return toTemplate(data);
+  const savedTemplate = toTemplate(data);
+
+  // Fire-and-forget indexing to keep save UX fast while enabling pgvector retrieval.
+  void indexAiBuilderObject({
+    mode: 'email',
+    objectId: savedTemplate.id,
+    text: buildEmailEmbeddingText(savedTemplate),
+    metadata: {
+      name: savedTemplate.name,
+      subject: savedTemplate.subject,
+      audience: savedTemplate.audience,
+      voice: savedTemplate.voice,
+      goal: savedTemplate.goal,
+    },
+  }).catch((error) => {
+    console.warn('AI indexing skipped for email template:', error?.message || error);
+  });
+
+  return savedTemplate;
 };
 
 export const deleteEmailBuilderTemplate = async (templateId: string) => {

@@ -8,6 +8,7 @@
     "build": "vite build",
     "build:dev": "vite build --mode development",
     "lint": "eslint .",
+    "test": "node --test \"server/tests/*.test.js\"",
     "preview": "vite preview",
     "mailbox:server": "node server/mailbox-sync-server.js",
     "dev:all": "concurrently \"npm:mailbox:server\" \"npm:dev\"",

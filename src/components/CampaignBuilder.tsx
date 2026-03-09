@@ -21,6 +21,8 @@ import { Separator } from "@/components/ui/separator";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from '@/components/ui/dialog';
 import { cn } from '@/lib/utils';
 import { getBillingSnapshot } from '@/lib/billing';
+import { submitApprovalRequest } from '@/lib/teamManagement';
+import { useWorkspace } from '@/providers/WorkspaceProvider';
 import {
   ensureDefaultPipeline,
   fetchPipelineStages,
@@ -170,6 +172,7 @@ const resolveCampaignErrorMessage = (error: any) => {
 
 const CampaignBuilder: React.FC<CampaignBuilderProps> = ({ emailConfigs }) => {
   const navigate = useNavigate();
+  const { workspace } = useWorkspace();
   const [currentStep, setCurrentStep] = useState(1);
   const [form, setForm] = useState({
     name: '',
@@ -220,6 +223,7 @@ const CampaignBuilder: React.FC<CampaignBuilderProps> = ({ emailConfigs }) => {
     selectedPipelineStages.find((stage) => stage.id === pipelineConfig.initialStageId) ||
     selectedPipelineStages[0] ||
     null;
+  const requiresCampaignApproval = Boolean(workspace?.requiresApproval?.campaign);
   const headerStats = [
     {
       label: 'Recipients',
@@ -485,7 +489,9 @@ const CampaignBuilder: React.FC<CampaignBuilderProps> = ({ emailConfigs }) => {
   };
 
   const handleSave = async (isDraft = true) => {
-    const statusToUse = scheduledAt ? 'scheduled' : (isDraft ? 'draft' : 'ready');
+    const desiredStatus = scheduledAt ? 'scheduled' : 'ready';
+    const shouldSubmitForApproval = !isDraft && requiresCampaignApproval;
+    const statusToUse = shouldSubmitForApproval ? 'draft' : (scheduledAt ? 'scheduled' : (isDraft ? 'draft' : 'ready'));
     setLoading(true);
 
     try {
@@ -661,8 +667,28 @@ const CampaignBuilder: React.FC<CampaignBuilderProps> = ({ emailConfigs }) => {
             }
           } else {
             fetchMore = false;
-          }
-          }
+        }
+      }
+
+      if (shouldSubmitForApproval) {
+        try {
+          await submitApprovalRequest('campaign', campaign.id, {
+            reason: scheduledAt ? 'Scheduled campaign launch request' : 'Campaign launch request',
+            metadata: {
+              desired_status: desiredStatus,
+              source: 'campaign_builder',
+              audience_type: audienceType,
+            }
+          });
+        } catch (approvalError) {
+          console.error('Campaign approval submission failed:', approvalError);
+          toast({
+            title: 'Campaign saved as draft',
+            description: `Approval submission failed: ${String((approvalError as Error)?.message || approvalError)}`,
+            variant: 'destructive',
+          });
+        }
+      }
           if (allProspects.length > 0) {
             const flattenedProspects = allProspects.flatMap((item: any) => {
               const prospect = item.prospects;
@@ -798,7 +824,9 @@ const CampaignBuilder: React.FC<CampaignBuilderProps> = ({ emailConfigs }) => {
 
       toast({
         title: "Success",
-        description: `Campaign ${isDraft ? 'saved as draft' : 'launched successfully'}!`,
+        description: shouldSubmitForApproval
+          ? 'Campaign submitted for approval.'
+          : `Campaign ${isDraft ? 'saved as draft' : 'launched successfully'}!`,
       });
 
       // Reset form
@@ -942,17 +970,21 @@ const CampaignBuilder: React.FC<CampaignBuilderProps> = ({ emailConfigs }) => {
                   {emailConfigs.map((config) => {
                     const isSelected = selectedConfigs.some(c => c.configId === config.id);
                     const selectedConfig = selectedConfigs.find(c => c.configId === config.id);
+                    const isAvailable = config.is_active !== false;
                     
                     return (
                       <div 
                         key={config.id} 
                         className={cn(
-                          "flex items-center justify-between p-3 rounded-xl border transition-all cursor-pointer",
+                          "flex items-center justify-between p-3 rounded-xl border transition-all",
+                          !isAvailable && "cursor-not-allowed opacity-60",
+                          isAvailable && "cursor-pointer",
                           isSelected
                             ? "bg-white/90 border-emerald-200 shadow-sm ring-1 ring-emerald-100"
                             : "hover:bg-white/90 border-transparent hover:border-slate-200"
                         )}
                         onClick={() => {
+                            if (!isAvailable) return;
                             if (isSelected) {
                                 setSelectedConfigs(selectedConfigs.filter(c => c.configId !== config.id));
                             } else {
@@ -969,7 +1001,10 @@ const CampaignBuilder: React.FC<CampaignBuilderProps> = ({ emailConfigs }) => {
                           </div>
                           <div className="flex flex-col">
                             <span className="font-medium text-[var(--builder-ink)]">{config.smtp_username}</span>
-                            <span className="text-xs text-[var(--builder-muted)]">{config.smtp_host}</span>
+                            <span className="text-xs text-[var(--builder-muted)]">
+                              {config.smtp_host}
+                              {!isAvailable ? ' • Pending activation approval' : ''}
+                            </span>
                           </div>
                         </div>
                         {isSelected && (
@@ -1765,7 +1800,11 @@ const CampaignBuilder: React.FC<CampaignBuilderProps> = ({ emailConfigs }) => {
               
               <div className="p-4 bg-amber-50 text-amber-800 rounded-xl text-xs border border-amber-100 leading-relaxed">
                 <p className="font-medium mb-1 flex items-center gap-1"><AlertCircle className="h-3 w-3" /> Important</p>
-                <p>Emails will be queued immediately. Ensure your sender accounts are warmed up and ready.</p>
+                <p>
+                  {requiresCampaignApproval
+                    ? 'This campaign will stay blocked until an approver reviews and approves the launch request.'
+                    : 'Emails will be queued immediately. Ensure your sender accounts are warmed up and ready.'}
+                </p>
               </div>
             </div>
           </div>
@@ -1953,7 +1992,7 @@ const CampaignBuilder: React.FC<CampaignBuilderProps> = ({ emailConfigs }) => {
                   className="bg-[var(--builder-ink)] hover:bg-black/90 text-white px-8 shadow-[0_12px_24px_rgba(15,23,42,0.25)]"
                 >
                   {loading ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : <Send className="h-4 w-4 mr-2" />}
-                  {loading ? 'Launching...' : 'Launch Campaign'}
+                  {loading ? 'Saving...' : requiresCampaignApproval ? 'Submit for Approval' : 'Launch Campaign'}
                 </Button>
               )}
             </div>

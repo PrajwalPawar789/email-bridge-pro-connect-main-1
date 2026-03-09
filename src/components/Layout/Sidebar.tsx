@@ -16,7 +16,8 @@ import {
   Inbox,
   PlugZap,
   Kanban,
-  Gift
+  Gift,
+  ShieldCheck
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import Logo from '../Logo';
@@ -65,6 +66,7 @@ const Sidebar = ({ activeTab, onTabChange, isCollapsed, toggleSidebar, user }: S
       label: 'System',
       items: [
         { id: 'integrations', label: 'Integrations', icon: PlugZap },
+        { id: 'team', label: 'Team', icon: ShieldCheck },
         { id: 'settings', label: 'Settings', icon: Settings, hasSubmenu: true }
       ]
     }
@@ -110,6 +112,10 @@ const Sidebar = ({ activeTab, onTabChange, isCollapsed, toggleSidebar, user }: S
                       onClick={() => {
                         if (item.id === 'referrals') {
                           navigate('/referrals');
+                          return;
+                        }
+                        if (item.id === 'team') {
+                          navigate('/team');
                           return;
                         }
                         onTabChange(item.id);

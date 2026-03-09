@@ -140,6 +140,7 @@ const Header = ({ user, onLogout, activeTab }: HeaderProps) => {
     templates: 'Templates',
     connect: 'Connect',
     integrations: 'Integrations',
+    team: 'Team',
     settings: 'Settings',
     subscription: 'Subscription',
     billing: 'Billing',

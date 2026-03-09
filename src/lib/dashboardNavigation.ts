@@ -31,6 +31,11 @@ export const handleDashboardTabNavigation = (navigate: NavigateFunction, tab: st
     return;
   }
 
+  if (tab === 'team') {
+    navigate('/team');
+    return;
+  }
+
   if (tab === 'email-builder' || tab === 'templates') {
     navigate('/email-builder');
     return;

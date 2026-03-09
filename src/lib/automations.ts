@@ -24,6 +24,10 @@ export type AutomationWorkflow = {
   name: string;
   description: string | null;
   status: AutomationWorkflowStatus;
+  approval_status: string | null;
+  approval_request_id: string | null;
+  approved_at: string | null;
+  approved_by_user_id: string | null;
   trigger_type: AutomationTriggerType;
   trigger_list_id: string | null;
   trigger_filters: Record<string, unknown> | null;

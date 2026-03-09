@@ -192,6 +192,57 @@ const refundUserCredits = async (
   return Number(row?.credits_remaining ?? NaN);
 };
 
+const consumeUserSendQuota = async (
+  userId: string,
+  amount: number,
+  eventType: string,
+  referenceId: string,
+  metadata: Record<string, unknown> = {}
+) => {
+  const { data, error } = await admin.rpc("consume_user_send_quota", {
+    p_amount: amount,
+    p_event_type: eventType,
+    p_reference_id: referenceId,
+    p_metadata: metadata,
+    p_user_id: userId,
+  });
+
+  if (error) {
+    throw new Error(`Send quota consumption failed: ${error.message}`);
+  }
+
+  const row = Array.isArray(data) ? data[0] : data;
+  return {
+    allowed: Boolean(row?.allowed),
+    sendsRemaining: row?.sends_remaining === null ? null : Number(row?.sends_remaining ?? 0),
+    message: String(row?.message || ""),
+  };
+};
+
+const refundUserSendQuota = async (
+  userId: string,
+  amount: number,
+  eventType: string,
+  referenceId: string,
+  metadata: Record<string, unknown> = {}
+) => {
+  const { data, error } = await admin.rpc("refund_user_send_quota", {
+    p_amount: amount,
+    p_event_type: eventType,
+    p_reference_id: referenceId,
+    p_metadata: metadata,
+    p_user_id: userId,
+  });
+
+  if (error) {
+    console.error("Send quota refund failed:", error.message);
+    return null;
+  }
+
+  const row = Array.isArray(data) ? data[0] : data;
+  return row?.sends_remaining === null ? null : Number(row?.sends_remaining ?? NaN);
+};
+
 const loadEmailConfig = async (userId: string, senderConfigId?: string) => {
   if (senderConfigId) {
     const { data, error } = await admin
@@ -199,6 +250,7 @@ const loadEmailConfig = async (userId: string, senderConfigId?: string) => {
       .select("id, smtp_host, smtp_port, smtp_username, smtp_password, security, sender_name")
       .eq("id", senderConfigId)
       .eq("user_id", userId)
+      .or("is_active.is.null,is_active.eq.true")
       .maybeSingle();
 
     if (error) throw new Error(error.message);
@@ -209,12 +261,13 @@ const loadEmailConfig = async (userId: string, senderConfigId?: string) => {
     .from("email_configs")
     .select("id, smtp_host, smtp_port, smtp_username, smtp_password, security, sender_name")
     .eq("user_id", userId)
+    .or("is_active.is.null,is_active.eq.true")
     .order("created_at", { ascending: false })
     .limit(1)
     .maybeSingle();
 
   if (error) throw new Error(error.message);
-  if (!data) throw new Error("No sender account is configured.");
+  if (!data) throw new Error("No active sender account is configured.");
   return data;
 };
 
@@ -725,6 +778,46 @@ const sendEmailForStep = async (
   const htmlBody = isHtml ? personalizedBody : formatPlainTextToHtml(personalizedBody);
 
   const creditReferenceId = `automation:${workflow.id}:${contact.id}:step:${nodeId || stepIndex}:${Date.now()}`;
+  const sendQuotaReferenceId = `automation:${workflow.id}:${contact.id}:step:${nodeId || stepIndex}:send-quota`;
+  const sendQuotaMetadata = {
+    source: "automation",
+    workflow_id: workflow.id,
+    workflow_name: workflow.name,
+    contact_id: contact.id,
+    step_index: stepIndex,
+    node_id: nodeId || null,
+    sender_config_id: sender.id,
+    recipient: contact.email,
+  };
+  const sendQuotaResult = await consumeUserSendQuota(
+    workflow.user_id,
+    1,
+    "automation_email_send_quota",
+    sendQuotaReferenceId,
+    sendQuotaMetadata
+  );
+
+  if (!sendQuotaResult.allowed) {
+    await releaseContactForRetry(
+      contact.id,
+      addMinutes(new Date(), CREDIT_RETRY_MINUTES),
+      sendQuotaResult.message || "Daily send limit reached",
+      state
+    );
+    await logAutomationEvent(
+      workflow,
+      contact.id,
+      "send_quota_blocked",
+      stepIndex,
+      "Paused send because the daily send limit is exhausted.",
+      {
+        sends_remaining: sendQuotaResult.sendsRemaining,
+        node_id: nodeId || null,
+      }
+    );
+    return { sent: 0, creditBlocked: 1 };
+  }
+
   const creditResult = await consumeUserCredits(
     workflow.user_id,
     CREDIT_COST_PER_EMAIL,
@@ -743,6 +836,16 @@ const sendEmailForStep = async (
   );
 
   if (!creditResult.allowed) {
+    await refundUserSendQuota(
+      workflow.user_id,
+      1,
+      "automation_email_send_quota_refund",
+      sendQuotaReferenceId,
+      {
+        ...sendQuotaMetadata,
+        reason: "credit_blocked",
+      }
+    );
     await releaseContactForRetry(
       contact.id,
       addMinutes(new Date(), CREDIT_RETRY_MINUTES),
@@ -764,6 +867,7 @@ const sendEmailForStep = async (
   }
 
   let creditDebited = true;
+  let sendQuotaReserved = true;
   try {
     const smtpPort = Number(sender.smtp_port || 587);
     const transporter = createTransport({
@@ -889,6 +993,20 @@ const sendEmailForStep = async (
 
     return { sent: 1 };
   } catch (error) {
+    if (sendQuotaReserved) {
+      await refundUserSendQuota(
+        workflow.user_id,
+        1,
+        "automation_email_send_quota_refund",
+        sendQuotaReferenceId,
+        {
+          ...sendQuotaMetadata,
+          reason: "send_failure",
+          error: getErrorMessage(error),
+        }
+      );
+    }
+
     if (creditDebited) {
       await refundUserCredits(
         workflow.user_id,
