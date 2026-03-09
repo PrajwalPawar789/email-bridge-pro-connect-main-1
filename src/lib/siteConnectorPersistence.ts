@@ -84,14 +84,21 @@ const inferSubdomainHostLabel = (domain: string) => {
   return labels.slice(0, -2).join('.');
 };
 
+const normalizeDnsTargetValue = (value: string) => value.trim().toLowerCase().replace(/\.$/, '');
+
 const defaultTargetA = (import.meta.env.VITE_SITE_CONNECTOR_TARGET_A || '185.158.133.1').trim();
+const defaultTargetCname = normalizeDnsTargetValue(import.meta.env.VITE_SITE_CONNECTOR_TARGET_CNAME || '');
 const defaultDnsRecords = (domain: string, type: SiteDomainType) => {
   const hostLabel = type === 'subdomain' ? inferSubdomainHostLabel(domain) : '';
   const aName = type === 'subdomain' && hostLabel ? hostLabel : '@';
   const txtName = type === 'subdomain' && hostLabel ? `_verify.${hostLabel}` : '_verify';
+  const routingRecord =
+    type === 'subdomain' && hostLabel && defaultTargetCname
+      ? { type: 'CNAME', name: hostLabel, value: defaultTargetCname, verified: false }
+      : { type: 'A', name: aName, value: defaultTargetA, verified: false };
 
   return [
-    { type: 'A', name: aName, value: defaultTargetA, verified: false },
+    routingRecord,
     { type: 'TXT', name: txtName, value: `verify_${crypto.randomUUID().slice(0, 8)}`, verified: false },
   ];
 };
