@@ -86,16 +86,21 @@ const inferSubdomainHostLabel = (domain: string) => {
 
 const normalizeDnsTargetValue = (value: string) => value.trim().toLowerCase().replace(/\.$/, '');
 
-const defaultTargetA = (import.meta.env.VITE_SITE_CONNECTOR_TARGET_A || '185.158.133.1').trim();
-const defaultTargetCname = normalizeDnsTargetValue(import.meta.env.VITE_SITE_CONNECTOR_TARGET_CNAME || '');
+const defaultTargetA = (import.meta.env.VITE_SITE_CONNECTOR_TARGET_A || '76.76.21.21').trim();
+const defaultTargetCname = normalizeDnsTargetValue(
+  import.meta.env.VITE_SITE_CONNECTOR_TARGET_CNAME || 'cname.vercel-dns.com'
+);
+const defaultVerifyTxtPrefix = normalizeDnsTargetValue(
+  import.meta.env.VITE_SITE_CONNECTOR_VERIFY_TXT_PREFIX || '_verify'
+);
+
 const defaultDnsRecords = (domain: string, type: SiteDomainType) => {
   const hostLabel = type === 'subdomain' ? inferSubdomainHostLabel(domain) : '';
-  const aName = type === 'subdomain' && hostLabel ? hostLabel : '@';
-  const txtName = type === 'subdomain' && hostLabel ? `_verify.${hostLabel}` : '_verify';
+  const txtName = type === 'subdomain' && hostLabel ? `${defaultVerifyTxtPrefix}.${hostLabel}` : defaultVerifyTxtPrefix;
   const routingRecord =
     type === 'subdomain' && hostLabel && defaultTargetCname
       ? { type: 'CNAME', name: hostLabel, value: defaultTargetCname, verified: false }
-      : { type: 'A', name: aName, value: defaultTargetA, verified: false };
+      : { type: 'A', name: '@', value: defaultTargetA, verified: false };
 
   return [
     routingRecord,
@@ -155,7 +160,12 @@ export const addSiteDomain = async (domain: string, type: SiteDomainType): Promi
     .single();
 
   if (error) throw error;
-  return toDomainRecord(data);
+
+  try {
+    return await verifySiteDomain(String(data.id));
+  } catch {
+    return toDomainRecord(data);
+  }
 };
 
 export const removeSiteDomain = async (domainId: string) => {

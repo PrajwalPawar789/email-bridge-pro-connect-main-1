@@ -16,21 +16,45 @@ const PLAN_EXPECTATIONS = {
     mailboxLimit: 1,
     campaignLimit: 3,
     creditsInPeriod: 2000,
+    features: {
+      team_roles: false,
+      team_approvals: false,
+      audit_logs: false,
+      api_webhooks: false,
+    },
   },
   growth: {
     mailboxLimit: 5,
     campaignLimit: 25,
     creditsInPeriod: 100000,
+    features: {
+      team_roles: true,
+      team_approvals: false,
+      audit_logs: false,
+      api_webhooks: true,
+    },
   },
   scale: {
     mailboxLimit: 20,
     campaignLimit: 100,
     creditsInPeriod: 300000,
+    features: {
+      team_roles: true,
+      team_approvals: true,
+      audit_logs: true,
+      api_webhooks: true,
+    },
   },
   enterprise: {
     mailboxLimit: null,
     campaignLimit: null,
     creditsInPeriod: 0,
+    features: {
+      team_roles: true,
+      team_approvals: true,
+      audit_logs: true,
+      api_webhooks: true,
+    },
   },
 };
 
@@ -258,6 +282,27 @@ const verifyCreditConsumption = async (client, userId, creditsInPeriod) => {
   console.log('  - PASS: Credits debit, refund, and insufficient-credit blocking work as expected.');
 };
 
+const verifyPlanFeatureMatrix = async (client, userId, expectedFeatures) => {
+  console.log('[check] Workspace feature entitlements');
+
+  for (const [feature, expected] of Object.entries(expectedFeatures || {})) {
+    const { data, error } = await client.rpc('workspace_plan_supports_feature', {
+      p_user_id: userId,
+      p_feature: feature,
+    });
+
+    if (error) {
+      throw new Error(
+        `workspace_plan_supports_feature failed for "${feature}": ${error.message}. Apply the latest workspace plan-enforcement migration before running this smoke test.`
+      );
+    }
+
+    assertEqual(Boolean(toSingleRow(data)), expected, `Feature entitlement mismatch for ${feature}`);
+  }
+
+  console.log('  - PASS: Workspace feature matrix matches the subscription plan.');
+};
+
 export const runPlanSmokeTest = async ({
   planId,
   billingCycle = 'monthly',
@@ -299,6 +344,7 @@ export const runPlanSmokeTest = async ({
     assertEqual(Number(snapshot.credits_in_period || 0), expected.creditsInPeriod, 'Credits in period mismatch');
     console.log('[check] Billing snapshot limits match expected plan values');
 
+    await verifyPlanFeatureMatrix(admin, userId, expected.features);
     await verifyCampaignConstraint(admin, userId, expected.campaignLimit);
     await verifyMailboxConstraint(admin, userId, expected.mailboxLimit);
     await verifyCreditConsumption(admin, userId, expected.creditsInPeriod);

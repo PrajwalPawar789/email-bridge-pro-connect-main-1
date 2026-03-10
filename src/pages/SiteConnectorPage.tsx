@@ -16,6 +16,12 @@ const inferSubdomainHostLabel = (domain: string) => {
   return labels.slice(0, -2).join('.');
 };
 
+const inferZoneRoot = (domain: string) => {
+  const labels = domain.trim().toLowerCase().split('.').filter(Boolean);
+  if (labels.length <= 2) return domain.trim().toLowerCase();
+  return labels.slice(-2).join('.');
+};
+
 export default function SiteConnectorPage() {
   const {
     domains,
@@ -98,20 +104,35 @@ export default function SiteConnectorPage() {
     domainType: 'root' | 'subdomain',
     record: { type: string; name: string }
   ) => {
-    if (domainType !== 'subdomain') return record.name;
-
-    const hostLabel = inferSubdomainHostLabel(domainName);
-    if (!hostLabel) return record.name;
-
     const normalizedType = record.type.toUpperCase();
-    const normalizedName = record.name.trim();
-    if (normalizedType === 'A' && normalizedName === '@') {
+    const normalizedDomain = domainName.trim().toLowerCase();
+    const normalizedName = record.name.trim().toLowerCase();
+    const zoneRoot = inferZoneRoot(normalizedDomain);
+
+    if (normalizedName === '@') {
+      if (domainType !== 'subdomain') return '@';
+      const hostLabel = inferSubdomainHostLabel(normalizedDomain);
+      return hostLabel || '@';
+    }
+
+    if (normalizedName === normalizedDomain) {
+      if (domainType !== 'subdomain') return '@';
+      const hostLabel = inferSubdomainHostLabel(normalizedDomain);
       return hostLabel;
     }
-    if (normalizedType === 'TXT' && normalizedName === '_verify') {
-      return `_verify.${hostLabel}`;
+
+    if (normalizedName.endsWith(`.${zoneRoot}`)) {
+      return normalizedName.slice(0, -(zoneRoot.length + 1));
     }
-    return normalizedName;
+
+    if (domainType === 'subdomain' && normalizedType === 'TXT' && normalizedName === '_verify') {
+      const hostLabel = inferSubdomainHostLabel(normalizedDomain);
+      if (hostLabel) {
+        return `_verify.${hostLabel}`;
+      }
+    }
+
+    return record.name.trim();
   };
 
   if (isLoading) {

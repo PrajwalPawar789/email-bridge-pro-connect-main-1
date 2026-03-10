@@ -50,7 +50,7 @@ const formatEventType = (value: string) =>
 
 const Spending = () => {
   const { user, loading } = useAuth();
-  const { hasPermission } = useWorkspace();
+  const { workspace, hasPermission } = useWorkspace();
   const navigate = useNavigate();
   const [activeTab] = useState('spending');
 
@@ -60,10 +60,14 @@ const Spending = () => {
   const [ledgerPage, setLedgerPage] = useState(1);
   const [transactions, setTransactions] = useState<BillingTransactionRow[]>([]);
   const [teamRollup, setTeamRollup] = useState<WorkspaceSpendingRollup | null>(null);
+  const teamRolesEnabled = workspace ? workspace.planFeatures?.teamRoles !== false : true;
   const canViewTeamRollup =
-    hasPermission('manage_workspace') ||
-    hasPermission('view_workspace_dashboard') ||
-    hasPermission('view_team_dashboard');
+    teamRolesEnabled &&
+    (
+      hasPermission('manage_workspace') ||
+      hasPermission('view_workspace_dashboard') ||
+      hasPermission('view_team_dashboard')
+    );
 
   const handleTabChange = (tab: string) => {
     if (tab === 'home') navigate('/dashboard');

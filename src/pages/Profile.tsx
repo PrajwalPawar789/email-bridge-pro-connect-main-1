@@ -27,6 +27,7 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { getBillingSnapshot, normalizePlanId, type BillingSnapshot } from '@/lib/billing';
+import { useWorkspace } from '@/providers/WorkspaceProvider';
 
 type ProfileSnapshot = {
   email: string;
@@ -113,8 +114,11 @@ const Profile = () => {
   const [profileBaseline, setProfileBaseline] = useState<ProfileSnapshot | null>(null);
 
   const { user, loading: authLoading } = useAuth();
+  const { workspace, loading: workspaceLoading } = useWorkspace();
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const navigate = useNavigate();
+  const canManageBilling = !workspace || workspace.role === 'owner' || workspace.canManageBilling;
+  const isManagedSeat = Boolean(workspace && !canManageBilling);
 
   const applySnapshot = useCallback((snapshot: ProfileSnapshot) => {
     setEmail(snapshot.email);
@@ -439,7 +443,7 @@ const Profile = () => {
     toast({ title: 'Logged out', description: 'You have been logged out.' });
   };
 
-  if (authLoading) {
+  if (authLoading || workspaceLoading) {
     return (
       <div className="min-h-screen flex items-center justify-center">
         <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600"></div>
@@ -864,7 +868,9 @@ const Profile = () => {
               <div className="relative z-10">
                 <div className="flex items-start justify-between gap-3">
                   <div>
-                    <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">Current Plan</p>
+                    <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">
+                      {isManagedSeat ? 'Workspace Plan' : 'Current Plan'}
+                    </p>
                     <h3 className="mt-1 text-2xl font-semibold text-slate-900">{planName}</h3>
                   </div>
                   <span className={`rounded-full border px-2.5 py-1 text-[11px] font-semibold ${statusBadgeClass}`}>
@@ -911,13 +917,19 @@ const Profile = () => {
                   </div>
                 </div>
 
-                <Button
-                  type="button"
-                  className="mt-5 w-full bg-[var(--shell-accent)] text-white hover:bg-emerald-700"
-                  onClick={() => navigate('/subscription')}
-                >
-                  Manage Subscription
-                </Button>
+                {isManagedSeat ? (
+                  <div className="mt-5 rounded-xl border border-slate-200/80 bg-white/75 px-3 py-3 text-sm text-slate-600">
+                    Subscription changes and payment methods are managed by the workspace owner or billing admin for this seat.
+                  </div>
+                ) : (
+                  <Button
+                    type="button"
+                    className="mt-5 w-full bg-[var(--shell-accent)] text-white hover:bg-emerald-700"
+                    onClick={() => navigate('/subscription')}
+                  >
+                    Manage Subscription
+                  </Button>
+                )}
               </div>
             </section>
 
@@ -984,14 +996,22 @@ const Profile = () => {
               </div>
 
               <div className="space-y-3">
-                <Button type="button" variant="outline" className="w-full justify-start" onClick={() => navigate('/billing')}>
-                  <CreditCard className="mr-2 h-4 w-4" />
-                  Open Billing Center
-                </Button>
-                <Button type="button" variant="outline" className="w-full justify-start" onClick={() => navigate('/spending')}>
-                  <BarChart3 className="mr-2 h-4 w-4" />
-                  Review Spending History
-                </Button>
+                {canManageBilling ? (
+                  <>
+                    <Button type="button" variant="outline" className="w-full justify-start" onClick={() => navigate('/billing')}>
+                      <CreditCard className="mr-2 h-4 w-4" />
+                      Open Billing Center
+                    </Button>
+                    <Button type="button" variant="outline" className="w-full justify-start" onClick={() => navigate('/spending')}>
+                      <BarChart3 className="mr-2 h-4 w-4" />
+                      Review Spending History
+                    </Button>
+                  </>
+                ) : (
+                  <div className="rounded-xl border border-slate-200/80 bg-slate-50 px-3 py-3 text-sm text-slate-600">
+                    Billing actions are unavailable on workspace-managed seats.
+                  </div>
+                )}
                 <Button
                   type="button"
                   variant="outline"

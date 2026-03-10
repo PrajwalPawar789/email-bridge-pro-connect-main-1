@@ -42,6 +42,56 @@ const getErrorMessage = (error: unknown) => {
   }
 };
 
+const normalizeAppUrl = (value: string) => {
+  const normalized = String(value || "").trim();
+  if (!normalized) return "";
+
+  try {
+    const url = new URL(normalized);
+    url.search = "";
+    url.hash = "";
+    url.pathname = url.pathname.replace(/\/+$/, "");
+    return url.toString().replace(/\/+$/, "");
+  } catch {
+    return "";
+  }
+};
+
+const resolveAppUrl = (req: Request, configuredAppUrl: string) => {
+  const fromConfig = normalizeAppUrl(configuredAppUrl);
+  if (fromConfig) return fromConfig;
+
+  const fromOrigin = normalizeAppUrl(req.headers.get("origin") || "");
+  if (fromOrigin) return fromOrigin;
+
+  const referer = String(req.headers.get("referer") || "").trim();
+  if (referer) {
+    try {
+      const url = new URL(referer);
+      url.search = "";
+      url.hash = "";
+      url.pathname = "";
+      return url.toString().replace(/\/+$/, "");
+    } catch {
+      // Ignore invalid referer values.
+    }
+  }
+
+  return "";
+};
+
+const buildInviteRedirectTo = (appUrl: string) => {
+  const normalized = normalizeAppUrl(appUrl);
+  if (!normalized) return "";
+
+  const url = new URL(normalized);
+  url.pathname = `${url.pathname.replace(/\/+$/, "")}/auth/confirm`.replace(/\/{2,}/g, "/");
+  url.search = "";
+  url.hash = "";
+  url.searchParams.set("next", "/auth?mode=invite");
+  return url.toString();
+};
+
 const getBearerToken = (req: Request) => {
   const authHeader = req.headers.get("Authorization") || req.headers.get("authorization") || "";
   if (!authHeader.toLowerCase().startsWith("bearer ")) return "";
@@ -133,9 +183,44 @@ serve(async (req: Request) => {
       return jsonResponse({ error: "You do not have permission to invite this role" }, 403, req);
     }
 
+    const [{ data: teamRolesEnabled }, { data: teamApprovalsEnabled }] = await Promise.all([
+      admin.rpc("workspace_plan_supports_feature", {
+        p_user_id: actor.id,
+        p_feature: "team_roles",
+      }),
+      admin.rpc("workspace_plan_supports_feature", {
+        p_user_id: actor.id,
+        p_feature: "team_approvals",
+      }),
+    ]);
+
+    if (!teamRolesEnabled) {
+      return jsonResponse(
+        { error: "Team member management requires the Growth plan or higher" },
+        403,
+        req,
+      );
+    }
+
     if (actorMembership.role !== "owner" && role !== "user") {
       return jsonResponse(
         { error: "Only workspace owners can invite admins, sub-admins, or reviewers" },
+        403,
+        req,
+      );
+    }
+    if (
+      !teamApprovalsEnabled &&
+      (
+        role === "reviewer" ||
+        assignedReviewerUserId ||
+        payload.requireCampaignApproval === true ||
+        payload.requireSenderApproval === true ||
+        payload.requireAutomationApproval === true
+      )
+    ) {
+      return jsonResponse(
+        { error: "Reviewer roles and approval policies require the Scale plan or higher" },
         403,
         req,
       );
@@ -193,6 +278,20 @@ serve(async (req: Request) => {
           : Number(payload.maxAutomations),
     };
 
+    // Validate requested allocation with current parent and sibling capacity.
+    const { error: allocationError } = await admin.rpc('workspace_validate_invite_allocation', {
+      p_parent_user_id: parentUserId,
+      p_credits_allocated: allocationMetadata.credits_allocated,
+      p_max_active_campaigns: allocationMetadata.max_active_campaigns,
+      p_max_sender_accounts: allocationMetadata.max_sender_accounts,
+      p_daily_send_limit: allocationMetadata.daily_send_limit,
+      p_max_automations: allocationMetadata.max_automations,
+    });
+
+    if (allocationError) {
+      return jsonResponse({ error: getErrorMessage(allocationError) }, 400, req);
+    }
+
     const inviteData = {
       workspace_id: actorMembership.workspace_id,
       workspace_role: role,
@@ -222,8 +321,9 @@ serve(async (req: Request) => {
     const inviteOptions: Record<string, unknown> = {
       data: inviteData,
     };
-    if (appUrl) {
-      inviteOptions.redirectTo = `${appUrl.replace(/\/+$/, "")}/auth`;
+    const inviteRedirectTo = buildInviteRedirectTo(resolveAppUrl(req, appUrl));
+    if (inviteRedirectTo) {
+      inviteOptions.redirectTo = inviteRedirectTo;
     }
 
     const { data: inviteDataResult, error: inviteError } = await admin.auth.admin.inviteUserByEmail(

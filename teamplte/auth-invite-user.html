@@ -30,9 +30,10 @@
         </svg>
         EmailBridge</a></td></tr>
       <tr><td class="content"><h1 style="margin:0 0 16px 0;font-size:24px;color:#0f172a">You're invited to join {{ .OrganizationName }}</h1>
-        <p style="color:#334155;font-size:16px;line-height:24px;margin:0 0 24px 0">{{ .Inviter }} invited you to join their team on EmailBridge. Click the button below to accept the invitation and create your account.</p>
-        <table width="100%" border="0" cellspacing="0" cellpadding="0"><tr><td align="left"><a href="{{ .InviteURL }}" class="btn-primary">Accept Invitation</a></td></tr></table>
+        <p style="color:#334155;font-size:16px;line-height:24px;margin:0 0 24px 0">{{ .Inviter }} invited you to join their team on EmailBridge. Click the button below to accept the invitation and create your password.</p>
+        <table width="100%" border="0" cellspacing="0" cellpadding="0"><tr><td align="left"><a href="{{ .RedirectTo }}&amp;token_hash={{ .TokenHash }}&amp;type=invite" class="btn-primary">Accept Invitation &amp; Set Password</a></td></tr></table>
         <br>
+        <p style="font-size:14px;color:#64748b;margin:0 0 16px 0;">If the button above doesn't work, copy and paste this secure link into your browser:<br><a href="{{ .RedirectTo }}&amp;token_hash={{ .TokenHash }}&amp;type=invite" style="color:#00d6a2;word-break:break-all;">{{ .RedirectTo }}&amp;token_hash={{ .TokenHash }}&amp;type=invite</a></p>
         <p style="font-size:14px;color:#64748b">If you don't expect this invitation, you can ignore this email.</p>
       </td></tr>
     </table>

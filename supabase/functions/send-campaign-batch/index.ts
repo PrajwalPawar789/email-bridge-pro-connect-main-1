@@ -383,10 +383,11 @@ const addTrackingToLinks = (htmlContent: string, campaignId: string, recipientId
   const trackingUrls: string[] = [];
   let urlCounter = 0;
 
-  // Regex to match URLs inside href attributes OR naked URLs
+  // Regex to match URLs inside href attributes OR naked URLs.
+  // Also supports bare www.example.com values by normalizing them to https://.
   // Group 1, 2, 3: href="url"
   // Group 4: naked url
-  const regex = /(href\s*=\s*["'])(https?:\/\/[^\s"']+)(["'])|(https?:\/\/[^\s<>"']+)/gi;
+  const regex = /(href\s*=\s*["'])((?:https?:\/\/|www\.)[^\s"']+)(["'])|((?:https?:\/\/|www\.)[^\s<>"']+)/gi;
 
   const modifiedContent = htmlContent.replace(
     regex,
@@ -396,7 +397,8 @@ const addTrackingToLinks = (htmlContent: string, campaignId: string, recipientId
       const originalUrl = hrefUrl || nakedUrl;
       if (!originalUrl) return match;
 
-      const encodedUrl = encodeURIComponent(originalUrl);
+      const normalizedUrl = /^www\./i.test(originalUrl) ? `https://${originalUrl}` : originalUrl;
+      const encodedUrl = encodeURIComponent(normalizedUrl);
       const trackingUrl = `${SUPABASE_URL}/functions/v1/track-email-click?campaign_id=${campaignId}&recipient_id=${recipientId}&url=${encodedUrl}&step=${step}`;
       trackingUrls.push(trackingUrl);
       
@@ -804,19 +806,25 @@ const processBatch = async (
       console.log('No recipients found for this step.');
       
       if (step === 0) {
-        // Check if there are ANY pending recipients left for this campaign
-        const { count } = await supabase
+        const { count: pendingCount } = await supabase
           .from('recipients')
           .select('id', { count: 'exact', head: true })
           .eq('campaign_id', campaignId)
           .or('status.is.null,status.eq.pending');
 
-        if (count === 0) {
-          // Only mark as sent if truly no one is left pending
+        if (pendingCount === 0) {
+          const { count: failedCount } = await supabase
+            .from('recipients')
+            .select('id', { count: 'exact', head: true })
+            .eq('campaign_id', campaignId)
+            .eq('status', 'failed');
+
+          const terminalStatus = (failedCount || 0) > 0 ? 'failed' : 'sent';
+
           await supabase
             .from('campaigns')
-            .update({ 
-              status: 'sent',
+            .update({
+              status: terminalStatus,
               updated_at: new Date().toISOString()
             })
             .eq('id', campaignId);

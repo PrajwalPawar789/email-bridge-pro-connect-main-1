@@ -64,19 +64,32 @@ const Team = () => {
   const [approvalDialogBusy, setApprovalDialogBusy] = useState(false);
 
   const activeTab = searchParams.get("tab") || "overview";
+  const teamRolesEnabled = workspace ? workspace.planFeatures?.teamRoles !== false : true;
+  const teamApprovalsEnabled = workspace ? workspace.planFeatures?.teamApprovals !== false : true;
+  const auditLogsEnabled = workspace ? workspace.planFeatures?.auditLogs !== false : true;
   const canViewDashboard =
-    hasPermission("view_workspace_dashboard") ||
-    hasPermission("view_team_dashboard") ||
-    hasPermission("manage_workspace");
+    teamRolesEnabled &&
+    (hasPermission("view_workspace_dashboard") ||
+      hasPermission("view_team_dashboard") ||
+      hasPermission("manage_workspace"));
   const canManageMembers =
-    hasPermission("manage_workspace") ||
-    hasPermission("create_admin") ||
-    hasPermission("create_user");
+    teamRolesEnabled &&
+    (hasPermission("manage_workspace") ||
+      hasPermission("create_admin") ||
+      hasPermission("create_user"));
   const canReviewApprovals =
-    hasPermission("manage_workspace") ||
-    hasPermission("approve_campaign") ||
-    hasPermission("approve_sender");
-  const canViewAudit = hasPermission("manage_workspace") || hasPermission("view_audit_logs");
+    teamApprovalsEnabled &&
+    (hasPermission("manage_workspace") ||
+      hasPermission("approve_campaign") ||
+      hasPermission("approve_sender"));
+  const canViewAudit =
+    auditLogsEnabled && (hasPermission("manage_workspace") || hasPermission("view_audit_logs"));
+  const availableTabs = useMemo(() => {
+    const tabs = ["overview", "members", "spending"];
+    if (teamApprovalsEnabled) tabs.push("approvals");
+    if (auditLogsEnabled) tabs.push("audit");
+    return tabs;
+  }, [auditLogsEnabled, teamApprovalsEnabled]);
 
   const handleTabChange = useCallback(
     (tab: string) => {
@@ -113,7 +126,7 @@ const Team = () => {
               approvalStatus: approvalFilter === "all" ? null : approvalFilter,
             })
           : Promise.resolve(null),
-        canViewDashboard || canReviewApprovals
+        teamApprovalsEnabled && (canViewDashboard || canReviewApprovals)
           ? getWorkspaceApprovalQueue(approvalFilter === "all" ? null : approvalFilter)
           : Promise.resolve([]),
         canViewAudit ? getWorkspaceAuditHistory(80) : Promise.resolve([]),
@@ -134,7 +147,7 @@ const Team = () => {
     } finally {
       setLoadingData(false);
     }
-  }, [approvalFilter, canManageMembers, canReviewApprovals, canViewAudit, canViewDashboard, days, user?.id, workspace]);
+  }, [approvalFilter, canManageMembers, canReviewApprovals, canViewAudit, canViewDashboard, days, teamApprovalsEnabled, user?.id, workspace]);
 
   useEffect(() => {
     if (!authLoading && !user) {
@@ -147,6 +160,11 @@ const Team = () => {
       void loadData();
     }
   }, [loadData, user, workspace]);
+
+  useEffect(() => {
+    if (availableTabs.includes(activeTab)) return;
+    setSearchParams({ tab: availableTabs[0] || "overview" }, { replace: true });
+  }, [activeTab, availableTabs, setSearchParams]);
 
   const summaryCards = useMemo(() => {
     const summary = dashboard?.summary;
@@ -163,12 +181,22 @@ const Team = () => {
         helper: `${Number(summary?.campaignsDraft ?? 0).toLocaleString()} drafts`,
         icon: Activity,
       },
-      {
-        label: "Pending approvals",
-        value: Number(summary?.approvalPending ?? 0).toLocaleString(),
-        helper: `${Number(summary?.approvalChangesRequested ?? 0).toLocaleString()} changes requested`,
-        icon: ShieldCheck,
-      },
+      teamApprovalsEnabled
+        ? {
+            label: "Pending approvals",
+            value: Number(summary?.approvalPending ?? 0).toLocaleString(),
+            helper: `${Number(summary?.approvalChangesRequested ?? 0).toLocaleString()} changes requested`,
+            icon: ShieldCheck,
+          }
+        : {
+            label: "Sends today",
+            value: Number(workspace?.snapshot.sendsToday ?? 0).toLocaleString(),
+            helper:
+              workspace?.snapshot.dailySendCap == null
+                ? "Unlimited daily cap"
+                : `${Number(workspace.snapshot.dailySendCap).toLocaleString()} daily cap`,
+            icon: Clock3,
+          },
       {
         label: "Scoped members",
         value: members.length.toLocaleString(),
@@ -176,7 +204,15 @@ const Team = () => {
         icon: Users,
       },
     ];
-  }, [dashboard?.summary, members, workspace?.snapshot.creditsRemaining, workspace?.snapshot.creditsUsed]);
+  }, [
+    dashboard?.summary,
+    members,
+    teamApprovalsEnabled,
+    workspace?.snapshot.creditsRemaining,
+    workspace?.snapshot.creditsUsed,
+    workspace?.snapshot.dailySendCap,
+    workspace?.snapshot.sendsToday,
+  ]);
 
   const highUtilizationMembers = useMemo(
     () =>
@@ -313,6 +349,29 @@ const Team = () => {
     );
   }
 
+  if (!teamRolesEnabled) {
+    return (
+      <DashboardLayout activeTab="team" onTabChange={handleTabChange} user={user} onLogout={handleLogout}>
+        <Card>
+          <CardHeader>
+            <CardTitle>Team access locked on this plan</CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-4 text-sm text-slate-600">
+            <p>
+              Team roles, scoped allocations, and workspace member management start on the Growth plan.
+            </p>
+            <div className="flex flex-wrap gap-3">
+              <Button onClick={() => navigate("/subscription")}>View plans</Button>
+              <Button variant="outline" onClick={() => navigate("/dashboard")}>
+                Back to dashboard
+              </Button>
+            </div>
+          </CardContent>
+        </Card>
+      </DashboardLayout>
+    );
+  }
+
   return (
     <DashboardLayout activeTab="team" onTabChange={handleTabChange} user={user} onLogout={handleLogout}>
       <div className="space-y-6">
@@ -380,9 +439,9 @@ const Team = () => {
           <TabsList className="flex h-auto flex-wrap justify-start gap-2 bg-transparent p-0">
             <TabsTrigger value="overview">Overview</TabsTrigger>
             <TabsTrigger value="members">Members</TabsTrigger>
-            <TabsTrigger value="approvals">Approvals</TabsTrigger>
+            {teamApprovalsEnabled ? <TabsTrigger value="approvals">Approvals</TabsTrigger> : null}
             <TabsTrigger value="spending">Spending</TabsTrigger>
-            <TabsTrigger value="audit">Audit</TabsTrigger>
+            {auditLogsEnabled ? <TabsTrigger value="audit">Audit</TabsTrigger> : null}
           </TabsList>
 
           <TabsContent value="overview" className="space-y-4">
@@ -435,6 +494,7 @@ const Team = () => {
               </Card>
 
               <div className="space-y-4">
+                {teamApprovalsEnabled ? (
                 <Card>
                   <CardHeader>
                     <CardTitle>Approval Queue</CardTitle>
@@ -456,6 +516,7 @@ const Team = () => {
                     {approvals.length === 0 ? <p className="text-sm text-slate-500">No approvals in scope.</p> : null}
                   </CardContent>
                 </Card>
+                ) : null}
 
                 <Card>
                   <CardHeader>
@@ -543,6 +604,7 @@ const Team = () => {
             </Card>
           </TabsContent>
 
+          {teamApprovalsEnabled ? (
           <TabsContent value="approvals" className="space-y-4">
             <Card>
               <CardHeader className="flex flex-row items-center justify-between">
@@ -607,6 +669,7 @@ const Team = () => {
               </CardContent>
             </Card>
           </TabsContent>
+          ) : null}
 
           <TabsContent value="spending" className="space-y-4">
             <div className="grid gap-4 md:grid-cols-3">
@@ -693,6 +756,7 @@ const Team = () => {
             </Card>
           </TabsContent>
 
+          {auditLogsEnabled ? (
           <TabsContent value="audit" className="space-y-4">
             <Card>
               <CardHeader>
@@ -723,6 +787,7 @@ const Team = () => {
               </CardContent>
             </Card>
           </TabsContent>
+          ) : null}
         </Tabs>
       </div>
 
@@ -731,6 +796,7 @@ const Team = () => {
         onOpenChange={setMemberDialogOpen}
         mode={memberDialogMode}
         actorRole={workspace.role}
+        supportsApprovalFlows={teamApprovalsEnabled}
         members={members}
         targetMember={selectedMember}
         defaultParentUserId={workspace.role === "owner" ? workspace.parentUserId || user.id : user.id}

@@ -6,6 +6,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { BrowserRouter, Routes, Route } from "react-router-dom";
 import RootPage from "./pages/RootPage";
 import Auth from "./pages/Auth";
+import AuthConfirm from "./pages/AuthConfirm";
 import Dashboard from "./pages/Dashboard";
 import Profile from "./pages/Profile";
 import Campaigns from "./pages/Campaigns";
@@ -27,6 +28,7 @@ import { AuthProvider } from "./providers/AuthProvider";
 import { WorkspaceProvider } from "./providers/WorkspaceProvider";
 import Onboarding from "./pages/Onboarding";
 import OnboardingGuard from "./components/onboarding/OnboardingGuard";
+import WorkspaceBillingGuard from "./components/auth/WorkspaceBillingGuard";
 
 const queryClient = new QueryClient();
 
@@ -42,6 +44,7 @@ const App = () => (
               <Route path="/" element={<RootPage />} />
               <Route path="/pages/:slug" element={<PublishedLandingPage />} />
               <Route path="/auth" element={<Auth />} />
+              <Route path="/auth/confirm" element={<AuthConfirm />} />
               <Route path="/onboarding" element={<Onboarding />} />
               <Route element={<OnboardingGuard />}>
                 <Route path="/dashboard" element={<Dashboard />} />
@@ -53,12 +56,14 @@ const App = () => (
                 <Route path="/email-builder" element={<EmailBuilder />} />
                 <Route path="/landing-pages" element={<LandingPages />} />
                 <Route path="/site-connector" element={<SiteConnector />} />
-                <Route path="/subscription" element={<Subscription />} />
-                <Route path="/billing" element={<Billing />} />
-                <Route path="/spending" element={<Spending />} />
                 <Route path="/team" element={<Team />} />
                 <Route path="/referrals" element={<Referrals />} />
                 <Route path="/campaign/:id" element={<CampaignTracker />} />
+                <Route element={<WorkspaceBillingGuard />}>
+                  <Route path="/subscription" element={<Subscription />} />
+                  <Route path="/billing" element={<Billing />} />
+                  <Route path="/spending" element={<Spending />} />
+                </Route>
               </Route>
               {/* ADD ALL CUSTOM ROUTES ABOVE THE CATCH-ALL "*" ROUTE */}
               <Route path="*" element={<NotFound />} />

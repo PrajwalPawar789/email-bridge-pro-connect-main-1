@@ -158,6 +158,7 @@ const renderPlainTextPreviewHtml = (value: string) => {
 
 const looksLikeHtml = (value: string) => /<\s*[a-z][\w-]*(\s[^>]*)?>/i.test(value);
 const EMAIL_BUILDER_STATE_REGEX = /<!--\s*VINTRO_EMAIL_BUILDER_STATE:[A-Za-z0-9+/=]+\s*-->/g;
+const TRACKABLE_LINK_REGEX = /(href\s*=\s*["'](?:https?:\/\/|www\.)|(?:https?:\/\/|www\.)[^\s<>"']+)/i;
 
 const resolveCampaignErrorMessage = (error: any) => {
   const message = String(error?.message || error?.details || '').trim();
@@ -224,6 +225,7 @@ const CampaignBuilder: React.FC<CampaignBuilderProps> = ({ emailConfigs }) => {
     selectedPipelineStages[0] ||
     null;
   const requiresCampaignApproval = Boolean(workspace?.requiresApproval?.campaign);
+  const hasTrackableLinks = TRACKABLE_LINK_REGEX.test(form.content);
   const headerStats = [
     {
       label: 'Recipients',
@@ -1557,6 +1559,33 @@ const CampaignBuilder: React.FC<CampaignBuilderProps> = ({ emailConfigs }) => {
                 />
             </div>
         </div>
+
+        {form.content.trim() && (
+          <div className={cn(
+            "mt-3 rounded-2xl border px-4 py-3 text-sm",
+            hasTrackableLinks
+              ? "border-emerald-200/80 bg-emerald-50/80 text-emerald-900"
+              : "border-amber-200/80 bg-amber-50/80 text-amber-900"
+          )}>
+            <div className="flex items-start gap-3">
+              {hasTrackableLinks ? (
+                <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0 text-emerald-600" />
+              ) : (
+                <AlertCircle className="mt-0.5 h-4 w-4 shrink-0 text-amber-600" />
+              )}
+              <div className="space-y-1">
+                <p className="font-medium">
+                  {hasTrackableLinks ? 'Click tracking is ready.' : 'No trackable links found yet.'}
+                </p>
+                <p className="text-xs leading-relaxed">
+                  {hasTrackableLinks
+                    ? 'This email contains a link Vintro can rewrite and track before sending. Opens still depend on recipients allowing remote images.'
+                    : 'Open tracking works after recipients allow remote images. Click tracking stays at 0 until the body includes a clickable URL like https://example.com or www.example.com.'}
+                </p>
+              </div>
+            </div>
+          </div>
+        )}
       </div>
     </div>
   );

@@ -11,6 +11,7 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { Link } from 'react-router-dom';
 import { BillingSnapshot, getBillingSnapshot, normalizePlanId } from '@/lib/billing';
+import { useWorkspace } from '@/providers/WorkspaceProvider';
 
 interface HeaderUser {
   id?: string;
@@ -29,10 +30,13 @@ interface HeaderProps {
 }
 
 const Header = ({ user, onLogout, activeTab }: HeaderProps) => {
+  const { workspace } = useWorkspace();
   const [billingSnapshot, setBillingSnapshot] = useState<BillingSnapshot | null>(null);
   const [loadingBillingSnapshot, setLoadingBillingSnapshot] = useState(false);
   const hasBillingSnapshot = Boolean(billingSnapshot);
   const userMetadata = user?.user_metadata;
+  const canManageBilling = !workspace || workspace.role === 'owner' || workspace.canManageBilling;
+  const isManagedSeat = Boolean(workspace && !canManageBilling);
 
   useEffect(() => {
     const userId = user?.id;
@@ -105,9 +109,21 @@ const Header = ({ user, onLogout, activeTab }: HeaderProps) => {
     };
   }, [billingSnapshot, loadingBillingSnapshot]);
 
+  const membershipBadge = useMemo(() => {
+    if (!isManagedSeat) return planBadge;
+    return {
+      label: 'Workspace Seat',
+      badgeClass: 'border border-emerald-200 bg-emerald-50 text-emerald-700',
+      progressClass: planBadge.progressClass,
+    };
+  }, [isManagedSeat, planBadge]);
+
   const creditUsage = useMemo(() => {
     const used = Number(billingSnapshot?.credits_used || 0);
-    const max = Number(billingSnapshot?.credits_in_period || 0);
+    const max =
+      billingSnapshot?.credits_in_period === null || billingSnapshot?.credits_in_period === undefined
+        ? 0
+        : Number(billingSnapshot.credits_in_period || 0);
     const pct = max > 0 ? Math.min(100, Math.max(0, (used / max) * 100)) : 0;
     return { used, max, pct };
   }, [billingSnapshot]);
@@ -124,6 +140,12 @@ const Header = ({ user, onLogout, activeTab }: HeaderProps) => {
     if (fullName) return fullName;
     return user?.email?.split('@')[0] || 'User';
   }, [user?.email, userMetadata?.first_name, userMetadata?.last_name]);
+
+  const hasCreditAllocation =
+    billingSnapshot?.credits_in_period !== null && billingSnapshot?.credits_in_period !== undefined;
+  const hasCampaignAllocation =
+    billingSnapshot?.campaign_limit !== null &&
+    billingSnapshot?.campaign_limit !== undefined;
 
   const tabLabels: Record<string, string> = {
     home: 'Home',
@@ -226,32 +248,36 @@ const Header = ({ user, onLogout, activeTab }: HeaderProps) => {
                     <p className="truncate text-xs text-slate-500">{user?.email}</p>
                   </div>
 
-                  <div className={`inline-flex items-center gap-1 rounded-full px-2 py-1 text-[11px] font-semibold ${planBadge.badgeClass}`}>
+                  <div className={`inline-flex items-center gap-1 rounded-full px-2 py-1 text-[11px] font-semibold ${membershipBadge.badgeClass}`}>
                     <Crown className="h-3.5 w-3.5" />
-                    <span className="max-w-[120px] truncate">{planBadge.label}</span>
+                    <span className="max-w-[120px] truncate">{membershipBadge.label}</span>
                   </div>
                 </div>
 
                 <div className="mt-4 rounded-lg border border-slate-200 bg-white/90 p-3">
                   <div className="mb-1.5 flex items-center justify-between text-[11px] text-slate-600">
-                    <span className="font-medium">Credit usage</span>
+                    <span className="font-medium">{isManagedSeat ? 'Credit allocation' : 'Credit usage'}</span>
                     <span className="text-xs font-semibold text-slate-800">
                       {loadingBillingSnapshot
                         ? 'Loading...'
-                        : hasBillingSnapshot
+                        : hasBillingSnapshot && hasCreditAllocation
                           ? `${creditUsage.used.toLocaleString()} / ${creditUsage.max.toLocaleString()}`
-                          : 'No data'}
+                          : isManagedSeat
+                            ? 'No allocation'
+                            : 'No data'}
                     </span>
                   </div>
                   <div className="h-2 overflow-hidden rounded-full bg-slate-200">
-                    <div className={`h-full rounded-full transition-[width] duration-300 ${planBadge.progressClass}`} style={{ width: `${creditUsage.pct}%` }} />
+                    <div className={`h-full rounded-full transition-[width] duration-300 ${membershipBadge.progressClass}`} style={{ width: `${creditUsage.pct}%` }} />
                   </div>
                   <p className="mt-1.5 text-[11px] text-slate-500">
                     {creditUsage.max > 0
                       ? `${Math.max(creditUsage.max - creditUsage.used, 0).toLocaleString()} credits remaining`
                       : loadingBillingSnapshot
                         ? 'Syncing billing snapshot'
-                        : 'No credit allocation found'}
+                        : isManagedSeat
+                          ? 'No credit allocation found for this seat yet'
+                          : 'No credit allocation found'}
                   </p>
                 </div>
 
@@ -261,18 +287,30 @@ const Header = ({ user, onLogout, activeTab }: HeaderProps) => {
                     <p className="mt-1 text-sm font-semibold text-slate-900">
                       {loadingBillingSnapshot
                         ? 'Loading...'
-                        : campaignUsage.unlimited
+                        : isManagedSeat && !hasCampaignAllocation
+                          ? 'No allocation'
+                          : campaignUsage.unlimited
                           ? `${campaignUsage.used.toLocaleString()} / Unlimited`
                           : `${campaignUsage.used.toLocaleString()} / ${campaignUsage.max.toLocaleString()}`}
                     </p>
                   </div>
 
                   <div className="rounded-lg border border-slate-200 bg-white px-2.5 py-2">
-                    <p className="text-[10px] uppercase tracking-[0.12em] text-slate-500">Current plan</p>
+                    <p className="text-[10px] uppercase tracking-[0.12em] text-slate-500">
+                      {isManagedSeat ? 'Workspace plan' : 'Current plan'}
+                    </p>
                     <p className="mt-1 truncate text-sm font-semibold text-slate-900">{planBadge.label}</p>
-                    <p className="text-[11px] text-slate-500">Manage in Subscription</p>
+                    <p className="text-[11px] text-slate-500">
+                      {isManagedSeat ? 'Managed by workspace owner' : 'Manage in Subscription'}
+                    </p>
                   </div>
                 </div>
+
+                {isManagedSeat && (
+                  <p className="mt-3 text-[11px] text-slate-500">
+                    Your seat uses workspace billing. Subscription changes stay with the workspace owner or billing admin.
+                  </p>
+                )}
               </div>
             </div>
 
@@ -292,44 +330,52 @@ const Header = ({ user, onLogout, activeTab }: HeaderProps) => {
                   </Link>
                 </DropdownMenuItem>
 
-                <DropdownMenuItem asChild className="group h-auto rounded-lg px-2 py-2.5 focus:bg-slate-100">
-                  <Link to="/subscription" className="flex w-full items-center gap-3">
-                    <div className="flex h-8 w-8 items-center justify-center rounded-md border border-slate-200 bg-white text-slate-600">
-                      <Crown className="h-4 w-4" />
-                    </div>
-                    <div className="min-w-0 flex-1">
-                      <p className="text-sm font-medium text-slate-800">Subscription</p>
-                      <p className="truncate text-[11px] text-slate-500">Upgrade, downgrade, or change billing cycle</p>
-                    </div>
-                    <ChevronRight className="h-4 w-4 shrink-0 text-slate-400 transition-colors group-hover:text-slate-500" />
-                  </Link>
-                </DropdownMenuItem>
+                {canManageBilling ? (
+                  <>
+                    <DropdownMenuItem asChild className="group h-auto rounded-lg px-2 py-2.5 focus:bg-slate-100">
+                      <Link to="/subscription" className="flex w-full items-center gap-3">
+                        <div className="flex h-8 w-8 items-center justify-center rounded-md border border-slate-200 bg-white text-slate-600">
+                          <Crown className="h-4 w-4" />
+                        </div>
+                        <div className="min-w-0 flex-1">
+                          <p className="text-sm font-medium text-slate-800">Subscription</p>
+                          <p className="truncate text-[11px] text-slate-500">Upgrade, downgrade, or change billing cycle</p>
+                        </div>
+                        <ChevronRight className="h-4 w-4 shrink-0 text-slate-400 transition-colors group-hover:text-slate-500" />
+                      </Link>
+                    </DropdownMenuItem>
 
-                <DropdownMenuItem asChild className="group h-auto rounded-lg px-2 py-2.5 focus:bg-slate-100">
-                  <Link to="/billing" className="flex w-full items-center gap-3">
-                    <div className="flex h-8 w-8 items-center justify-center rounded-md border border-slate-200 bg-white text-slate-600">
-                      <CreditCard className="h-4 w-4" />
-                    </div>
-                    <div className="min-w-0 flex-1">
-                      <p className="text-sm font-medium text-slate-800">Payments & billing</p>
-                      <p className="truncate text-[11px] text-slate-500">Invoices, transactions, and payment methods</p>
-                    </div>
-                    <ChevronRight className="h-4 w-4 shrink-0 text-slate-400 transition-colors group-hover:text-slate-500" />
-                  </Link>
-                </DropdownMenuItem>
+                    <DropdownMenuItem asChild className="group h-auto rounded-lg px-2 py-2.5 focus:bg-slate-100">
+                      <Link to="/billing" className="flex w-full items-center gap-3">
+                        <div className="flex h-8 w-8 items-center justify-center rounded-md border border-slate-200 bg-white text-slate-600">
+                          <CreditCard className="h-4 w-4" />
+                        </div>
+                        <div className="min-w-0 flex-1">
+                          <p className="text-sm font-medium text-slate-800">Payments & billing</p>
+                          <p className="truncate text-[11px] text-slate-500">Invoices, transactions, and payment methods</p>
+                        </div>
+                        <ChevronRight className="h-4 w-4 shrink-0 text-slate-400 transition-colors group-hover:text-slate-500" />
+                      </Link>
+                    </DropdownMenuItem>
 
-                <DropdownMenuItem asChild className="group h-auto rounded-lg px-2 py-2.5 focus:bg-slate-100">
-                  <Link to="/spending" className="flex w-full items-center gap-3">
-                    <div className="flex h-8 w-8 items-center justify-center rounded-md border border-slate-200 bg-white text-slate-600">
-                      <Clock className="h-4 w-4" />
-                    </div>
-                    <div className="min-w-0 flex-1">
-                      <p className="text-sm font-medium text-slate-800">Spending history</p>
-                      <p className="truncate text-[11px] text-slate-500">Track monthly usage and charges over time</p>
-                    </div>
-                    <ChevronRight className="h-4 w-4 shrink-0 text-slate-400 transition-colors group-hover:text-slate-500" />
-                  </Link>
-                </DropdownMenuItem>
+                    <DropdownMenuItem asChild className="group h-auto rounded-lg px-2 py-2.5 focus:bg-slate-100">
+                      <Link to="/spending" className="flex w-full items-center gap-3">
+                        <div className="flex h-8 w-8 items-center justify-center rounded-md border border-slate-200 bg-white text-slate-600">
+                          <Clock className="h-4 w-4" />
+                        </div>
+                        <div className="min-w-0 flex-1">
+                          <p className="text-sm font-medium text-slate-800">Spending history</p>
+                          <p className="truncate text-[11px] text-slate-500">Track monthly usage and charges over time</p>
+                        </div>
+                        <ChevronRight className="h-4 w-4 shrink-0 text-slate-400 transition-colors group-hover:text-slate-500" />
+                      </Link>
+                    </DropdownMenuItem>
+                  </>
+                ) : (
+                  <div className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-3 text-[11px] text-slate-500">
+                    Subscription, payments, and billing changes are managed by the workspace owner for this seat.
+                  </div>
+                )}
               </div>
             </div>
 

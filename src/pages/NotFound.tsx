@@ -2,16 +2,7 @@ import { useLocation } from "react-router-dom";
 import { useEffect, useMemo, useState } from "react";
 import { resolveSiteDomain, type ResolvedSiteDomain } from "@/lib/siteConnectorPersistence";
 import { extractHtmlBodyContent, extractHtmlTitle } from "@/lib/htmlDocument";
-
-const localHosts = new Set(["localhost", "127.0.0.1", "::1"]);
-
-const normalizeHostname = (value: string) =>
-  value.trim().toLowerCase().replace(/:\d+$/, "").replace(/\.$/, "");
-
-const isLocalHost = (hostname: string) => {
-  if (localHosts.has(hostname)) return true;
-  return /^192\.168\.\d+\.\d+$/.test(hostname) || /^10\.\d+\.\d+\.\d+$/.test(hostname);
-};
+import { normalizeSiteConnectorHost, shouldResolveSiteDomainHost } from "@/lib/siteConnectorHost";
 
 const normalizeSlugPath = (pathname: string) =>
   pathname
@@ -25,7 +16,7 @@ const NotFound = () => {
 
   const host = useMemo(() => {
     if (typeof window === "undefined") return "";
-    return normalizeHostname(window.location.host || window.location.hostname || "");
+    return normalizeSiteConnectorHost(window.location.host || window.location.hostname || "");
   }, []);
 
   useEffect(() => {
@@ -39,7 +30,7 @@ const NotFound = () => {
     let cancelled = false;
 
     const run = async () => {
-      if (!host || isLocalHost(host)) {
+      if (!shouldResolveSiteDomainHost(host)) {
         setLoading(false);
         return;
       }
