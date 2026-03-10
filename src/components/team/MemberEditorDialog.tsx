@@ -36,6 +36,7 @@ type MemberEditorDialogProps = {
   onOpenChange: (open: boolean) => void;
   mode: "invite" | "edit";
   actorRole: WorkspaceRole | null | undefined;
+  supportsApprovalFlows?: boolean;
   members: WorkspaceMember[];
   targetMember?: WorkspaceMember | null;
   defaultParentUserId?: string | null;
@@ -74,6 +75,7 @@ const MemberEditorDialog = ({
   onOpenChange,
   mode,
   actorRole,
+  supportsApprovalFlows = true,
   members,
   targetMember,
   defaultParentUserId,
@@ -139,12 +141,14 @@ const MemberEditorDialog = ({
 
   const roleOptions = useMemo(() => {
     const values: WorkspaceRole[] = ["owner", "admin", "sub_admin", "user", "reviewer"];
-    const allowed = values.filter((value) => canActorInviteRole(actorRole, value));
+    const allowed = values.filter(
+      (value) => canActorInviteRole(actorRole, value) && (supportsApprovalFlows || value !== "reviewer"),
+    );
     if (mode === "edit" && targetMember?.role && !allowed.includes(targetMember.role)) {
       return [targetMember.role, ...allowed];
     }
     return allowed;
-  }, [actorRole, mode, targetMember?.role]);
+  }, [actorRole, mode, supportsApprovalFlows, targetMember?.role]);
 
   const handleSubmit = async () => {
     if (!fullName.trim()) return;
@@ -164,12 +168,12 @@ const MemberEditorDialog = ({
         fullName,
         role,
         parentUserId: parentUserId || null,
-        assignedReviewerUserId: assignedReviewerUserId || null,
+        assignedReviewerUserId: supportsApprovalFlows ? assignedReviewerUserId || null : null,
         canManageBilling,
         canManageWorkspace,
-        requireCampaignApproval,
-        requireSenderApproval,
-        requireAutomationApproval,
+        requireCampaignApproval: supportsApprovalFlows ? requireCampaignApproval : null,
+        requireSenderApproval: supportsApprovalFlows ? requireSenderApproval : null,
+        requireAutomationApproval: supportsApprovalFlows ? requireAutomationApproval : null,
         ...allocationPayload,
       });
       onOpenChange(false);
@@ -185,12 +189,12 @@ const MemberEditorDialog = ({
         role,
         status,
         parentUserId: parentUserId || null,
-        assignedReviewerUserId: assignedReviewerUserId || null,
+        assignedReviewerUserId: supportsApprovalFlows ? assignedReviewerUserId || null : undefined,
         canManageBilling,
         canManageWorkspace,
-        requireCampaignApproval,
-        requireSenderApproval,
-        requireAutomationApproval,
+        requireCampaignApproval: supportsApprovalFlows ? requireCampaignApproval : undefined,
+        requireSenderApproval: supportsApprovalFlows ? requireSenderApproval : undefined,
+        requireAutomationApproval: supportsApprovalFlows ? requireAutomationApproval : undefined,
       },
       allocationPayload,
     );
@@ -274,25 +278,27 @@ const MemberEditorDialog = ({
             </Select>
           </div>
 
-          <div className="space-y-2">
-            <Label>Reviewer</Label>
-            <Select
-              value={assignedReviewerUserId || "__none"}
-              onValueChange={(value) => setAssignedReviewerUserId(value === "__none" ? "" : value)}
-            >
-              <SelectTrigger>
-                <SelectValue placeholder="Auto-assign reviewer" />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="__none">Auto-assign reviewer</SelectItem>
-                {reviewerOptions.map((member) => (
-                  <SelectItem key={member.user_id} value={member.user_id}>
-                    {member.full_name || member.email || member.user_id}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          </div>
+          {supportsApprovalFlows ? (
+            <div className="space-y-2">
+              <Label>Reviewer</Label>
+              <Select
+                value={assignedReviewerUserId || "__none"}
+                onValueChange={(value) => setAssignedReviewerUserId(value === "__none" ? "" : value)}
+              >
+                <SelectTrigger>
+                  <SelectValue placeholder="Auto-assign reviewer" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="__none">Auto-assign reviewer</SelectItem>
+                  {reviewerOptions.map((member) => (
+                    <SelectItem key={member.user_id} value={member.user_id}>
+                      {member.full_name || member.email || member.user_id}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+          ) : null}
         </div>
 
         <div className="grid gap-4 md:grid-cols-2">
@@ -368,36 +374,44 @@ const MemberEditorDialog = ({
             </div>
             <Switch checked={canManageWorkspace} onCheckedChange={setCanManageWorkspace} />
           </div>
-          <div className="flex items-center justify-between gap-4">
-            <div>
-              <p className="font-medium text-slate-900">Campaign approval required</p>
-              <p className="text-xs text-slate-500">Route launches through the approval queue.</p>
+          {supportsApprovalFlows ? (
+            <>
+              <div className="flex items-center justify-between gap-4">
+                <div>
+                  <p className="font-medium text-slate-900">Campaign approval required</p>
+                  <p className="text-xs text-slate-500">Route launches through the approval queue.</p>
+                </div>
+                <Switch
+                  checked={Boolean(requireCampaignApproval)}
+                  onCheckedChange={(checked) => setRequireCampaignApproval(checked)}
+                />
+              </div>
+              <div className="flex items-center justify-between gap-4">
+                <div>
+                  <p className="font-medium text-slate-900">Sender approval required</p>
+                  <p className="text-xs text-slate-500">Block sender activation until approved.</p>
+                </div>
+                <Switch
+                  checked={Boolean(requireSenderApproval)}
+                  onCheckedChange={(checked) => setRequireSenderApproval(checked)}
+                />
+              </div>
+              <div className="flex items-center justify-between gap-4 md:col-span-2">
+                <div>
+                  <p className="font-medium text-slate-900">Automation approval required</p>
+                  <p className="text-xs text-slate-500">Hold workflow activation until approved.</p>
+                </div>
+                <Switch
+                  checked={Boolean(requireAutomationApproval)}
+                  onCheckedChange={(checked) => setRequireAutomationApproval(checked)}
+                />
+              </div>
+            </>
+          ) : (
+            <div className="rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm text-slate-600 md:col-span-2">
+              Approval routing becomes available on plans with advanced team governance.
             </div>
-            <Switch
-              checked={Boolean(requireCampaignApproval)}
-              onCheckedChange={(checked) => setRequireCampaignApproval(checked)}
-            />
-          </div>
-          <div className="flex items-center justify-between gap-4">
-            <div>
-              <p className="font-medium text-slate-900">Sender approval required</p>
-              <p className="text-xs text-slate-500">Block sender activation until approved.</p>
-            </div>
-            <Switch
-              checked={Boolean(requireSenderApproval)}
-              onCheckedChange={(checked) => setRequireSenderApproval(checked)}
-            />
-          </div>
-          <div className="flex items-center justify-between gap-4 md:col-span-2">
-            <div>
-              <p className="font-medium text-slate-900">Automation approval required</p>
-              <p className="text-xs text-slate-500">Hold workflow activation until approved.</p>
-            </div>
-            <Switch
-              checked={Boolean(requireAutomationApproval)}
-              onCheckedChange={(checked) => setRequireAutomationApproval(checked)}
-            />
-          </div>
+          )}
         </div>
 
         <DialogFooter>

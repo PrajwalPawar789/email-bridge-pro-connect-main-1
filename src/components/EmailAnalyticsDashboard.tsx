@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
@@ -14,6 +14,7 @@ import {
 } from "@/components/ui/tooltip";
 import { useToast } from "@/hooks/use-toast";
 import { supabase } from '@/integrations/supabase/client';
+import { cn } from '@/lib/utils';
 import { formatDistanceToNow, subDays, format, parseISO, isToday } from 'date-fns';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { 
@@ -123,6 +124,7 @@ const EmailAnalyticsDashboard = () => {
     dailyLimit: 2000
   });
   const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
   const [selectedIndustry, setSelectedIndustry] = useState('general');
   const [postmasterDomain, setPostmasterDomain] = useState('');
   const [postmasterInput, setPostmasterInput] = useState('');
@@ -130,11 +132,9 @@ const EmailAnalyticsDashboard = () => {
   const [postmasterState, setPostmasterState] = useState<'idle' | 'checking' | 'connected' | 'disconnected' | 'error'>('idle');
   const [postmasterHint, setPostmasterHint] = useState<string | null>(null);
   const [postmasterDialogOpen, setPostmasterDialogOpen] = useState(false);
+  const [lastUpdatedAt, setLastUpdatedAt] = useState<Date | null>(null);
+  const hasLoadedOnceRef = useRef(false);
   const { toast } = useToast();
-
-  useEffect(() => {
-    fetchAnalyticsData();
-  }, [dateRange]);
 
   const normalizeDomain = (value: string) => {
     const trimmed = value.trim().toLowerCase();
@@ -251,8 +251,14 @@ const EmailAnalyticsDashboard = () => {
     }
   };
 
-  const fetchAnalyticsData = async () => {
-    setLoading(true);
+  const fetchAnalyticsData = useCallback(async () => {
+    const isInitialLoad = !hasLoadedOnceRef.current;
+    if (isInitialLoad) {
+      setLoading(true);
+    } else {
+      setRefreshing(true);
+    }
+
     try {
       const { data: { user } } = await supabase.auth.getUser();
       if (!user) return;
@@ -590,6 +596,7 @@ const EmailAnalyticsDashboard = () => {
         todaySentCount,
         dailyLimit: totalDailyLimit
       });
+      setLastUpdatedAt(new Date());
     } catch (error) {
       console.error('Error fetching analytics:', error);
       toast({
@@ -598,9 +605,75 @@ const EmailAnalyticsDashboard = () => {
         variant: "destructive"
       });
     } finally {
-      setLoading(false);
+      hasLoadedOnceRef.current = true;
+      if (isInitialLoad) {
+        setLoading(false);
+      }
+      setRefreshing(false);
     }
-  };
+  }, [dateRange, postmasterInput, toast]);
+
+  useEffect(() => {
+    void fetchAnalyticsData();
+  }, [fetchAnalyticsData]);
+
+  useEffect(() => {
+    let refreshTimer: ReturnType<typeof setTimeout> | null = null;
+
+    const scheduleRefresh = () => {
+      if (refreshTimer) {
+        clearTimeout(refreshTimer);
+      }
+      refreshTimer = setTimeout(() => {
+        void fetchAnalyticsData();
+      }, 750);
+    };
+
+    const campaignChannel = supabase
+      .channel('analytics-dashboard-campaigns')
+      .on(
+        'postgres_changes',
+        {
+          event: '*',
+          schema: 'public',
+          table: 'campaigns'
+        },
+        scheduleRefresh
+      )
+      .subscribe();
+
+    const recipientChannel = supabase
+      .channel('analytics-dashboard-recipients')
+      .on(
+        'postgres_changes',
+        {
+          event: '*',
+          schema: 'public',
+          table: 'recipients'
+        },
+        scheduleRefresh
+      )
+      .subscribe();
+
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === 'visible') {
+        scheduleRefresh();
+      }
+    };
+
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+    const pollInterval = window.setInterval(scheduleRefresh, 60_000);
+
+    return () => {
+      if (refreshTimer) {
+        clearTimeout(refreshTimer);
+      }
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+      window.clearInterval(pollInterval);
+      supabase.removeChannel(campaignChannel);
+      supabase.removeChannel(recipientChannel);
+    };
+  }, [fetchAnalyticsData]);
 
   const toCsvCell = (value: unknown) => {
     if (value === null || value === undefined) return '';
@@ -1029,7 +1102,7 @@ const EmailAnalyticsDashboard = () => {
                 </span>
                 <span className="flex items-center gap-1 text-[10px] font-medium tracking-[0.2em] text-[var(--dash-muted)]">
                   <Clock className="h-3 w-3" />
-                  Updated {format(new Date(), 'MMM d, h:mm a')}
+                  Updated {lastUpdatedAt ? format(lastUpdatedAt, 'MMM d, h:mm a') : 'syncing...'}
                 </span>
                 <Badge
                   variant="outline"
@@ -1073,8 +1146,13 @@ const EmailAnalyticsDashboard = () => {
                 </SelectContent>
               </Select> */}
               
-              <Button onClick={fetchAnalyticsData} variant="outline" className="h-10 rounded-full border-[var(--dash-border)] bg-white/80 text-xs font-semibold text-[var(--dash-ink)] shadow-sm hover:bg-white">
-                <RefreshCw className="h-4 w-4 mr-2" />
+              <Button
+                onClick={() => void fetchAnalyticsData()}
+                variant="outline"
+                disabled={refreshing}
+                className="h-10 rounded-full border-[var(--dash-border)] bg-white/80 text-xs font-semibold text-[var(--dash-ink)] shadow-sm hover:bg-white"
+              >
+                <RefreshCw className={cn("mr-2 h-4 w-4", refreshing ? "animate-spin" : "")} />
                 Refresh
               </Button>
 

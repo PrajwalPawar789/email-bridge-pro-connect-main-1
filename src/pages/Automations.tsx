@@ -193,6 +193,7 @@ const Automations = () => {
   const [workspaceMode, setWorkspaceMode] = useState(false);
   const [workspaceModeTouched, setWorkspaceModeTouched] = useState(false);
   const requiresAutomationApproval = Boolean(workspace?.requiresApproval.automation);
+  const supportsApiWebhooks = workspace ? workspace.planFeatures?.apiWebhooks !== false : true;
 
   const getWorkflowApprovalStatus = useCallback(
     (workflow: AutomationWorkflow | null | undefined) => {
@@ -254,8 +255,17 @@ const Automations = () => {
   );
 
   const selectedTemplate = useMemo(
-    () => templates.find((template) => template.id === templatePreviewId) || null,
-    [templatePreviewId, templates]
+    () =>
+      (supportsApiWebhooks
+        ? templates
+        : templates.filter((template) => template.trigger_type !== "custom_event")
+      ).find((template) => template.id === templatePreviewId) || null,
+    [supportsApiWebhooks, templatePreviewId, templates]
+  );
+
+  const supportedTemplates = useMemo(
+    () => (supportsApiWebhooks ? templates : templates.filter((template) => template.trigger_type !== "custom_event")),
+    [supportsApiWebhooks, templates]
   );
 
   const selectedTemplatePreviewGraph = useMemo(
@@ -360,6 +370,15 @@ const Automations = () => {
   }, []);
 
   const setTriggerType = useCallback((value: AutomationWorkflow["trigger_type"]) => {
+    if (!supportsApiWebhooks && value === "custom_event") {
+      toast({
+        title: "Webhook triggers require an upgrade",
+        description: "Upgrade to Growth or higher to unlock API and webhook triggers.",
+        variant: "destructive",
+      });
+      return;
+    }
+
     setEditor((prev) =>
       prev
         ? {
@@ -382,7 +401,7 @@ const Automations = () => {
           }
         : prev
     );
-  }, []);
+  }, [supportsApiWebhooks]);
 
   const setWebhookSecret = useCallback((value: string) => {
     setEditor((prev) =>
@@ -418,10 +437,10 @@ const Automations = () => {
 
   useEffect(() => {
     if (!templatePreviewId) return;
-    if (!templates.some((template) => template.id === templatePreviewId)) {
+    if (!supportedTemplates.some((template) => template.id === templatePreviewId)) {
       setTemplatePreviewId(null);
     }
-  }, [templatePreviewId, templates]);
+  }, [supportedTemplates, templatePreviewId]);
 
   useEffect(() => {
     setEditor(selectedWorkflow);
@@ -526,6 +545,15 @@ const Automations = () => {
       const payload = options.payloadOverride || resolvePayload();
       if (!payload) return null;
 
+      if (!supportsApiWebhooks && editor.trigger_type === "custom_event") {
+        toast({
+          title: "Webhook triggers require an upgrade",
+          description: "Custom event automations are available on Growth plan or higher.",
+          variant: "destructive",
+        });
+        return null;
+      }
+
       if (options.statusOverride === "live" && !payload.checklistPass) {
         toast({
           title: "Publish blocked",
@@ -564,7 +592,7 @@ const Automations = () => {
 
       return updated;
     },
-    [editor, resolvePayload]
+    [editor, resolvePayload, supportsApiWebhooks]
   );
 
   const submitWorkflowForApproval = useCallback(async () => {
@@ -582,11 +610,12 @@ const Automations = () => {
       return;
     }
 
-    await persistWorkflow({
+    const savedWorkflow = await persistWorkflow({
       statusOverride: "draft",
       quiet: true,
       payloadOverride: payload,
     });
+    if (!savedWorkflow) return;
 
     await submitApprovalRequest("automation", editor.id, {
       reason: "Automation activation review",
@@ -621,6 +650,20 @@ const Automations = () => {
 
   const testWebhookConnection = useCallback(async () => {
     if (!editor || editor.trigger_type !== "custom_event") return;
+    if (!supportsApiWebhooks) {
+      const message = "Webhook triggers are available on Growth plan or higher.";
+      setWebhookTestState({
+        status: "error",
+        message,
+        testedAt: new Date().toISOString(),
+      });
+      toast({
+        title: "Webhook test unavailable",
+        description: message,
+        variant: "destructive",
+      });
+      return;
+    }
 
     if (!webhookEndpoint) {
       const message = "Webhook endpoint is unavailable. Set VITE_SUPABASE_URL and save workflow first.";
@@ -640,7 +683,8 @@ const Automations = () => {
     setWebhookTestState({ status: "running", message: "Sending test payload...", testedAt: null });
 
     try {
-      await persistWorkflow({ quiet: true });
+      const savedWorkflow = await persistWorkflow({ quiet: true });
+      if (!savedWorkflow) return;
 
       const testEmail = `webhook-test-${Date.now()}@example.com`;
       const response = await fetch(webhookEndpoint, {
@@ -702,6 +746,7 @@ const Automations = () => {
     editor,
     loadInsights,
     persistWorkflow,
+    supportsApiWebhooks,
     webhookEndpoint,
     webhookEventName,
     webhookSecret,
@@ -710,6 +755,14 @@ const Automations = () => {
   const applyTemplate = (template: AutomationWorkflowTemplate) =>
     action("apply-template", async () => {
       if (!user) return;
+      if (!supportsApiWebhooks && template.trigger_type === "custom_event") {
+        toast({
+          title: "Webhook templates require an upgrade",
+          description: "Upgrade to Growth or higher to use API and webhook automations.",
+          variant: "destructive",
+        });
+        return;
+      }
 
       const created = await createAutomationWorkflowFromTemplate(user.id, template, {
         trigger_list_id:
@@ -938,13 +991,15 @@ const Automations = () => {
             </div>
           </CardHeader>
           <CardContent>
-            {templates.length === 0 ? (
+            {supportedTemplates.length === 0 ? (
               <div className="rounded-xl border border-dashed border-slate-300 bg-slate-50 p-4 text-sm text-slate-600">
-                No templates are available yet.
+                {supportsApiWebhooks
+                  ? "No templates are available yet."
+                  : "No templates are available on your current plan."}
               </div>
             ) : (
               <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
-                {templates.map((template) => {
+                {supportedTemplates.map((template) => {
                   const previewGraph = getTemplatePreviewGraph(template);
                   const previewSteps = previewGraph.nodes.filter(
                     (node) => node.kind !== "trigger" && node.kind !== "exit"
@@ -1276,7 +1331,11 @@ const Automations = () => {
                         <SelectContent>
                           <SelectItem value="list_joined">Contact enters list</SelectItem>
                           <SelectItem value="manual">Manual only</SelectItem>
-                          <SelectItem value="custom_event">Webhook event</SelectItem>
+                          {supportsApiWebhooks || editor.trigger_type === "custom_event" ? (
+                            <SelectItem value="custom_event" disabled={!supportsApiWebhooks}>
+                              {supportsApiWebhooks ? "Webhook event" : "Webhook event (Upgrade required)"}
+                            </SelectItem>
+                          ) : null}
                         </SelectContent>
                       </Select>
                     </div>
@@ -1347,6 +1406,12 @@ const Automations = () => {
                       <p className="text-xs text-[var(--shell-muted)]">Last run: {formatDate(editor.last_run_at)}</p>
                     </div>
                   </div>
+
+                  {!supportsApiWebhooks ? (
+                    <div className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
+                      API and webhook-triggered automations are available on Growth plan or higher.
+                    </div>
+                  ) : null}
 
                   {editor.trigger_type === "custom_event" ? (
                     <div className="space-y-3 rounded-xl border border-cyan-200 bg-cyan-50/60 p-3">

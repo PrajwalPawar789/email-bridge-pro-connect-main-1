@@ -54,6 +54,45 @@ const pickString = (...values: unknown[]) => {
 
 const isValidEmail = (value: string) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value);
 
+const toSingleRow = (value: unknown) => (Array.isArray(value) ? value[0] ?? null : value ?? null);
+
+const planSupportsApiWebhooks = async (userId: string) => {
+  const { data: featureData, error: featureError } = await admin.rpc(
+    "workspace_plan_supports_feature",
+    {
+      p_user_id: userId,
+      p_feature: "api_webhooks",
+    }
+  );
+
+  if (!featureError) {
+    return Boolean(toSingleRow(featureData));
+  }
+
+  const featureMessage = getErrorMessage(featureError).toLowerCase();
+  const canFallback =
+    featureMessage.includes("workspace_plan_supports_feature") ||
+    featureMessage.includes("schema cache") ||
+    featureMessage.includes("could not find") ||
+    featureMessage.includes("does not exist");
+
+  if (!canFallback) {
+    throw new Error(getErrorMessage(featureError));
+  }
+
+  const { data: snapshotData, error: snapshotError } = await admin.rpc(
+    "get_billing_snapshot",
+    { p_user_id: userId }
+  );
+  if (snapshotError) {
+    throw new Error(getErrorMessage(snapshotError));
+  }
+
+  const snapshot = safeJsonObject(toSingleRow(snapshotData));
+  const planId = pickString(snapshot.plan_id).toLowerCase();
+  return planId === "growth" || planId === "scale" || planId === "enterprise";
+};
+
 const parseBearerToken = (req: Request) => {
   const authHeader = req.headers.get("authorization") || req.headers.get("Authorization") || "";
   if (!authHeader.toLowerCase().startsWith("bearer ")) return "";
@@ -173,10 +212,16 @@ serve(async (req: Request) => {
     if (String(workflow.status || "").toLowerCase() === "archived") {
       return jsonResponse({ error: "Workflow is archived" }, 409);
     }
-    if (String(workflow.trigger_type || "").toLowerCase() === "list_joined") {
+    if (String(workflow.trigger_type || "").toLowerCase() !== "custom_event") {
       return jsonResponse(
-        { error: "Workflow trigger type is list_joined. Switch to webhook/custom event trigger first." },
+        { error: "Workflow trigger type is not webhook/custom event. Switch to a webhook trigger first." },
         409
+      );
+    }
+    if (!(await planSupportsApiWebhooks(String(workflow.user_id || "")))) {
+      return jsonResponse(
+        { error: "Webhook-triggered automations require the Growth plan or higher." },
+        403
       );
     }
 

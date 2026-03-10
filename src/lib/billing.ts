@@ -5,6 +5,9 @@ export type PlanId = 'free' | 'growth' | 'scale' | 'enterprise';
 
 export type BillingSnapshot = {
   user_id: string;
+  workspace_id?: string | null;
+  workspace_name?: string | null;
+  role?: string | null;
   plan_id: string;
   plan_name: string;
   billing_cycle: string;
@@ -20,6 +23,9 @@ export type BillingSnapshot = {
   campaign_limit: number | null;
   campaigns_used: number;
   unlimited_campaigns: boolean;
+  daily_send_limit?: number | null;
+  sends_today?: number | null;
+  unlimited_daily_sends?: boolean;
 };
 
 export type PaymentMethodRow = {

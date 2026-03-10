@@ -38,7 +38,15 @@ export type WorkspaceSnapshot = {
 export type WorkspaceContext = {
   workspaceId: string;
   workspaceName: string;
+  ownerUserId?: string;
   approvalDelegateUserId: string | null;
+  planId?: string | null;
+  planFeatures?: {
+    teamRoles: boolean;
+    teamApprovals: boolean;
+    auditLogs: boolean;
+    apiWebhooks: boolean;
+  };
   role: WorkspaceRole;
   status: MemberStatus;
   parentUserId: string | null;

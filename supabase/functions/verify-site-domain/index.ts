@@ -10,26 +10,17 @@ const corsHeaders = {
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL") ?? "";
 const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? "";
 const SUPABASE_ANON_KEY = Deno.env.get("SUPABASE_ANON_KEY") ?? "";
+const VERCEL_TOKEN = Deno.env.get("VERCEL_TOKEN") ?? "";
+const VERCEL_PROJECT_ID_OR_NAME = Deno.env.get("VERCEL_PROJECT_ID_OR_NAME") ?? "";
+const VERCEL_TEAM_ID = Deno.env.get("VERCEL_TEAM_ID") ?? "";
+const VERCEL_TEAM_SLUG = Deno.env.get("VERCEL_TEAM_SLUG") ?? "";
 
 if (!SUPABASE_URL || !SUPABASE_SERVICE_ROLE_KEY) {
   throw new Error("Missing SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY");
 }
 
 const admin = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
-
-const EXPECTED_A_RECORDS = (Deno.env.get("SITE_CONNECTOR_EXPECTED_A") ?? "185.158.133.1")
-  .split(",")
-  .map((value) => value.trim())
-  .filter(Boolean);
-
-const EXPECTED_CNAME_RECORDS = (Deno.env.get("SITE_CONNECTOR_EXPECTED_CNAME") ?? "")
-  .split(",")
-  .map((value) => value.trim().toLowerCase().replace(/\.$/, ""))
-  .filter(Boolean);
-
-const VERIFY_TXT_PREFIX = (Deno.env.get("SITE_CONNECTOR_VERIFY_TXT_PREFIX") ?? "_verify")
-  .trim()
-  .replace(/\.$/, "");
+const hasVercelProvider = Boolean(VERCEL_TOKEN && VERCEL_PROJECT_ID_OR_NAME);
 
 type DomainDnsStatus = "pending" | "verified" | "failed";
 type DomainSslStatus = "pending" | "active" | "expired" | "failed";
@@ -39,6 +30,37 @@ interface SiteDnsRecord {
   name: string;
   value: string;
   verified: boolean;
+}
+
+interface VercelVerificationRecord {
+  type?: string;
+  domain?: string;
+  value?: string;
+  reason?: string;
+}
+
+interface VercelProjectDomain {
+  name?: string;
+  apexName?: string;
+  verified?: boolean;
+  verification?: VercelVerificationRecord[];
+}
+
+interface RankedIpv4Record {
+  rank?: number;
+  value?: string[];
+}
+
+interface RankedCnameRecord {
+  rank?: number;
+  value?: string;
+}
+
+interface VercelDomainConfig {
+  configuredBy?: "CNAME" | "A" | "http" | "dns-01" | null;
+  recommendedIPv4?: RankedIpv4Record[];
+  recommendedCNAME?: RankedCnameRecord[];
+  misconfigured?: boolean;
 }
 
 const jsonResponse = (payload: Record<string, unknown>, status = 200) =>
@@ -115,6 +137,53 @@ const normalizeTxtValue = (value: string) =>
     .replace(/"\s*"/g, "")
     .toLowerCase();
 
+const inferZoneRoot = (domain: string) => {
+  const labels = normalizeHostname(domain).split(".").filter(Boolean);
+  if (labels.length <= 2) return normalizeHostname(domain);
+  return labels.slice(-2).join(".");
+};
+
+const inferSubdomainHostLabel = (domain: string) => {
+  const labels = normalizeHostname(domain).split(".").filter(Boolean);
+  if (labels.length <= 2) return "";
+  return labels.slice(0, -2).join(".");
+};
+
+const resolveDnsRecordHost = (domain: string, recordName: string) => {
+  const normalizedDomain = normalizeHostname(domain);
+  const normalizedName = normalizeHostname(recordName);
+  if (!normalizedName || normalizedName === "@") return normalizedDomain;
+
+  const zoneRoot = inferZoneRoot(normalizedDomain);
+  if (normalizedName === zoneRoot || normalizedName.endsWith(`.${zoneRoot}`)) {
+    return normalizedName;
+  }
+
+  return `${normalizedName}.${zoneRoot}`.replace(/\.\.+/g, ".");
+};
+
+const normalizeRecordExpectation = (type: "A" | "CNAME" | "TXT", value: string) => {
+  if (type === "TXT") return normalizeTxtValue(value);
+  if (type === "CNAME") return normalizeHostname(value);
+  return value.trim();
+};
+
+const getPreferredIpv4 = (config: VercelDomainConfig | null) => {
+  const records = Array.isArray(config?.recommendedIPv4) ? [...config.recommendedIPv4] : [];
+  const preferred = records
+    .sort((left, right) => Number(left?.rank ?? Number.MAX_SAFE_INTEGER) - Number(right?.rank ?? Number.MAX_SAFE_INTEGER))
+    .find((entry) => Array.isArray(entry?.value) && entry.value.length > 0);
+  return preferred?.value?.[0]?.trim() || "";
+};
+
+const getPreferredCname = (config: VercelDomainConfig | null) => {
+  const records = Array.isArray(config?.recommendedCNAME) ? [...config.recommendedCNAME] : [];
+  const preferred = records
+    .sort((left, right) => Number(left?.rank ?? Number.MAX_SAFE_INTEGER) - Number(right?.rank ?? Number.MAX_SAFE_INTEGER))
+    .find((entry) => String(entry?.value || "").trim());
+  return normalizeHostname(preferred?.value || "");
+};
+
 const normalizeDnsRecords = (value: unknown): SiteDnsRecord[] => {
   if (!Array.isArray(value)) return [];
   return value.map((row) => {
@@ -159,6 +228,211 @@ const queryDns = async (name: string, type: "A" | "CNAME" | "TXT"): Promise<stri
   }
   return [];
 };
+
+const createVercelUrl = (path: string, searchParams?: Record<string, string>) => {
+  const url = new URL(`https://api.vercel.com${path}`);
+  if (VERCEL_TEAM_ID) {
+    url.searchParams.set("teamId", VERCEL_TEAM_ID);
+  }
+  if (VERCEL_TEAM_SLUG) {
+    url.searchParams.set("slug", VERCEL_TEAM_SLUG);
+  }
+  Object.entries(searchParams || {}).forEach(([key, value]) => {
+    if (value) {
+      url.searchParams.set(key, value);
+    }
+  });
+  return url;
+};
+
+const vercelRequest = async <T>(
+  path: string,
+  init?: RequestInit,
+  searchParams?: Record<string, string>
+): Promise<{ ok: boolean; status: number; data: T | null; error: string | null }> => {
+  const response = await fetch(createVercelUrl(path, searchParams), {
+    ...init,
+    headers: {
+      Authorization: `Bearer ${VERCEL_TOKEN}`,
+      "Content-Type": "application/json",
+      ...(init?.headers || {}),
+    },
+  });
+
+  const data = await response.json().catch(() => null);
+  if (response.ok) {
+    return { ok: true, status: response.status, data: data as T, error: null };
+  }
+
+  const message =
+    String((data as Record<string, unknown> | null)?.error?.message || "") ||
+    String((data as Record<string, unknown> | null)?.message || "") ||
+    `Vercel request failed with status ${response.status}`;
+
+  return { ok: false, status: response.status, data: data as T | null, error: message };
+};
+
+const getVercelProjectDomain = async (domain: string) =>
+  vercelRequest<VercelProjectDomain>(
+    `/v9/projects/${encodeURIComponent(VERCEL_PROJECT_ID_OR_NAME)}/domains/${encodeURIComponent(domain)}`
+  );
+
+const addVercelProjectDomain = async (domain: string) =>
+  vercelRequest<VercelProjectDomain>(
+    `/v10/projects/${encodeURIComponent(VERCEL_PROJECT_ID_OR_NAME)}/domains`,
+    {
+      method: "POST",
+      body: JSON.stringify({ name: domain }),
+    }
+  );
+
+const verifyVercelProjectDomain = async (domain: string) =>
+  vercelRequest<VercelProjectDomain>(
+    `/v9/projects/${encodeURIComponent(VERCEL_PROJECT_ID_OR_NAME)}/domains/${encodeURIComponent(domain)}/verify`,
+    {
+      method: "POST",
+    }
+  );
+
+const getVercelDomainConfig = async (domain: string) =>
+  vercelRequest<VercelDomainConfig>(
+    `/v6/domains/${encodeURIComponent(domain)}/config`,
+    undefined,
+    {
+      projectIdOrName: VERCEL_PROJECT_ID_OR_NAME,
+    }
+  );
+
+const isRecoverableVercelDomainAddError = (status: number, message: string | null) => {
+  if (status === 409) return true;
+  const normalized = String(message || "").toLowerCase();
+  return normalized.includes("already") || normalized.includes("exists") || normalized.includes("in use");
+};
+
+const buildVercelDnsRecords = (
+  domain: string,
+  domainType: "root" | "subdomain",
+  projectDomain: VercelProjectDomain | null,
+  domainConfig: VercelDomainConfig | null
+): SiteDnsRecord[] => {
+  const records: SiteDnsRecord[] = [];
+  const hostLabel = inferSubdomainHostLabel(domain);
+  const preferredIpv4 = getPreferredIpv4(domainConfig);
+  const preferredCname = getPreferredCname(domainConfig);
+
+  if (domainType === "subdomain" && hostLabel && preferredCname) {
+    records.push({
+      type: "CNAME",
+      name: hostLabel,
+      value: preferredCname,
+      verified: false,
+    });
+  } else if (preferredIpv4) {
+    records.push({
+      type: "A",
+      name: "@",
+      value: preferredIpv4,
+      verified: false,
+    });
+  } else if (preferredCname) {
+    records.push({
+      type: "CNAME",
+      name: domainType === "subdomain" && hostLabel ? hostLabel : "@",
+      value: preferredCname,
+      verified: false,
+    });
+  } else if (domainType === "subdomain" && hostLabel) {
+    records.push({
+      type: "CNAME",
+      name: hostLabel,
+      value: "cname.vercel-dns.com",
+      verified: false,
+    });
+  } else {
+    records.push({
+      type: "A",
+      name: "@",
+      value: "76.76.21.21",
+      verified: false,
+    });
+  }
+
+  const verificationRecords = Array.isArray(projectDomain?.verification) ? projectDomain.verification : [];
+  verificationRecords.forEach((record) => {
+    const type = normalizeRecordType(record?.type || "");
+    const value = normalizeRecordValue(record?.value || "");
+    const name = String(record?.domain || "").trim();
+    if (!value || !name || (type !== "TXT" && type !== "CNAME" && type !== "A")) {
+      return;
+    }
+    if (records.some((existing) => normalizeRecordType(existing.type) === type && existing.name === name && existing.value === value)) {
+      return;
+    }
+    records.push({
+      type,
+      name,
+      value,
+      verified: false,
+    });
+  });
+
+  return records;
+};
+
+const syncDomainWithVercel = async (domain: string, domainType: "root" | "subdomain") => {
+  if (!hasVercelProvider) {
+    return { projectDomain: null, domainConfig: null, dnsRecords: null as SiteDnsRecord[] | null };
+  }
+
+  let projectDomainResponse = await getVercelProjectDomain(domain);
+  if (!projectDomainResponse.ok && projectDomainResponse.status === 404) {
+    const addResponse = await addVercelProjectDomain(domain);
+    if (!addResponse.ok && !isRecoverableVercelDomainAddError(addResponse.status, addResponse.error)) {
+      throw new Error(addResponse.error || "Unable to add domain to Vercel");
+    }
+    projectDomainResponse = await getVercelProjectDomain(domain);
+  }
+
+  if (!projectDomainResponse.ok && isRecoverableVercelDomainAddError(projectDomainResponse.status, projectDomainResponse.error)) {
+    projectDomainResponse = await getVercelProjectDomain(domain);
+  }
+
+  if (!projectDomainResponse.ok) {
+    throw new Error(projectDomainResponse.error || "Unable to load Vercel project domain");
+  }
+
+  let projectDomain = projectDomainResponse.data;
+  const shouldTryVerify =
+    projectDomain &&
+    projectDomain.verified === false &&
+    Array.isArray(projectDomain.verification) &&
+    projectDomain.verification.length > 0;
+
+  if (shouldTryVerify) {
+    const verifyResponse = await verifyVercelProjectDomain(domain);
+    if (verifyResponse.ok && verifyResponse.data) {
+      projectDomain = verifyResponse.data;
+    }
+  }
+
+  const configResponse = await getVercelDomainConfig(domain);
+  const domainConfig = configResponse.ok ? configResponse.data : null;
+  const dnsRecords = buildVercelDnsRecords(domain, domainType, projectDomain, domainConfig);
+
+  return {
+    projectDomain,
+    domainConfig,
+    dnsRecords: dnsRecords.length > 0 ? dnsRecords : null,
+  };
+};
+
+interface DnsRecordGroup {
+  key: string;
+  type: "A" | "CNAME" | "TXT";
+  host: string;
+  name: string;
+  expectedValues: string[];
+}
 
 const checkHttpsReachable = async (domain: string) => {
   const controller = new AbortController();
@@ -227,29 +501,61 @@ serve(async (request: Request) => {
       return jsonResponse({ error: "Invalid domain" }, 400);
     }
 
-    const existingRecords = normalizeDnsRecords(row.dns_records);
-    const txtRecord = existingRecords.find((record) => normalizeRecordType(record.type) === "TXT");
-    const expectedTxtToken = txtRecord?.value ? normalizeTxtValue(txtRecord.value) : "";
-    const txtHost = `${VERIFY_TXT_PREFIX}.${domain}`.replace(/\.\.+/g, ".");
+    const providerSync = await syncDomainWithVercel(domain, row.type === "subdomain" ? "subdomain" : "root");
+    const existingRecords = providerSync.dnsRecords || normalizeDnsRecords(row.dns_records);
+    const groupsByKey = new Map<string, DnsRecordGroup>();
 
-    const observedA = (await queryDns(domain, "A")).map((value) => value.trim());
-    const observedCname = (await queryDns(domain, "CNAME")).map((value) =>
-      normalizeHostname(value)
+    existingRecords.forEach((record) => {
+      const type = normalizeRecordType(record.type);
+      if (type !== "A" && type !== "CNAME" && type !== "TXT") return;
+
+      const host = resolveDnsRecordHost(domain, record.name);
+      const key = `${type}:${host}`;
+      const expectedValue = normalizeRecordExpectation(type, record.value);
+      const existingGroup = groupsByKey.get(key);
+
+      if (existingGroup) {
+        if (expectedValue && !existingGroup.expectedValues.includes(expectedValue)) {
+          existingGroup.expectedValues.push(expectedValue);
+        }
+        return;
+      }
+
+      groupsByKey.set(key, {
+        key,
+        type,
+        host,
+        name: record.name,
+        expectedValues: expectedValue ? [expectedValue] : [],
+      });
+    });
+
+    const recordGroups = await Promise.all(
+      [...groupsByKey.values()].map(async (group) => {
+        const observedValues = (await queryDns(group.host, group.type)).map((value) =>
+          normalizeRecordExpectation(group.type, value)
+        );
+
+        const verified =
+          group.type === "TXT"
+            ? group.expectedValues.every((value) => observedValues.includes(value))
+            : group.expectedValues.some((value) => observedValues.includes(value));
+
+        return {
+          ...group,
+          observedValues,
+          verified,
+        };
+      })
     );
-    const observedTxt = (await queryDns(txtHost, "TXT")).map((value) => normalizeTxtValue(value));
 
-    const hasExpectedA =
-      EXPECTED_A_RECORDS.length > 0 &&
-      observedA.some((value) => EXPECTED_A_RECORDS.includes(value));
-
-    const hasExpectedCname =
-      EXPECTED_CNAME_RECORDS.length > 0 &&
-      observedCname.some((value) => EXPECTED_CNAME_RECORDS.includes(value));
-
-    const routingVerified = hasExpectedA || hasExpectedCname;
-    const txtVerified = expectedTxtToken ? observedTxt.includes(expectedTxtToken) : true;
+    const recordGroupsByKey = new Map(recordGroups.map((group) => [group.key, group]));
+    const routingGroups = recordGroups.filter((group) => group.type === "A" || group.type === "CNAME");
+    const txtGroups = recordGroups.filter((group) => group.type === "TXT");
+    const routingVerified = routingGroups.length > 0 && routingGroups.every((group) => group.verified);
+    const txtVerified = txtGroups.every((group) => group.verified);
     const dnsVerified = routingVerified && txtVerified;
-    const hasAnyObservation = observedA.length > 0 || observedCname.length > 0 || observedTxt.length > 0;
+    const hasAnyObservation = recordGroups.some((group) => group.observedValues.length > 0);
     const dnsStatus = inferDnsStatus(dnsVerified, hasAnyObservation);
 
     const httpsReachable = dnsStatus === "verified" ? await checkHttpsReachable(domain) : false;
@@ -257,27 +563,15 @@ serve(async (request: Request) => {
 
     const updatedRecords = existingRecords.map((record) => {
       const type = normalizeRecordType(record.type);
-      const value = normalizeRecordValue(record.value);
-
-      if (type === "A") {
-        const valueSeen = observedA.includes(value);
-        const valueExpected = EXPECTED_A_RECORDS.length === 0 || EXPECTED_A_RECORDS.includes(value);
-        return { ...record, verified: valueSeen && valueExpected };
+      if (type !== "A" && type !== "CNAME" && type !== "TXT") {
+        return { ...record, verified: false };
       }
 
-      if (type === "CNAME") {
-        const normalizedValue = normalizeHostname(value);
-        const valueSeen = observedCname.includes(normalizedValue);
-        const valueExpected =
-          EXPECTED_CNAME_RECORDS.length === 0 || EXPECTED_CNAME_RECORDS.includes(normalizedValue);
-        return { ...record, verified: valueSeen && valueExpected };
-      }
-
-      if (type === "TXT") {
-        return { ...record, verified: observedTxt.includes(normalizeTxtValue(value)) };
-      }
-
-      return { ...record, verified: false };
+      const host = resolveDnsRecordHost(domain, record.name);
+      const key = `${type}:${host}`;
+      const recordGroup = recordGroupsByKey.get(key);
+      const expectedValue = normalizeRecordExpectation(type, record.value);
+      return { ...record, verified: Boolean(expectedValue && recordGroup?.observedValues.includes(expectedValue)) };
     });
 
     const { data: updated, error: updateError } = await admin
@@ -301,21 +595,24 @@ serve(async (request: Request) => {
       success: true,
       domain: updated,
       checks: {
-        expected: {
-          a: EXPECTED_A_RECORDS,
-          cname: EXPECTED_CNAME_RECORDS,
-          txt: expectedTxtToken || null,
-          txtHost,
-        },
-        observed: {
-          a: observedA,
-          cname: observedCname,
-          txt: observedTxt,
-        },
+        records: recordGroups.map((group) => ({
+          type: group.type,
+          host: group.host,
+          name: group.name,
+          expected: group.expectedValues,
+          observed: group.observedValues,
+          verified: group.verified,
+        })),
         routingVerified,
         txtVerified,
         dnsVerified,
         httpsReachable,
+        provider: providerSync.projectDomain || providerSync.domainConfig ? {
+          name: providerSync.projectDomain?.name || domain,
+          verified: providerSync.projectDomain?.verified ?? null,
+          configuredBy: providerSync.domainConfig?.configuredBy ?? null,
+          misconfigured: providerSync.domainConfig?.misconfigured ?? null,
+        } : null,
       },
     });
   } catch (error) {

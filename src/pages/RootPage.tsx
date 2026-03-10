@@ -2,15 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import LandingPage from './LandingPage';
 import { resolveSiteDomain, type ResolvedSiteDomain } from '@/lib/siteConnectorPersistence';
 import { extractHtmlBodyContent, extractHtmlTitle } from '@/lib/htmlDocument';
-
-const localHosts = new Set(['localhost', '127.0.0.1', '::1']);
-
-const normalizeHostname = (value: string) => value.trim().toLowerCase().replace(/:\d+$/, '').replace(/\.$/, '');
-
-const isLocalHost = (hostname: string) => {
-  if (localHosts.has(hostname)) return true;
-  return /^192\.168\.\d+\.\d+$/.test(hostname) || /^10\.\d+\.\d+\.\d+$/.test(hostname);
-};
+import { normalizeSiteConnectorHost, shouldResolveSiteDomainHost } from '@/lib/siteConnectorHost';
 
 const RootPage = () => {
   const [loading, setLoading] = useState(true);
@@ -18,14 +10,14 @@ const RootPage = () => {
 
   const host = useMemo(() => {
     if (typeof window === 'undefined') return '';
-    return normalizeHostname(window.location.host || window.location.hostname || '');
+    return normalizeSiteConnectorHost(window.location.host || window.location.hostname || '');
   }, []);
 
   useEffect(() => {
     let cancelled = false;
 
     const run = async () => {
-      if (!host || isLocalHost(host)) {
+      if (!shouldResolveSiteDomainHost(host)) {
         setLoading(false);
         return;
       }

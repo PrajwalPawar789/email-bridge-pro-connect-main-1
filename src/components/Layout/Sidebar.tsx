@@ -20,6 +20,7 @@ import {
   ShieldCheck
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
+import { useWorkspace } from '@/providers/WorkspaceProvider';
 import Logo from '../Logo';
 import SidebarNotifications from './SidebarNotifications';
 
@@ -35,6 +36,9 @@ interface SidebarProps {
 
 const Sidebar = ({ activeTab, onTabChange, isCollapsed, toggleSidebar, user }: SidebarProps) => {
   const navigate = useNavigate();
+  const { workspace } = useWorkspace();
+  const teamRolesEnabled = workspace ? workspace.planFeatures?.teamRoles !== false : true;
+
   const navSections = [
     {
       label: 'Core',
@@ -70,7 +74,12 @@ const Sidebar = ({ activeTab, onTabChange, isCollapsed, toggleSidebar, user }: S
         { id: 'settings', label: 'Settings', icon: Settings, hasSubmenu: true }
       ]
     }
-  ];
+  ]
+    .map((section) => ({
+      ...section,
+      items: section.items.filter((item) => !(item.id === 'team' && !teamRolesEnabled)),
+    }))
+    .filter((section) => section.items.length > 0);
 
   return (
     <aside className={cn(
