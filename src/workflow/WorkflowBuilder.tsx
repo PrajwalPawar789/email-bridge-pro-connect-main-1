@@ -1,11 +1,24 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import { DndContext, DragEndEvent, DragOverlay, DragStartEvent } from "@dnd-kit/core";
-import type { Connection, Edge as FlowEdge, ReactFlowInstance } from "@xyflow/react";
+import {
+  DndContext,
+  DragEndEvent,
+  DragOverlay,
+  DragStartEvent,
+} from "@dnd-kit/core";
+import type {
+  Connection,
+  Edge as FlowEdge,
+  ReactFlowInstance,
+} from "@xyflow/react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { toast } from "@/hooks/use-toast";
-import type { AutomationDependencyData, AutomationStep, AutomationWorkflow } from "@/lib/automations";
+import type {
+  AutomationDependencyData,
+  AutomationStep,
+  AutomationWorkflow,
+} from "@/lib/automations";
 import WorkflowCanvas from "@/workflow/canvas/WorkflowCanvas";
 import { useWorkflowAutosave } from "@/workflow/hooks/useWorkflowAutosave";
 import { useWorkflowKeyboardShortcuts } from "@/workflow/hooks/useWorkflowKeyboardShortcuts";
@@ -15,12 +28,24 @@ import WorkflowRuntimePanel from "@/workflow/inspector/WorkflowRuntimePanel";
 import { nodePluginMap } from "@/workflow/nodes/nodeRegistry";
 import WorkflowBlockLibrary from "@/workflow/sidebar/WorkflowBlockLibrary";
 import { useWorkflowBuilderStore } from "@/workflow/state/useWorkflowBuilderStore";
-import type { WorkflowEdge, WorkflowGraph, WorkflowNode, WorkflowNodeKind, WorkflowRuntimeEvent } from "@/workflow/types/schema";
+import type {
+  WorkflowEdge,
+  WorkflowGraph,
+  WorkflowNode,
+  WorkflowNodeKind,
+  WorkflowRuntimeEvent,
+} from "@/workflow/types/schema";
 import { autoLayoutGraph } from "@/workflow/utils/autoLayout";
 import { parseSourceDropTargetId } from "@/workflow/utils/dropTargets";
-import { findTriggerNode, makeEdgeFromConnection } from "@/workflow/utils/graph";
+import {
+  findTriggerNode,
+  makeEdgeFromConnection,
+} from "@/workflow/utils/graph";
 import { createEdgeId } from "@/workflow/utils/id";
-import { buildPublishChecklist, canPublishWorkflow } from "@/workflow/utils/review";
+import {
+  buildPublishChecklist,
+  canPublishWorkflow,
+} from "@/workflow/utils/review";
 import { compileGraphToLegacyFlow } from "@/workflow/services/workflowAdapter";
 
 interface WorkflowBuilderStatePayload {
@@ -70,10 +95,14 @@ type RightPanelTab = "library" | "inspector" | "insights";
 
 const GRID = 24;
 
-const isDefaultPathEdge = (edge: WorkflowEdge) => !edge.sourceHandle || edge.sourceHandle === "out";
+const isDefaultPathEdge = (edge: WorkflowEdge) =>
+  !edge.sourceHandle || edge.sourceHandle === "out";
 
 const nodeHasDefaultOutput = (kind: WorkflowNodeKind) =>
-  kind === "trigger" || kind === "send_email" || kind === "wait" || kind === "webhook";
+  kind === "trigger" ||
+  kind === "send_email" ||
+  kind === "wait" ||
+  kind === "webhook";
 
 const nodeSupportsDefaultInput = (kind: WorkflowNodeKind) => kind !== "trigger";
 
@@ -82,14 +111,19 @@ const snapPoint = (position: { x: number; y: number }) => ({
   y: Math.round(position.y / GRID) * GRID,
 });
 
-const findLinearInsertSource = (graph: WorkflowGraph, preferredSourceId?: string | null) => {
+const findLinearInsertSource = (
+  graph: WorkflowGraph,
+  preferredSourceId?: string | null,
+) => {
   const nodeById = new Map(graph.nodes.map((node) => [node.id, node]));
   const preferred = preferredSourceId ? nodeById.get(preferredSourceId) : null;
   if (preferred && nodeHasDefaultOutput(preferred.kind)) return preferred.id;
 
   const trigger = findTriggerNode(graph.nodes);
   if (!trigger) {
-    return graph.nodes.find((node) => nodeHasDefaultOutput(node.kind))?.id || null;
+    return (
+      graph.nodes.find((node) => nodeHasDefaultOutput(node.kind))?.id || null
+    );
   }
 
   let current: WorkflowNode | null = trigger;
@@ -98,17 +132,25 @@ const findLinearInsertSource = (graph: WorkflowGraph, preferredSourceId?: string
 
   while (current && !visited.has(current.id)) {
     visited.add(current.id);
-    const nextEdge = graph.edges.find((edge) => edge.source === current!.id && isDefaultPathEdge(edge));
+    const nextEdge = graph.edges.find(
+      (edge) => edge.source === current!.id && isDefaultPathEdge(edge),
+    );
     if (!nextEdge) {
       if (current.kind === "exit") {
-        return previous && nodeHasDefaultOutput(previous.kind) ? previous.id : null;
+        return previous && nodeHasDefaultOutput(previous.kind)
+          ? previous.id
+          : null;
       }
-      return nodeHasDefaultOutput(current.kind) ? current.id : previous?.id || null;
+      return nodeHasDefaultOutput(current.kind)
+        ? current.id
+        : previous?.id || null;
     }
 
     const nextNode = nodeById.get(nextEdge.target) || null;
     if (!nextNode) {
-      return nodeHasDefaultOutput(current.kind) ? current.id : previous?.id || null;
+      return nodeHasDefaultOutput(current.kind)
+        ? current.id
+        : previous?.id || null;
     }
 
     previous = current;
@@ -118,15 +160,22 @@ const findLinearInsertSource = (graph: WorkflowGraph, preferredSourceId?: string
   return previous && nodeHasDefaultOutput(previous.kind) ? previous.id : null;
 };
 
-const pickDropSourceNodeId = (graph: WorkflowGraph, position: { x: number; y: number }) => {
-  const candidates = graph.nodes.filter((node) => nodeHasDefaultOutput(node.kind));
+const pickDropSourceNodeId = (
+  graph: WorkflowGraph,
+  position: { x: number; y: number },
+) => {
+  const candidates = graph.nodes.filter((node) =>
+    nodeHasDefaultOutput(node.kind),
+  );
   if (!candidates.length) return null;
 
   let bestNode = candidates[0];
   let bestScore = Number.POSITIVE_INFINITY;
 
   candidates.forEach((node) => {
-    const score = Math.abs(node.position.y - position.y) + Math.abs(node.position.x - position.x) * 0.35;
+    const score =
+      Math.abs(node.position.y - position.y) +
+      Math.abs(node.position.x - position.x) * 0.35;
     if (score < bestScore) {
       bestScore = score;
       bestNode = node;
@@ -136,7 +185,11 @@ const pickDropSourceNodeId = (graph: WorkflowGraph, position: { x: number; y: nu
   return bestNode.id;
 };
 
-const buildLinearInsertGraph = (graph: WorkflowGraph, newNode: WorkflowNode, preferredSourceId?: string | null): WorkflowGraph => {
+const buildLinearInsertGraph = (
+  graph: WorkflowGraph,
+  newNode: WorkflowNode,
+  preferredSourceId?: string | null,
+): WorkflowGraph => {
   const sourceId = findLinearInsertSource(graph, preferredSourceId);
   const nodes = [...graph.nodes, newNode];
   const nodeById = new Map(nodes.map((node) => [node.id, node]));
@@ -163,7 +216,9 @@ const buildLinearInsertGraph = (graph: WorkflowGraph, newNode: WorkflowNode, pre
   }
 
   const edges = [...graph.edges];
-  const displacedEdgeIndex = edges.findIndex((edge) => edge.source === sourceId && isDefaultPathEdge(edge));
+  const displacedEdgeIndex = edges.findIndex(
+    (edge) => edge.source === sourceId && isDefaultPathEdge(edge),
+  );
   let displacedTargetId: string | null = null;
 
   if (displacedEdgeIndex >= 0) {
@@ -211,7 +266,7 @@ const buildBranchInsertGraph = (
   graph: WorkflowGraph,
   newNode: WorkflowNode,
   sourceNodeId: string,
-  sourceHandle: string
+  sourceHandle: string,
 ): WorkflowGraph => {
   const nodes = [...graph.nodes, newNode];
   const nodeById = new Map(nodes.map((node) => [node.id, node]));
@@ -259,7 +314,7 @@ const buildBranchInsertGraph = (
       targetHandle: "in",
     },
     nodes,
-    edges
+    edges,
   );
 
   if (!sourceToNew.edge || sourceToNew.error) {
@@ -288,7 +343,7 @@ const buildBranchInsertGraph = (
           targetHandle: displacedEdge.targetHandle || "in",
         },
         nodes,
-        edges
+        edges,
       );
 
       if (reconnect.edge && !reconnect.error) {
@@ -336,37 +391,61 @@ const WorkflowBuilder = ({
   onTriggerTypeChange,
 }: WorkflowBuilderProps) => {
   const graph = useWorkflowBuilderStore((state) => state.graph);
-  const selectedNodeIds = useWorkflowBuilderStore((state) => state.selectedNodeIds);
-  const selectedEdgeIds = useWorkflowBuilderStore((state) => state.selectedEdgeIds);
+  const selectedNodeIds = useWorkflowBuilderStore(
+    (state) => state.selectedNodeIds,
+  );
+  const selectedEdgeIds = useWorkflowBuilderStore(
+    (state) => state.selectedEdgeIds,
+  );
   const runtime = useWorkflowBuilderStore((state) => state.runtimeEvents);
   const dirty = useWorkflowBuilderStore((state) => state.dirty);
   const lastSavedAt = useWorkflowBuilderStore((state) => state.lastSavedAt);
 
   const setGraph = useWorkflowBuilderStore((state) => state.setGraph);
-  const setRuntimeEvents = useWorkflowBuilderStore((state) => state.setRuntimeEvents);
+  const setRuntimeEvents = useWorkflowBuilderStore(
+    (state) => state.setRuntimeEvents,
+  );
   const markSaved = useWorkflowBuilderStore((state) => state.markSaved);
   const setSelection = useWorkflowBuilderStore((state) => state.setSelection);
   const updateNode = useWorkflowBuilderStore((state) => state.updateNode);
-  const updateNodeConfig = useWorkflowBuilderStore((state) => state.updateNodeConfig);
+  const updateNodeConfig = useWorkflowBuilderStore(
+    (state) => state.updateNodeConfig,
+  );
   const replaceGraph = useWorkflowBuilderStore((state) => state.replaceGraph);
-  const applyNodeChanges = useWorkflowBuilderStore((state) => state.applyNodeChanges);
-  const applyEdgeChanges = useWorkflowBuilderStore((state) => state.applyEdgeChanges);
+  const applyNodeChanges = useWorkflowBuilderStore(
+    (state) => state.applyNodeChanges,
+  );
+  const applyEdgeChanges = useWorkflowBuilderStore(
+    (state) => state.applyEdgeChanges,
+  );
   const addEdge = useWorkflowBuilderStore((state) => state.addEdge);
-  const removeSelection = useWorkflowBuilderStore((state) => state.removeSelection);
+  const disconnectNode = useWorkflowBuilderStore(
+    (state) => state.disconnectNode,
+  );
+  const removeSelection = useWorkflowBuilderStore(
+    (state) => state.removeSelection,
+  );
   const undo = useWorkflowBuilderStore((state) => state.undo);
   const redo = useWorkflowBuilderStore((state) => state.redo);
   const canUndo = useWorkflowBuilderStore((state) => state.canUndo);
   const canRedo = useWorkflowBuilderStore((state) => state.canRedo);
   const runSimulation = useWorkflowBuilderStore((state) => state.runSimulation);
-  const clearSimulation = useWorkflowBuilderStore((state) => state.clearSimulation);
+  const clearSimulation = useWorkflowBuilderStore(
+    (state) => state.clearSimulation,
+  );
 
   const [overlayErrors, setOverlayErrors] = useState<string[]>([]);
   const [saving, setSaving] = useState(false);
-  const [activeDragKind, setActiveDragKind] = useState<keyof typeof nodePluginMap | null>(null);
-  const [insightsMode, setInsightsMode] = useState<"runtime" | "review">("review");
+  const [activeDragKind, setActiveDragKind] = useState<
+    keyof typeof nodePluginMap | null
+  >(null);
+  const [insightsMode, setInsightsMode] = useState<"runtime" | "review">(
+    "review",
+  );
   const [rightPanelTab, setRightPanelTab] = useState<RightPanelTab>("library");
   const [rightPanelCompact, setRightPanelCompact] = useState(false);
-  const [rightPanelCompactTouched, setRightPanelCompactTouched] = useState(false);
+  const [rightPanelCompactTouched, setRightPanelCompactTouched] =
+    useState(false);
   const [rightPanelCollapsed, setRightPanelCollapsed] = useState(false);
   const [rightPanelTouched, setRightPanelTouched] = useState(false);
   const flowRef = useRef<ReactFlowInstance | null>(null);
@@ -405,7 +484,9 @@ const WorkflowBuilder = ({
   useEffect(() => {
     if (rightPanelCompactTouched || typeof window === "undefined") return;
 
-    const mediaQuery = window.matchMedia("(max-width: 1680px), (max-height: 980px)");
+    const mediaQuery = window.matchMedia(
+      "(max-width: 1680px), (max-height: 980px)",
+    );
     const apply = () => setRightPanelCompact(mediaQuery.matches);
     apply();
 
@@ -428,9 +509,25 @@ const WorkflowBuilder = ({
     setGraph(initialGraph, { resetHistory: true, markDirty: false });
   }, [initialGraph, setGraph, workflowId]);
 
+  useEffect(() => {
+    if (!flowRef.current || graph.nodes.length === 0) return;
+
+    const timer = window.setTimeout(() => {
+      flowRef.current?.fitView({
+        padding: 0.18,
+        duration: 280,
+        minZoom: 0.35,
+        maxZoom: 1.2,
+      });
+    }, 40);
+
+    return () => window.clearTimeout(timer);
+  }, [graph.edges.length, graph.nodes.length, workflowId]);
+
   const runtimeEventsSignature = useMemo(
-    () => runtimeEvents.map((event) => `${event.id}:${event.createdAt}`).join("|"),
-    [runtimeEvents]
+    () =>
+      runtimeEvents.map((event) => `${event.id}:${event.createdAt}`).join("|"),
+    [runtimeEvents],
   );
 
   useEffect(() => {
@@ -464,23 +561,40 @@ const WorkflowBuilder = ({
     } finally {
       setSaving(false);
     }
-  }, [checklistPass, compile.errors, compile.flow, graph, markSaved, onPersist]);
+  }, [
+    checklistPass,
+    compile.errors,
+    compile.flow,
+    graph,
+    markSaved,
+    onPersist,
+  ]);
 
   useWorkflowKeyboardShortcuts({ onSave, enabled: true });
   useWorkflowAutosave({ enabled: true, onSave });
 
   const onConnect = useCallback(
     (connection: Connection) => {
-      const result = makeEdgeFromConnection(connection, graph.nodes, graph.edges);
+      const result = makeEdgeFromConnection(
+        connection,
+        graph.nodes,
+        graph.edges,
+      );
       if (result.error || !result.edge) {
-        setOverlayErrors((prev) => [result.error || "Invalid connection", ...prev].slice(0, 4));
-        toast({ title: "Invalid connection", description: result.error || "Could not connect nodes.", variant: "destructive" });
+        setOverlayErrors((prev) =>
+          [result.error || "Invalid connection", ...prev].slice(0, 4),
+        );
+        toast({
+          title: "Invalid connection",
+          description: result.error || "Could not connect nodes.",
+          variant: "destructive",
+        });
         return;
       }
       addEdge(result.edge);
       setOverlayErrors([]);
     },
-    [addEdge, graph.edges, graph.nodes]
+    [addEdge, graph.edges, graph.nodes],
   );
 
   const onReconnect = useCallback(
@@ -488,11 +602,19 @@ const WorkflowBuilder = ({
       const existing = graph.edges.find((edge) => edge.id === oldEdge.id);
       if (!existing) return;
 
-      const remainingEdges = graph.edges.filter((edge) => edge.id !== oldEdge.id);
-      const result = makeEdgeFromConnection(connection, graph.nodes, remainingEdges);
+      const remainingEdges = graph.edges.filter(
+        (edge) => edge.id !== oldEdge.id,
+      );
+      const result = makeEdgeFromConnection(
+        connection,
+        graph.nodes,
+        remainingEdges,
+      );
 
       if (result.error || !result.edge) {
-        setOverlayErrors((prev) => [result.error || "Invalid reconnection", ...prev].slice(0, 4));
+        setOverlayErrors((prev) =>
+          [result.error || "Invalid reconnection", ...prev].slice(0, 4),
+        );
         toast({
           title: "Invalid reconnection",
           description: result.error || "Could not reconnect edge.",
@@ -514,18 +636,20 @@ const WorkflowBuilder = ({
         {
           nodeIds: selectedNodeIds,
           edgeIds: [nextEdge.id],
-        }
+        },
       );
       setOverlayErrors([]);
     },
-    [graph, replaceGraph, selectedNodeIds]
+    [graph, replaceGraph, selectedNodeIds],
   );
 
   const selectedNodeId = selectedNodeIds[0] || null;
 
   useEffect(() => {
     if (!selectedNodeId) return;
-    setRightPanelTab((current) => (current === "library" ? "inspector" : current));
+    setRightPanelTab((current) =>
+      current === "library" ? "inspector" : current,
+    );
   }, [selectedNodeId]);
 
   const handleAddNode = useCallback(
@@ -533,7 +657,10 @@ const WorkflowBuilder = ({
       const plugin = nodePluginMap[kind];
       if (!plugin) return;
 
-      if (kind === "trigger" && graph.nodes.some((node) => node.kind === "trigger")) {
+      if (
+        kind === "trigger" &&
+        graph.nodes.some((node) => node.kind === "trigger")
+      ) {
         toast({
           title: "Trigger already exists",
           description: "This workflow already has a trigger block.",
@@ -543,23 +670,38 @@ const WorkflowBuilder = ({
       }
 
       const fallbackPosition = flowRef.current
-        ? flowRef.current.screenToFlowPosition({ x: window.innerWidth * 0.45, y: window.innerHeight * 0.42 })
+        ? flowRef.current.screenToFlowPosition({
+            x: window.innerWidth * 0.45,
+            y: window.innerHeight * 0.42,
+          })
         : { x: 220, y: 220 };
 
-      const nextNode = plugin.create(snapPoint(options?.position || fallbackPosition));
+      const nextNode = plugin.create(
+        snapPoint(options?.position || fallbackPosition),
+      );
       const nextGraph =
         options?.sourceNodeId && options?.sourceHandle
-          ? buildBranchInsertGraph(graph, nextNode, options.sourceNodeId, options.sourceHandle)
-          : buildLinearInsertGraph(graph, nextNode, options?.sourceNodeId || selectedNodeId);
+          ? buildBranchInsertGraph(
+              graph,
+              nextNode,
+              options.sourceNodeId,
+              options.sourceHandle,
+            )
+          : buildLinearInsertGraph(
+              graph,
+              nextNode,
+              options?.sourceNodeId || selectedNodeId,
+            );
 
       replaceGraph(nextGraph, { nodeIds: [nextNode.id], edgeIds: [] });
       setOverlayErrors([]);
     },
-    [graph, replaceGraph, selectedNodeId]
+    [graph, replaceGraph, selectedNodeId],
   );
 
   const onDragStart = useCallback((event: DragStartEvent) => {
-    const kind = (event.active.data.current?.kind || "") as keyof typeof nodePluginMap;
+    const kind = (event.active.data.current?.kind ||
+      "") as keyof typeof nodePluginMap;
     if (kind && nodePluginMap[kind]) {
       setActiveDragKind(kind);
     }
@@ -575,19 +717,28 @@ const WorkflowBuilder = ({
       const overId = String(event.over?.id || "");
       const sourceDropTarget = parseSourceDropTargetId(overId);
 
-      const kind = (event.active.data.current?.kind || "") as keyof typeof nodePluginMap;
+      const kind = (event.active.data.current?.kind ||
+        "") as keyof typeof nodePluginMap;
       if (!kind || !nodePluginMap[kind]) return;
 
       const translated = event.active.rect.current.translated;
       const activator = event.activatorEvent;
 
       const fallbackX =
-        activator instanceof MouseEvent || activator instanceof PointerEvent ? activator.clientX : window.innerWidth * 0.45;
+        activator instanceof MouseEvent || activator instanceof PointerEvent
+          ? activator.clientX
+          : window.innerWidth * 0.45;
       const fallbackY =
-        activator instanceof MouseEvent || activator instanceof PointerEvent ? activator.clientY : window.innerHeight * 0.42;
+        activator instanceof MouseEvent || activator instanceof PointerEvent
+          ? activator.clientY
+          : window.innerHeight * 0.42;
 
-      const clientX = translated ? translated.left + translated.width / 2 : fallbackX;
-      const clientY = translated ? translated.top + translated.height / 2 : fallbackY;
+      const clientX = translated
+        ? translated.left + translated.width / 2
+        : fallbackX;
+      const clientY = translated
+        ? translated.top + translated.height / 2
+        : fallbackY;
 
       const canvasElement = document.getElementById("workflow-canvas-dropzone");
       const canvasRect = canvasElement?.getBoundingClientRect();
@@ -603,7 +754,9 @@ const WorkflowBuilder = ({
 
       if (!insideCanvas) return;
 
-      const position = flowRef.current ? flowRef.current.screenToFlowPosition({ x: clientX, y: clientY }) : undefined;
+      const position = flowRef.current
+        ? flowRef.current.screenToFlowPosition({ x: clientX, y: clientY })
+        : undefined;
       const sourceNodeId = sourceDropTarget
         ? sourceDropTarget.nodeId
         : position
@@ -613,22 +766,38 @@ const WorkflowBuilder = ({
 
       handleAddNode(kind, { position, sourceNodeId, sourceHandle });
     },
-    [graph, handleAddNode, selectedNodeId]
+    [graph, handleAddNode, selectedNodeId],
   );
 
   const selectedNode = useMemo(
-    () => (selectedNodeId ? graph.nodes.find((node) => node.id === selectedNodeId) || null : null),
-    [graph.nodes, selectedNodeId]
+    () =>
+      selectedNodeId
+        ? graph.nodes.find((node) => node.id === selectedNodeId) || null
+        : null,
+    [graph.nodes, selectedNodeId],
+  );
+  const selectedNodeConnectionCount = useMemo(
+    () =>
+      selectedNodeId
+        ? graph.edges.filter(
+            (edge) =>
+              edge.source === selectedNodeId || edge.target === selectedNodeId,
+          ).length
+        : 0,
+    [graph.edges, selectedNodeId],
   );
 
   const handleSelectionChange = useCallback(
-    (params: { nodes: Array<{ id: string }>; edges: Array<{ id: string }> }) => {
+    (params: {
+      nodes: Array<{ id: string }>;
+      edges: Array<{ id: string }>;
+    }) => {
       setSelection(
         params.nodes.map((node) => node.id),
-        params.edges.map((edge) => edge.id)
+        params.edges.map((edge) => edge.id),
       );
     },
-    [setSelection]
+    [setSelection],
   );
 
   const handleInspectorTitleChange = useCallback(
@@ -636,7 +805,7 @@ const WorkflowBuilder = ({
       if (!selectedNodeId) return;
       updateNode(selectedNodeId, { title: value });
     },
-    [selectedNodeId, updateNode]
+    [selectedNodeId, updateNode],
   );
 
   const handleInspectorStatusChange = useCallback(
@@ -644,7 +813,7 @@ const WorkflowBuilder = ({
       if (!selectedNodeId) return;
       updateNode(selectedNodeId, { status: value });
     },
-    [selectedNodeId, updateNode]
+    [selectedNodeId, updateNode],
   );
 
   const handleInspectorConfigChange = useCallback(
@@ -654,8 +823,13 @@ const WorkflowBuilder = ({
 
       if (!selectedNode || selectedNode.kind !== "trigger") return;
 
-      const triggerType = typeof patch.triggerType === "string" ? patch.triggerType : null;
-      if (triggerType === "custom_event" || triggerType === "list_joined" || triggerType === "manual") {
+      const triggerType =
+        typeof patch.triggerType === "string" ? patch.triggerType : null;
+      if (
+        triggerType === "custom_event" ||
+        triggerType === "list_joined" ||
+        triggerType === "manual"
+      ) {
         onTriggerTypeChange?.(triggerType);
         if (triggerType !== "custom_event") {
           onWebhookEventNameChange?.("");
@@ -666,18 +840,36 @@ const WorkflowBuilder = ({
         onWebhookEventNameChange?.(patch.eventName);
       }
     },
-    [onTriggerTypeChange, onWebhookEventNameChange, selectedNode, selectedNodeId, updateNodeConfig]
+    [
+      onTriggerTypeChange,
+      onWebhookEventNameChange,
+      selectedNode,
+      selectedNodeId,
+      updateNodeConfig,
+    ],
   );
 
   const handleInspectorTestSend = useCallback(() => {
-    toast({ title: "Test send queued", description: "Sample test send endpoint can be wired from this hook." });
+    toast({
+      title: "Test send queued",
+      description: "Sample test send endpoint can be wired from this hook.",
+    });
   }, []);
+
+  const handleDisconnectNode = useCallback(() => {
+    if (!selectedNodeId) return;
+    disconnectNode(selectedNodeId);
+    setOverlayErrors([]);
+  }, [disconnectNode, selectedNodeId]);
 
   const handleInspectorWebhookTest = useCallback(() => {
     void onWebhookTest?.();
   }, [onWebhookTest]);
 
-  const allErrors = useMemo(() => Array.from(new Set(overlayErrors)), [overlayErrors]);
+  const allErrors = useMemo(
+    () => Array.from(new Set(overlayErrors)),
+    [overlayErrors],
+  );
   const hasSelection = selectedNodeIds.length > 0 || selectedEdgeIds.length > 0;
   const dragPlugin = activeDragKind ? nodePluginMap[activeDragKind] : null;
 
@@ -686,12 +878,18 @@ const WorkflowBuilder = ({
       {dragPlugin ? (
         <div className="pointer-events-none w-[240px] rounded-xl border border-slate-300 bg-white/95 p-3 shadow-xl">
           <div className="flex items-center gap-2">
-            <span className={`rounded-lg border bg-gradient-to-br p-2 ${dragPlugin.toneClass}`}>
+            <span
+              className={`rounded-lg border bg-gradient-to-br p-2 ${dragPlugin.toneClass}`}
+            >
               <dragPlugin.icon className="h-4 w-4 text-slate-700" />
             </span>
-            <p className="text-sm font-semibold text-slate-900">{dragPlugin.title}</p>
+            <p className="text-sm font-semibold text-slate-900">
+              {dragPlugin.title}
+            </p>
           </div>
-          <p className="mt-2 text-xs text-slate-600">{dragPlugin.description}</p>
+          <p className="mt-2 text-xs text-slate-600">
+            {dragPlugin.description}
+          </p>
         </div>
       ) : null}
     </DragOverlay>
@@ -704,7 +902,9 @@ const WorkflowBuilder = ({
           type="button"
           onClick={() => setInsightsMode("review")}
           className={`h-8 rounded text-xs font-medium transition-colors ${
-            insightsMode === "review" ? "bg-white text-slate-900 shadow-sm" : "text-slate-600"
+            insightsMode === "review"
+              ? "bg-white text-slate-900 shadow-sm"
+              : "text-slate-600"
           }`}
         >
           Review
@@ -713,7 +913,9 @@ const WorkflowBuilder = ({
           type="button"
           onClick={() => setInsightsMode("runtime")}
           className={`h-8 rounded text-xs font-medium transition-colors ${
-            insightsMode === "runtime" ? "bg-white text-slate-900 shadow-sm" : "text-slate-600"
+            insightsMode === "runtime"
+              ? "bg-white text-slate-900 shadow-sm"
+              : "text-slate-600"
           }`}
         >
           Runtime
@@ -730,20 +932,33 @@ const WorkflowBuilder = ({
   );
 
   return (
-    <DndContext onDragStart={onDragStart} onDragEnd={onDragEnd} onDragCancel={onDragCancel}>
+    <DndContext
+      onDragStart={onDragStart}
+      onDragEnd={onDragEnd}
+      onDragCancel={onDragCancel}
+    >
       <div className="space-y-3">
         <div className="rounded-2xl border border-slate-200 bg-slate-50/70 p-2">
           <div className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-slate-200 bg-white p-3 shadow-sm">
             <div className="flex flex-wrap items-center gap-2">
-              <Badge variant={workflowStatus === "live" ? "default" : "secondary"}>
+              <Badge
+                variant={workflowStatus === "live" ? "default" : "secondary"}
+              >
                 {workflowStatus === "live" ? "Live mode" : workflowStatus}
               </Badge>
-              <Badge variant="secondary">{dirty ? "Unsaved changes" : "Saved"}</Badge>
+              <Badge variant="secondary">
+                {dirty ? "Unsaved changes" : "Saved"}
+              </Badge>
               {lastSavedAt ? (
-                <span className="text-xs text-slate-500">Last saved {new Date(lastSavedAt).toLocaleTimeString()}</span>
+                <span className="text-xs text-slate-500">
+                  Last saved {new Date(lastSavedAt).toLocaleTimeString()}
+                </span>
               ) : null}
               {compile.errors.length > 0 ? (
-                <Badge variant="outline" className="border-amber-300 bg-amber-50 text-amber-700">
+                <Badge
+                  variant="outline"
+                  className="border-amber-300 bg-amber-50 text-amber-700"
+                >
                   {compile.errors.length} compatibility issue(s)
                 </Badge>
               ) : null}
@@ -763,26 +978,67 @@ const WorkflowBuilder = ({
                     {
                       nodeIds: selectedNodeIds,
                       edgeIds: selectedEdgeIds,
-                    }
+                    },
                   )
                 }
               >
                 Auto layout
               </Button>
-              <Button type="button" size="sm" variant="outline" onClick={() => runSimulation()}>
+              <Button
+                type="button"
+                size="sm"
+                variant="outline"
+                onClick={() => runSimulation()}
+              >
                 Simulate
               </Button>
-              <Button type="button" size="sm" variant="outline" onClick={() => clearSimulation()}>
+              <Button
+                type="button"
+                size="sm"
+                variant="outline"
+                onClick={() => clearSimulation()}
+              >
                 Clear simulation
               </Button>
-              <Button type="button" size="sm" variant="outline" onClick={undo} disabled={!canUndo()}>
+              <Button
+                type="button"
+                size="sm"
+                variant="outline"
+                onClick={undo}
+                disabled={!canUndo()}
+              >
                 Undo
               </Button>
-              <Button type="button" size="sm" variant="outline" onClick={redo} disabled={!canRedo()}>
+              <Button
+                type="button"
+                size="sm"
+                variant="outline"
+                onClick={redo}
+                disabled={!canRedo()}
+              >
                 Redo
               </Button>
-              <Button type="button" size="sm" variant="outline" onClick={removeSelection} disabled={!hasSelection}>
+              <Button
+                type="button"
+                size="sm"
+                variant="outline"
+                onClick={removeSelection}
+                disabled={!hasSelection}
+              >
                 Remove selected
+              </Button>
+              <Button
+                type="button"
+                size="sm"
+                variant="outline"
+                onClick={handleDisconnectNode}
+                disabled={
+                  !selectedNodeId ||
+                  selectedNode?.kind === "trigger" ||
+                  selectedNodeConnectionCount === 0
+                }
+              >
+                Disconnect node
               </Button>
               <Button
                 type="button"
@@ -806,7 +1062,12 @@ const WorkflowBuilder = ({
               >
                 {rightPanelCollapsed ? "Show panels" : "Focus canvas"}
               </Button>
-              <Button type="button" size="sm" onClick={() => void onSave()} disabled={saving}>
+              <Button
+                type="button"
+                size="sm"
+                onClick={() => void onSave()}
+                disabled={saving}
+              >
                 {saving ? "Saving..." : "Save"}
               </Button>
             </div>
@@ -814,7 +1075,9 @@ const WorkflowBuilder = ({
 
           <div
             className={`mt-2 grid h-[calc(100vh-280px)] min-h-[720px] gap-2 ${
-              rightPanelCollapsed ? "grid-cols-1" : "grid-cols-[minmax(0,1fr)_minmax(320px,360px)]"
+              rightPanelCollapsed
+                ? "grid-cols-1"
+                : "grid-cols-[minmax(0,1fr)_minmax(320px,360px)]"
             }`}
           >
             <div className="relative min-h-0 rounded-xl border border-slate-200 bg-white p-2">
@@ -846,6 +1109,11 @@ const WorkflowBuilder = ({
                 onNodesChange={applyNodeChanges}
                 onEdgesChange={applyEdgeChanges}
                 onSelectionChange={handleSelectionChange}
+                emptyState={{
+                  title: "Canvas is ready",
+                  description:
+                    "This workflow does not have visible blocks yet. Add a block from the sidebar or choose another workflow.",
+                }}
               />
             </div>
 
@@ -854,9 +1122,13 @@ const WorkflowBuilder = ({
                 <aside className="grid min-h-0 grid-rows-[auto_minmax(0,1fr)] gap-2">
                   <section className="rounded-xl border border-slate-200 bg-white p-2">
                     <div className="mb-1 flex items-center justify-between gap-2">
-                      <p className="text-xs font-semibold uppercase tracking-[0.12em] text-slate-500">Sidebar</p>
+                      <p className="text-xs font-semibold uppercase tracking-[0.12em] text-slate-500">
+                        Sidebar
+                      </p>
                       <p className="text-[11px] text-slate-500">
-                        {selectedNode ? `Selected: ${selectedNode.title}` : "No node selected"}
+                        {selectedNode
+                          ? `Selected: ${selectedNode.title}`
+                          : "No node selected"}
                       </p>
                     </div>
                     <div className="grid grid-cols-3 gap-1 rounded-md bg-slate-100 p-1">
@@ -864,7 +1136,9 @@ const WorkflowBuilder = ({
                         type="button"
                         onClick={() => setRightPanelTab("library")}
                         className={`h-8 rounded text-xs font-medium transition-colors ${
-                          rightPanelTab === "library" ? "bg-white text-slate-900 shadow-sm" : "text-slate-600"
+                          rightPanelTab === "library"
+                            ? "bg-white text-slate-900 shadow-sm"
+                            : "text-slate-600"
                         }`}
                       >
                         Blocks
@@ -873,7 +1147,9 @@ const WorkflowBuilder = ({
                         type="button"
                         onClick={() => setRightPanelTab("inspector")}
                         className={`h-8 rounded text-xs font-medium transition-colors ${
-                          rightPanelTab === "inspector" ? "bg-white text-slate-900 shadow-sm" : "text-slate-600"
+                          rightPanelTab === "inspector"
+                            ? "bg-white text-slate-900 shadow-sm"
+                            : "text-slate-600"
                         }`}
                       >
                         Inspector
@@ -882,7 +1158,9 @@ const WorkflowBuilder = ({
                         type="button"
                         onClick={() => setRightPanelTab("insights")}
                         className={`h-8 rounded text-xs font-medium transition-colors ${
-                          rightPanelTab === "insights" ? "bg-white text-slate-900 shadow-sm" : "text-slate-600"
+                          rightPanelTab === "insights"
+                            ? "bg-white text-slate-900 shadow-sm"
+                            : "text-slate-600"
                         }`}
                       >
                         Insights
@@ -893,7 +1171,9 @@ const WorkflowBuilder = ({
                   <div className="min-h-0">
                     {rightPanelTab === "library" ? (
                       <WorkflowBlockLibrary
-                        onQuickAdd={(kind) => handleAddNode(kind, { sourceNodeId: selectedNodeId })}
+                        onQuickAdd={(kind) =>
+                          handleAddNode(kind, { sourceNodeId: selectedNodeId })
+                        }
                       />
                     ) : null}
                     {rightPanelTab === "inspector" ? (
@@ -904,6 +1184,7 @@ const WorkflowBuilder = ({
                         onChangeStatus={handleInspectorStatusChange}
                         onPatchConfig={handleInspectorConfigChange}
                         onTestSend={handleInspectorTestSend}
+                        onDisconnectNode={handleDisconnectNode}
                         webhookSetup={webhookSetup}
                         onWebhookEventNameChange={onWebhookEventNameChange}
                         onWebhookSecretChange={onWebhookSecretChange}
@@ -918,7 +1199,9 @@ const WorkflowBuilder = ({
               ) : (
                 <aside className="grid min-h-0 grid-rows-[260px_minmax(0,1fr)_200px] gap-2">
                   <WorkflowBlockLibrary
-                    onQuickAdd={(kind) => handleAddNode(kind, { sourceNodeId: selectedNodeId })}
+                    onQuickAdd={(kind) =>
+                      handleAddNode(kind, { sourceNodeId: selectedNodeId })
+                    }
                   />
                   <WorkflowInspector
                     node={selectedNode}
@@ -927,6 +1210,7 @@ const WorkflowBuilder = ({
                     onChangeStatus={handleInspectorStatusChange}
                     onPatchConfig={handleInspectorConfigChange}
                     onTestSend={handleInspectorTestSend}
+                    onDisconnectNode={handleDisconnectNode}
                     webhookSetup={webhookSetup}
                     onWebhookEventNameChange={onWebhookEventNameChange}
                     onWebhookSecretChange={onWebhookSecretChange}
@@ -941,7 +1225,9 @@ const WorkflowBuilder = ({
           </div>
         </div>
       </div>
-      {typeof document === "undefined" ? dragOverlay : createPortal(dragOverlay, document.body)}
+      {typeof document === "undefined"
+        ? dragOverlay
+        : createPortal(dragOverlay, document.body)}
     </DndContext>
   );
 };

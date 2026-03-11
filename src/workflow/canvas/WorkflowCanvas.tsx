@@ -11,7 +11,11 @@ import {
 } from "@xyflow/react";
 import { useDroppable } from "@dnd-kit/core";
 import "@xyflow/react/dist/style.css";
-import type { EdgeChange, NodeChange, OnSelectionChangeParams } from "@xyflow/react";
+import type {
+  EdgeChange,
+  NodeChange,
+  OnSelectionChangeParams,
+} from "@xyflow/react";
 import { workflowEdgeTypes } from "@/workflow/edges/edgeTypes";
 import { workflowNodeTypes } from "@/workflow/nodes/nodeTypes";
 import type { WorkflowEdge, WorkflowNode } from "@/workflow/types/schema";
@@ -31,6 +35,10 @@ interface WorkflowCanvasProps {
   onSelectionChange?: (params: OnSelectionChangeParams) => void;
   readOnly?: boolean;
   dropzoneId?: string;
+  emptyState?: {
+    title: string;
+    description: string;
+  } | null;
 }
 
 const GRID = 24;
@@ -49,8 +57,12 @@ const WorkflowCanvas = ({
   onSelectionChange,
   readOnly = false,
   dropzoneId = "workflow-canvas-dropzone",
+  emptyState = null,
 }: WorkflowCanvasProps) => {
-  const { setNodeRef, isOver } = useDroppable({ id: dropzoneId, disabled: readOnly });
+  const { setNodeRef, isOver } = useDroppable({
+    id: dropzoneId,
+    disabled: readOnly,
+  });
 
   const flowNodes = useMemo(
     () =>
@@ -65,7 +77,7 @@ const WorkflowCanvas = ({
           selected: selectedNodeIds.includes(node.id),
         },
       })),
-    [nodes, readOnly, selectedNodeIds]
+    [nodes, readOnly, selectedNodeIds],
   );
 
   const flowEdges = useMemo(
@@ -87,7 +99,7 @@ const WorkflowCanvas = ({
               : "#64748b",
         },
       })),
-    [edges, selectedEdgeIds]
+    [edges, selectedEdgeIds],
   );
 
   return (
@@ -95,10 +107,24 @@ const WorkflowCanvas = ({
       id={dropzoneId}
       ref={setNodeRef}
       className={`relative h-full rounded-2xl border bg-white shadow-sm transition ${
-        !readOnly && isOver ? "border-[var(--shell-accent)] ring-2 ring-emerald-200" : "border-slate-200"
+        !readOnly && isOver
+          ? "border-[var(--shell-accent)] ring-2 ring-emerald-200"
+          : "border-slate-200"
       }`}
     >
       <WorkflowErrorsOverlay errors={errors} />
+      {emptyState && flowNodes.length === 0 ? (
+        <div className="pointer-events-none absolute inset-0 z-10 flex items-center justify-center">
+          <div className="max-w-sm rounded-2xl border border-slate-200 bg-white/96 px-6 py-5 text-center shadow-sm">
+            <p className="text-sm font-semibold text-slate-900">
+              {emptyState.title}
+            </p>
+            <p className="mt-2 text-sm text-slate-600">
+              {emptyState.description}
+            </p>
+          </div>
+        </div>
+      ) : null}
       <ReactFlow
         nodes={flowNodes}
         edges={flowEdges}
@@ -131,7 +157,12 @@ const WorkflowCanvas = ({
         proOptions={{ hideAttribution: true }}
         defaultEdgeOptions={{ type: "workflow", animated: true }}
       >
-        <Background color="#dbe3ef" gap={16} size={1.2} variant={BackgroundVariant.Dots} />
+        <Background
+          color="#dbe3ef"
+          gap={16}
+          size={1.2}
+          variant={BackgroundVariant.Dots}
+        />
         <Controls showInteractive={false} />
       </ReactFlow>
     </div>
