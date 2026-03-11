@@ -42,6 +42,115 @@ const getErrorMessage = (error: unknown) => {
   }
 };
 
+const sumAllocation = (rows: Array<Record<string, unknown>>, key: string) =>
+  rows.reduce((total, row) => total + Number(row?.[key] ?? 0), 0);
+
+const isMissingRpc = (error: any, functionName: string) =>
+  String(error?.code || "") === "PGRST202" && String(error?.message || "").includes(functionName);
+
+const validateInviteAllocationFallback = async (
+  admin: ReturnType<typeof createClient>,
+  parentMembership: { user_id: string; workspace_id: string },
+  allocationMetadata: {
+    credits_allocated: number | null;
+    max_active_campaigns: number | null;
+    max_sender_accounts: number | null;
+    daily_send_limit: number | null;
+    max_automations: number | null;
+  },
+) => {
+  const [
+    { data: parentDirectSnapshot, error: parentDirectError },
+    { data: parentFullSnapshot, error: parentFullError },
+    { data: childMemberships, error: childMembershipsError },
+  ] = await Promise.all([
+    admin.rpc("workspace_member_snapshot", {
+      p_user_id: parentMembership.user_id,
+      p_include_descendants: false,
+    }),
+    admin.rpc("workspace_member_snapshot", {
+      p_user_id: parentMembership.user_id,
+      p_include_descendants: true,
+    }),
+    admin
+      .from("workspace_memberships")
+      .select("user_id")
+      .eq("workspace_id", parentMembership.workspace_id)
+      .eq("parent_user_id", parentMembership.user_id),
+  ]);
+
+  if (parentDirectError) throw parentDirectError;
+  if (parentFullError) throw parentFullError;
+  if (childMembershipsError) throw childMembershipsError;
+
+  const directSnapshot = Array.isArray(parentDirectSnapshot) ? parentDirectSnapshot[0] : parentDirectSnapshot;
+  const fullSnapshot = Array.isArray(parentFullSnapshot) ? parentFullSnapshot[0] : parentFullSnapshot;
+  const childIds = (childMemberships || []).map((row: any) => row.user_id).filter(Boolean);
+
+  let siblingAllocations: Array<Record<string, unknown>> = [];
+  if (childIds.length > 0) {
+    const { data: allocationRows, error: allocationsError } = await admin
+      .from("workspace_quota_allocations")
+      .select("credits_allocated, max_active_campaigns, max_sender_accounts, daily_send_limit, max_automations")
+      .eq("status", "active")
+      .in("allocated_to_user_id", childIds);
+
+    if (allocationsError) throw allocationsError;
+    siblingAllocations = allocationRows || [];
+  }
+
+  const siblingCreditAlloc = sumAllocation(siblingAllocations, "credits_allocated");
+  const siblingCampaignAlloc = sumAllocation(siblingAllocations, "max_active_campaigns");
+  const siblingSenderAlloc = sumAllocation(siblingAllocations, "max_sender_accounts");
+  const siblingDailySendAlloc = sumAllocation(siblingAllocations, "daily_send_limit");
+  const siblingAutomationAlloc = sumAllocation(siblingAllocations, "max_automations");
+
+  if (
+    fullSnapshot?.credits_cap !== null &&
+    fullSnapshot?.credits_cap !== undefined &&
+    Number(directSnapshot?.credits_used || 0) + siblingCreditAlloc + Number(allocationMetadata.credits_allocated || 0) >
+      Number(fullSnapshot.credits_cap)
+  ) {
+    throw new Error("Credit allocation exceeds the remaining capacity of the parent admin.");
+  }
+
+  if (
+    fullSnapshot?.campaign_cap !== null &&
+    fullSnapshot?.campaign_cap !== undefined &&
+    Number(directSnapshot?.active_campaigns || 0) + siblingCampaignAlloc + Number(allocationMetadata.max_active_campaigns || 0) >
+      Number(fullSnapshot.campaign_cap)
+  ) {
+    throw new Error("Campaign allocation exceeds the remaining capacity of the parent admin.");
+  }
+
+  if (
+    fullSnapshot?.sender_cap !== null &&
+    fullSnapshot?.sender_cap !== undefined &&
+    Number(directSnapshot?.active_senders || 0) + siblingSenderAlloc + Number(allocationMetadata.max_sender_accounts || 0) >
+      Number(fullSnapshot.sender_cap)
+  ) {
+    throw new Error("Sender allocation exceeds the remaining capacity of the parent admin.");
+  }
+
+  if (
+    fullSnapshot?.daily_send_cap !== null &&
+    fullSnapshot?.daily_send_cap !== undefined &&
+    Number(directSnapshot?.sends_today || 0) + siblingDailySendAlloc + Number(allocationMetadata.daily_send_limit || 0) >
+      Number(fullSnapshot.daily_send_cap)
+  ) {
+    throw new Error("Daily send allocation exceeds the remaining capacity of the parent admin.");
+  }
+
+  if (
+    fullSnapshot?.automation_cap !== null &&
+    fullSnapshot?.automation_cap !== undefined &&
+    Number(directSnapshot?.live_automations || 0) + siblingAutomationAlloc + Number(allocationMetadata.max_automations || 0) >
+      Number(fullSnapshot.automation_cap)
+  ) {
+    throw new Error("Automation allocation exceeds the remaining capacity of the parent admin.");
+  }
+};
+
 const normalizeAppUrl = (value: string) => {
   const normalized = String(value || "").trim();
   if (!normalized) return "";
@@ -165,6 +274,10 @@ serve(async (req: Request) => {
       return jsonResponse({ error: "Your workspace membership is disabled" }, 403, req);
     }
 
+    if (actorMembership.role !== "owner" && actorMembership.role !== "admin") {
+      return jsonResponse({ error: "Only workspace owners and admins can invite members" }, 403, req);
+    }
+
     const requiresAdminPermission = role !== "user";
     const permissionName = requiresAdminPermission ? "create_admin" : "create_user";
 
@@ -202,9 +315,9 @@ serve(async (req: Request) => {
       );
     }
 
-    if (actorMembership.role !== "owner" && role !== "user") {
+    if (actorMembership.role === "admin" && role !== "user") {
       return jsonResponse(
-        { error: "Only workspace owners can invite admins, sub-admins, or reviewers" },
+        { error: "Admins can only invite standard users" },
         403,
         req,
       );
@@ -251,7 +364,7 @@ serve(async (req: Request) => {
       return jsonResponse({ error: "Parent admin is disabled" }, 400, req);
     }
 
-    if (actorMembership.role !== "owner" && parentUserId !== actor.id) {
+    if (actorMembership.role === "admin" && parentUserId !== actor.id) {
       return jsonResponse({ error: "Admins can only invite users under themselves" }, 403, req);
     }
 
@@ -289,7 +402,15 @@ serve(async (req: Request) => {
     });
 
     if (allocationError) {
-      return jsonResponse({ error: getErrorMessage(allocationError) }, 400, req);
+      if (isMissingRpc(allocationError, "workspace_validate_invite_allocation")) {
+        try {
+          await validateInviteAllocationFallback(admin, parentMembership, allocationMetadata);
+        } catch (fallbackError) {
+          return jsonResponse({ error: getErrorMessage(fallbackError) }, 400, req);
+        }
+      } else {
+        return jsonResponse({ error: getErrorMessage(allocationError) }, 400, req);
+      }
     }
 
     const inviteData = {

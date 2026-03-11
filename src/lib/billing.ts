@@ -1,4 +1,5 @@
 import { supabase } from '@/integrations/supabase/client';
+import { normalizeTeamErrorMessage } from './teamManagementHelpers.js';
 
 export type BillingCycle = 'monthly' | 'annual';
 export type PlanId = 'free' | 'growth' | 'scale' | 'enterprise';
@@ -119,7 +120,7 @@ export function formatCurrencyFromCents(amountCents: number, currency = 'USD') {
 
 export async function getBillingSnapshot(userId: string): Promise<BillingSnapshot | null> {
   const { data, error } = await client.rpc('get_billing_snapshot', { p_user_id: userId });
-  if (error) throw error;
+  if (error) throw new Error(normalizeTeamErrorMessage(error));
   return (Array.isArray(data) ? data[0] : null) as BillingSnapshot | null;
 }
 

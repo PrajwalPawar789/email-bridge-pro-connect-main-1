@@ -44,6 +44,8 @@ const defaultTemplate = (): EmailTemplate => ({
   preheader: '',
   format: 'html',
   blocks: [],
+  clickTrackingMode: 'all',
+  trackedLinkUrls: [],
   audience: 'All',
   voice: 'Professional',
   goal: 'Cold outreach',

@@ -58,9 +58,12 @@ const HTTP_LIBRARY_UA_TOKENS = [
   'go-http-client'
 ];
 
-const IMAGE_PROXY_UA_TOKENS = [
+const TRUSTED_IMAGE_PROXY_UA_TOKENS = [
   'googleimageproxy',
-  'ggpht.com',
+  'ggpht.com'
+];
+
+const PRIVACY_IMAGE_PROXY_UA_TOKENS = [
   'imageproxy',
   'image proxy',
   'mailprivacy'
@@ -144,17 +147,24 @@ serve(async (req) => {
         }
 
         const ua = userAgent.toLowerCase();
+        const hasHighConfidenceUa = hasToken(ua, HIGH_CONFIDENCE_UA_TOKENS);
+        const hasHttpLibraryUa = hasToken(ua, HTTP_LIBRARY_UA_TOKENS);
+        const hasTrustedImageProxyUa = hasToken(ua, TRUSTED_IMAGE_PROXY_UA_TOKENS);
+        const hasPrivacyImageProxyUa = hasToken(ua, PRIVACY_IMAGE_PROXY_UA_TOKENS);
+
         if (!ua) {
           addReason(100, 'empty_user_agent');
         } else {
-          if (hasToken(ua, HIGH_CONFIDENCE_UA_TOKENS)) {
+          if (hasHighConfidenceUa) {
             addReason(100, 'known_bot_ua');
           }
-          if (hasToken(ua, HTTP_LIBRARY_UA_TOKENS)) {
+          if (hasHttpLibraryUa) {
             addReason(80, 'http_library_ua');
           }
-          if (hasToken(ua, IMAGE_PROXY_UA_TOKENS)) {
+          if (hasPrivacyImageProxyUa) {
             addReason(40, 'image_proxy');
+          } else if (hasTrustedImageProxyUa) {
+            addReason(5, 'trusted_image_proxy');
           }
         }
 
@@ -180,7 +190,14 @@ serve(async (req) => {
           }
         }
 
-        const isBot = botScore >= BOT_SCORE_THRESHOLD;
+        const trustedImageProxyLikelyHuman =
+          hasTrustedImageProxyUa &&
+          !hasHighConfidenceUa &&
+          !hasHttpLibraryUa &&
+          req.method?.toUpperCase() !== 'HEAD' &&
+          recentIpCount < IP_BURST_THRESHOLD;
+
+        const isBot = trustedImageProxyLikelyHuman ? false : botScore >= BOT_SCORE_THRESHOLD;
 
         await supabase.from('tracking_events').insert({
           campaign_id: campaignId,

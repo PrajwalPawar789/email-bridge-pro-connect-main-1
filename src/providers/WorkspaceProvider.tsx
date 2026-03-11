@@ -4,6 +4,7 @@ import {
   getWorkspaceContext,
   type WorkspaceContext,
 } from "@/lib/teamManagement";
+import { normalizeTeamErrorMessage } from "@/lib/teamManagementHelpers.js";
 
 type WorkspaceContextValue = {
   workspace: WorkspaceContext | null;
@@ -41,9 +42,8 @@ export const WorkspaceProvider = ({ children }: { children: React.ReactNode }) =
       setWorkspace(nextWorkspace);
       setError(null);
     } catch (error) {
-      const message = error instanceof Error ? error.message : "Failed to load workspace context.";
+      const message = normalizeTeamErrorMessage(error) || "Failed to load workspace context.";
       console.error("Failed to load workspace context:", error);
-      setWorkspace(null);
       setError(message);
     } finally {
       setLoading(false);

@@ -58,6 +58,59 @@ const escapeHtml = (value: string) =>
     .replace(/'/g, "&#39;");
 
 const looksLikeHtml = (value: string) => /<\s*[a-z][\w-]*(\s[^>]*)?>/i.test(value);
+const EMAIL_BUILDER_STATE_REGEX = /<!--\s*VINTRO_EMAIL_BUILDER_STATE:([\s\S]*?)-->/;
+
+const fromBase64 = (value: string) => {
+  const binary = atob(value.replace(/\s+/g, ""));
+  const bytes = Uint8Array.from(binary, (char) => char.charCodeAt(0));
+  return new TextDecoder().decode(bytes);
+};
+
+const renderBuilderBlocksText = (blocks: any[]): string =>
+  blocks
+    .map((block) => String(block?.content?.text || "").trim())
+    .filter(Boolean)
+    .join("\n\n");
+
+const renderBuilderBlocksHtml = (blocks: any[]): string =>
+  blocks
+    .map((block) => {
+      const html = String(block?.content?.html || "").trim();
+      if (html) return html;
+      const text = String(block?.content?.text || "");
+      return text ? escapeHtml(text).replace(/\n/g, "<br />") : "";
+    })
+    .filter(Boolean)
+    .join("\n");
+
+const extractBuilderStateContent = (content: string) => {
+  const match = String(content || "").match(EMAIL_BUILDER_STATE_REGEX);
+  if (!match?.[1]) {
+    return {
+      cleanContent: String(content || ""),
+      builderText: "",
+      builderHtml: "",
+    };
+  }
+
+  const cleanContent = String(content || "").replace(EMAIL_BUILDER_STATE_REGEX, "").trim();
+  try {
+    const decoded = fromBase64(match[1]);
+    const parsed = JSON.parse(decoded);
+    const blocks = Array.isArray(parsed?.blocks) ? parsed.blocks : [];
+    return {
+      cleanContent,
+      builderText: renderBuilderBlocksText(blocks),
+      builderHtml: renderBuilderBlocksHtml(blocks),
+    };
+  } catch {
+    return {
+      cleanContent,
+      builderText: "",
+      builderHtml: "",
+    };
+  }
+};
 
 const formatPlainTextToHtml = (value: string) => {
   if (!value) return "";
@@ -764,18 +817,22 @@ const sendEmailForStep = async (
 
   const subjectRaw = String(config.subject || template?.subject || "").trim();
   const bodyRaw = String(config.body || template?.content || "").trim();
-  const isHtml = Boolean(config.is_html ?? template?.is_html ?? looksLikeHtml(bodyRaw));
+  const builderStateContent = extractBuilderStateContent(bodyRaw);
+  const sourceTextBody = builderStateContent.builderText || builderStateContent.cleanContent;
+  const sourceHtmlBody = builderStateContent.builderHtml || builderStateContent.cleanContent;
+  const isHtml = Boolean(builderStateContent.builderHtml) || Boolean(config.is_html ?? template?.is_html ?? looksLikeHtml(builderStateContent.cleanContent));
 
   if (!subjectRaw) {
     throw new Error("Email step subject is required.");
   }
-  if (!bodyRaw) {
+  if (!sourceTextBody && !sourceHtmlBody) {
     throw new Error("Email step body is required.");
   }
 
   const personalizedSubject = personalize(subjectRaw, contact, state, sender);
-  const personalizedBody = personalize(bodyRaw, contact, state, sender);
-  const htmlBody = isHtml ? personalizedBody : formatPlainTextToHtml(personalizedBody);
+  const personalizedBody = personalize(sourceTextBody, contact, state, sender);
+  const personalizedHtmlBody = personalize(sourceHtmlBody, contact, state, sender);
+  const htmlBody = isHtml ? personalizedHtmlBody : formatPlainTextToHtml(personalizedBody);
 
   const creditReferenceId = `automation:${workflow.id}:${contact.id}:step:${nodeId || stepIndex}:${Date.now()}`;
   const sendQuotaReferenceId = `automation:${workflow.id}:${contact.id}:step:${nodeId || stepIndex}:send-quota`;

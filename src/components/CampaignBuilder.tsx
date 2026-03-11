@@ -157,8 +157,10 @@ const renderPlainTextPreviewHtml = (value: string) => {
 };
 
 const looksLikeHtml = (value: string) => /<\s*[a-z][\w-]*(\s[^>]*)?>/i.test(value);
-const EMAIL_BUILDER_STATE_REGEX = /<!--\s*VINTRO_EMAIL_BUILDER_STATE:[A-Za-z0-9+/=]+\s*-->/g;
+const EMAIL_BUILDER_STATE_REGEX = /<!--\s*VINTRO_EMAIL_BUILDER_STATE:[\s\S]*?-->/g;
 const TRACKABLE_LINK_REGEX = /(href\s*=\s*["'](?:https?:\/\/|www\.)|(?:https?:\/\/|www\.)[^\s<>"']+)/i;
+const DEFAULT_AUTO_SENDER_DAILY_LIMIT = 100;
+const normalizeEmail = (value?: string | null) => (value || '').trim().toLowerCase();
 
 const resolveCampaignErrorMessage = (error: any) => {
   const message = String(error?.message || error?.details || '').trim();
@@ -188,6 +190,7 @@ const CampaignBuilder: React.FC<CampaignBuilderProps> = ({ emailConfigs }) => {
   const [loading, setLoading] = useState(false);
   const [templates, setTemplates] = useState<any[]>([]);
   const [selectedTemplate, setSelectedTemplate] = useState<string>('');
+  const [selectedTemplateBuilderState, setSelectedTemplateBuilderState] = useState<string>('');
   const [selectedListId, setSelectedListId] = useState<string>('');
   const [allLists, setAllLists] = useState<{ id: string, name: string }[]>([]);
   const [selectedSegmentId, setSelectedSegmentId] = useState<string>('');
@@ -195,6 +198,14 @@ const CampaignBuilder: React.FC<CampaignBuilderProps> = ({ emailConfigs }) => {
   const [followups, setFollowups] = useState<FollowupStep[]>([]);
   const [listCount, setListCount] = useState(0);
   const [segmentCount, setSegmentCount] = useState(0);
+  const [audienceSenderCheck, setAudienceSenderCheck] = useState({
+    loading: false,
+    checked: false,
+    senderEmailFound: false,
+    matchingAccountFound: false,
+    senderEmailCount: 0,
+    matchingAccountCount: 0,
+  });
   const [audienceType, setAudienceType] = useState<'list' | 'segment' | 'manual'>('list');
   const [scheduledAt, setScheduledAt] = useState<string>('');
   const [pipelineConfig, setPipelineConfig] = useState<PipelineConfigState>({
@@ -210,12 +221,31 @@ const CampaignBuilder: React.FC<CampaignBuilderProps> = ({ emailConfigs }) => {
   const [userPipelines, setUserPipelines] = useState<DbPipeline[]>([]);
   const [pipelineStagesById, setPipelineStagesById] = useState<Record<string, DbPipelineStage[]>>({});
   const contentBodyRef = useRef<HTMLTextAreaElement | null>(null);
+  const activeEmailConfigs = emailConfigs.filter((config) => config.is_active !== false);
+  const selectedConfigMap = new Map(selectedConfigs.map((config) => [config.configId, config.dailyLimit]));
+  const selectedSenderPool = activeEmailConfigs
+    .filter((config) => selectedConfigMap.has(config.id))
+    .map((config) => ({
+      configId: config.id,
+      dailyLimit: selectedConfigMap.get(config.id) || DEFAULT_AUTO_SENDER_DAILY_LIMIT,
+      smtpUsername: String(config.smtp_username || ''),
+      isAutoIncluded: false,
+    }));
+  const effectiveSenderConfigs =
+    senderAssignment === 'list' && selectedSenderPool.length === 0
+      ? activeEmailConfigs.map((config) => ({
+          configId: config.id,
+          dailyLimit: DEFAULT_AUTO_SENDER_DAILY_LIMIT,
+          smtpUsername: String(config.smtp_username || ''),
+          isAutoIncluded: true,
+        }))
+      : selectedSenderPool;
   const totalRecipients = audienceType === 'list'
     ? listCount
     : audienceType === 'segment'
       ? segmentCount
       : recipients.split('\n').filter((line) => line.trim()).length;
-  const totalDailyLimit = selectedConfigs.reduce((acc, curr) => acc + curr.dailyLimit, 0);
+  const totalDailyLimit = effectiveSenderConfigs.reduce((acc, curr) => acc + curr.dailyLimit, 0);
   const estimatedDays = totalDailyLimit > 0 ? Math.ceil(totalRecipients / totalDailyLimit) : 0;
   const scheduleLabel = scheduledAt ? new Date(scheduledAt).toLocaleString() : 'Not scheduled';
   const selectedPipeline = userPipelines.find((pipeline) => pipeline.id === pipelineConfig.pipelineId) || null;
@@ -236,8 +266,13 @@ const CampaignBuilder: React.FC<CampaignBuilderProps> = ({ emailConfigs }) => {
     },
     {
       label: 'Senders',
-      value: selectedConfigs.length,
-      helper: totalDailyLimit > 0 ? `${totalDailyLimit} / day` : 'No senders yet',
+      value: effectiveSenderConfigs.length,
+      helper:
+        senderAssignment === 'list' && selectedConfigs.length === 0 && effectiveSenderConfigs.length > 0
+          ? 'Auto-matched from sender_email column'
+          : totalDailyLimit > 0
+            ? `${totalDailyLimit} / day`
+            : 'No senders yet',
       icon: Mail,
       tone: 'bg-slate-100 text-slate-700'
     },
@@ -306,6 +341,139 @@ const CampaignBuilder: React.FC<CampaignBuilderProps> = ({ emailConfigs }) => {
 
     void fetchSegmentCount();
   }, [selectedSegmentId]);
+
+  useEffect(() => {
+    if (senderAssignment !== 'list' || audienceType === 'manual') {
+      setAudienceSenderCheck({
+        loading: false,
+        checked: false,
+        senderEmailFound: false,
+        matchingAccountFound: false,
+        senderEmailCount: 0,
+        matchingAccountCount: 0,
+      });
+      return;
+    }
+
+    if ((audienceType === 'list' && !selectedListId) || (audienceType === 'segment' && !selectedSegmentId)) {
+      setAudienceSenderCheck({
+        loading: false,
+        checked: false,
+        senderEmailFound: false,
+        matchingAccountFound: false,
+        senderEmailCount: 0,
+        matchingAccountCount: 0,
+      });
+      return;
+    }
+
+    let cancelled = false;
+
+    const checkAudienceSenderEmails = async () => {
+      setAudienceSenderCheck((prev) => ({ ...prev, loading: true, checked: false }));
+
+      const routingPool = new Set(
+        effectiveSenderConfigs
+          .map((config) => normalizeEmail(config.smtpUsername))
+          .filter(Boolean)
+      );
+      const senderEmails = new Set<string>();
+      const matchingEmails = new Set<string>();
+      const sampleLimit = 2000;
+
+      try {
+        if (audienceType === 'list' && selectedListId) {
+          const pageSize = 500;
+          let offset = 0;
+          let hasMore = true;
+
+          while (hasMore && offset < sampleLimit) {
+            const { data, error } = await supabase
+              .from('email_list_prospects')
+              .select('prospects (sender_email)')
+              .eq('list_id', selectedListId)
+              .range(offset, offset + pageSize - 1);
+
+            if (error) throw error;
+
+            const batch = Array.isArray(data) ? data : [];
+            batch.forEach((item: any) => {
+              const prospect = item?.prospects;
+              const prospects = Array.isArray(prospect) ? prospect : [prospect];
+              prospects.forEach((entry: any) => {
+                const senderEmail = normalizeEmail(entry?.sender_email);
+                if (!senderEmail || senderEmail === '-') return;
+                senderEmails.add(senderEmail);
+                if (routingPool.has(senderEmail)) matchingEmails.add(senderEmail);
+              });
+            });
+
+            if (batch.length < pageSize) {
+              hasMore = false;
+            } else {
+              offset += pageSize;
+            }
+          }
+        } else if (audienceType === 'segment' && selectedSegmentId) {
+          const pageSize = 500;
+          let offset = 0;
+          let hasMore = true;
+
+          while (hasMore && offset < sampleLimit) {
+            const { data, error } = await (supabase as any).rpc('fetch_segment_prospects', {
+              p_segment_id: selectedSegmentId,
+              p_limit: pageSize,
+              p_offset: offset,
+            });
+
+            if (error) throw error;
+
+            const batch = Array.isArray(data) ? data : [];
+            batch.forEach((prospect: any) => {
+              const senderEmail = normalizeEmail(prospect?.sender_email);
+              if (!senderEmail || senderEmail === '-') return;
+              senderEmails.add(senderEmail);
+              if (routingPool.has(senderEmail)) matchingEmails.add(senderEmail);
+            });
+
+            if (batch.length < pageSize) {
+              hasMore = false;
+            } else {
+              offset += pageSize;
+            }
+          }
+        }
+
+        if (cancelled) return;
+
+        setAudienceSenderCheck({
+          loading: false,
+          checked: true,
+          senderEmailFound: senderEmails.size > 0,
+          matchingAccountFound: matchingEmails.size > 0,
+          senderEmailCount: senderEmails.size,
+          matchingAccountCount: matchingEmails.size,
+        });
+      } catch (error) {
+        if (cancelled) return;
+        console.error('Failed to inspect audience sender_email coverage:', error);
+        setAudienceSenderCheck({
+          loading: false,
+          checked: true,
+          senderEmailFound: false,
+          matchingAccountFound: false,
+          senderEmailCount: 0,
+          matchingAccountCount: 0,
+        });
+      }
+    };
+
+    void checkAudienceSenderEmails();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [audienceType, emailConfigs, selectedConfigs, selectedListId, selectedSegmentId, senderAssignment]);
 
   const fetchTemplates = async () => {
     try {
@@ -396,6 +564,7 @@ const CampaignBuilder: React.FC<CampaignBuilderProps> = ({ emailConfigs }) => {
   const handleTemplateSelect = (templateId: string) => {
     const template = templates.find(t => t.id === templateId);
     if (template) {
+      const builderStateMatch = String(template.content || '').match(/<!--\s*VINTRO_EMAIL_BUILDER_STATE:[\s\S]*?-->/);
       const normalizedContent = (template.content || "")
         .replace(EMAIL_BUILDER_STATE_REGEX, '')
         .replace(/\s+$/, "");
@@ -405,6 +574,9 @@ const CampaignBuilder: React.FC<CampaignBuilderProps> = ({ emailConfigs }) => {
         content: normalizedContent,
         is_html: !!template.is_html
       }));
+      setSelectedTemplateBuilderState(builderStateMatch?.[0] || '');
+    } else {
+      setSelectedTemplateBuilderState('');
     }
     setSelectedTemplate(templateId);
     requestAnimationFrame(() => {
@@ -446,8 +618,15 @@ const CampaignBuilder: React.FC<CampaignBuilderProps> = ({ emailConfigs }) => {
           toast({ title: "Missing Information", description: "Please enter a campaign name.", variant: "destructive" });
           return false;
         }
-        if (selectedConfigs.length === 0) {
-          toast({ title: "Missing Information", description: "Please select at least one sender account.", variant: "destructive" });
+        if (effectiveSenderConfigs.length === 0) {
+          toast({
+            title: "Missing Information",
+            description:
+              senderAssignment === 'list'
+                ? "No active sender accounts are available for sender_email routing."
+                : "Please select at least one sender account.",
+            variant: "destructive"
+          });
           return false;
         }
         return true;
@@ -520,6 +699,10 @@ const CampaignBuilder: React.FC<CampaignBuilderProps> = ({ emailConfigs }) => {
             ? (selectedSegment?.source_list_id || null)
             : null;
 
+      const campaignBody = selectedTemplateBuilderState
+        ? `${String(form.content || '').trimEnd()}\n${selectedTemplateBuilderState}`
+        : form.content;
+
       // Create campaign
       const { data: campaign, error: campaignError } = await supabase
         .from('campaigns')
@@ -527,11 +710,11 @@ const CampaignBuilder: React.FC<CampaignBuilderProps> = ({ emailConfigs }) => {
           user_id: user.id,
           name: form.name,
           subject: form.subject,
-          body: form.content,
+          body: campaignBody,
           template_id: selectedTemplate || null,
           status: statusToUse,
           send_delay_minutes: form.send_delay_minutes,
-          email_config_id: selectedConfigs[0].configId,
+          email_config_id: effectiveSenderConfigs[0]?.configId || null,
           email_list_id: resolvedSourceListId,
           segment_id: audienceType === 'segment' ? (selectedSegmentId || null) : null,
           scheduled_at: scheduledAt ? new Date(scheduledAt).toISOString() : null,
@@ -542,13 +725,15 @@ const CampaignBuilder: React.FC<CampaignBuilderProps> = ({ emailConfigs }) => {
       if (campaignError) throw campaignError;
 
       // Save Campaign Email Configurations
-      const configInserts = selectedConfigs.map(c => ({
+      const configInserts = effectiveSenderConfigs.map(c => ({
         campaign_id: campaign.id,
         email_config_id: c.configId,
         daily_limit: c.dailyLimit
       }));
 
-      await supabase.from('campaign_email_configurations' as any).insert(configInserts);
+      if (configInserts.length > 0) {
+        await supabase.from('campaign_email_configurations' as any).insert(configInserts);
+      }
 
       // Save Follow-ups
       if (followups.length > 0) {
@@ -600,21 +785,18 @@ const CampaignBuilder: React.FC<CampaignBuilderProps> = ({ emailConfigs }) => {
 
       // Helper to assign config
         const assignConfig = (index: number) => {
-          return selectedConfigs[index % selectedConfigs.length].configId;
+          return effectiveSenderConfigs[index % effectiveSenderConfigs.length]?.configId || null;
         };
 
         const pickRandomConfigId = () => {
-          const choice = selectedConfigs[Math.floor(Math.random() * selectedConfigs.length)];
-          return choice?.configId || selectedConfigs[0]?.configId;
+          const choice = effectiveSenderConfigs[Math.floor(Math.random() * effectiveSenderConfigs.length)];
+          return choice?.configId || effectiveSenderConfigs[0]?.configId || null;
         };
 
-      const normalizeEmail = (value?: string | null) => (value || '').trim().toLowerCase();
-
       const selectedConfigByEmail = new Map<string, string>();
-      selectedConfigs.forEach((selected) => {
-        const config = emailConfigs.find((cfg) => cfg.id === selected.configId);
-        if (config?.smtp_username) {
-          selectedConfigByEmail.set(normalizeEmail(config.smtp_username), config.id);
+      effectiveSenderConfigs.forEach((selected) => {
+        if (selected.smtpUsername) {
+          selectedConfigByEmail.set(normalizeEmail(selected.smtpUsername), selected.configId);
         }
       });
 
@@ -966,6 +1148,11 @@ const CampaignBuilder: React.FC<CampaignBuilderProps> = ({ emailConfigs }) => {
 
             <div className="space-y-4">
               <Label className="text-base font-semibold text-[var(--builder-ink)]">Sender Accounts</Label>
+              {senderAssignment === 'list' && selectedConfigs.length === 0 && activeEmailConfigs.length > 0 && (
+                <p className="text-xs text-[var(--builder-muted)]">
+                  No manual selection required. Active sender accounts will be auto-used from the `sender_email` column.
+                </p>
+              )}
               <div className="border border-[var(--builder-border)] rounded-2xl overflow-hidden bg-white/60">
               <ScrollArea className="h-[240px]">
                 <div className="p-2 space-y-2">
@@ -1071,7 +1258,7 @@ const CampaignBuilder: React.FC<CampaignBuilderProps> = ({ emailConfigs }) => {
                 </button>
               </div>
               <p className="text-xs text-[var(--builder-muted)]">
-                Missing or "-" sender emails fall back to random. Sender emails must match a selected account.
+                Missing or "-" sender emails fall back to random. If no sender accounts are selected, all active accounts are used automatically.
               </p>
             </div>
           </div>
@@ -1184,6 +1371,29 @@ const CampaignBuilder: React.FC<CampaignBuilderProps> = ({ emailConfigs }) => {
                         <span>List loaded successfully with {listCount} prospects.</span>
                     </div>
                 )}
+                {senderAssignment === 'list' && selectedListId && (
+                  <div
+                    className={cn(
+                      "flex items-center gap-2 text-sm p-3 rounded-xl border",
+                      audienceSenderCheck.loading
+                        ? "text-slate-700 bg-slate-50 border-slate-200"
+                        : audienceSenderCheck.senderEmailFound && audienceSenderCheck.matchingAccountFound
+                          ? "text-emerald-700 bg-emerald-50/80 border-emerald-100"
+                          : "text-amber-700 bg-amber-50/80 border-amber-200"
+                    )}
+                  >
+                    {audienceSenderCheck.loading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Info className="h-4 w-4" />}
+                    <span>
+                      {audienceSenderCheck.loading
+                        ? 'Checking sender_email values in this audience...'
+                        : audienceSenderCheck.senderEmailFound
+                          ? audienceSenderCheck.matchingAccountFound
+                            ? `Found ${audienceSenderCheck.senderEmailCount} sender_email value(s); ${audienceSenderCheck.matchingAccountCount} match active sender account(s).`
+                            : `Found ${audienceSenderCheck.senderEmailCount} sender_email value(s), but none match your current sender pool.`
+                          : 'No sender_email values found in this audience sample.'}
+                    </span>
+                  </div>
+                )}
               </div>
             </TabsContent>
 
@@ -1225,6 +1435,29 @@ const CampaignBuilder: React.FC<CampaignBuilderProps> = ({ emailConfigs }) => {
                         <CheckCircle2 className="h-4 w-4" />
                         <span>Segment resolved to {segmentCount} matching prospects.</span>
                     </div>
+                )}
+                {senderAssignment === 'list' && selectedSegmentId && (
+                  <div
+                    className={cn(
+                      "flex items-center gap-2 text-sm p-3 rounded-xl border",
+                      audienceSenderCheck.loading
+                        ? "text-slate-700 bg-slate-50 border-slate-200"
+                        : audienceSenderCheck.senderEmailFound && audienceSenderCheck.matchingAccountFound
+                          ? "text-emerald-700 bg-emerald-50/80 border-emerald-100"
+                          : "text-amber-700 bg-amber-50/80 border-amber-200"
+                    )}
+                  >
+                    {audienceSenderCheck.loading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Info className="h-4 w-4" />}
+                    <span>
+                      {audienceSenderCheck.loading
+                        ? 'Checking sender_email values in this audience...'
+                        : audienceSenderCheck.senderEmailFound
+                          ? audienceSenderCheck.matchingAccountFound
+                            ? `Found ${audienceSenderCheck.senderEmailCount} sender_email value(s); ${audienceSenderCheck.matchingAccountCount} match active sender account(s).`
+                            : `Found ${audienceSenderCheck.senderEmailCount} sender_email value(s), but none match your current sender pool.`
+                          : 'No sender_email values found in this audience sample.'}
+                    </span>
+                  </div>
                 )}
               </div>
             </TabsContent>
@@ -1729,7 +1962,9 @@ const CampaignBuilder: React.FC<CampaignBuilderProps> = ({ emailConfigs }) => {
                 </div>
                 <div>
                   <span className="text-[var(--builder-muted)] block mb-1">Sender Accounts</span>
-                  <span className="font-medium text-[var(--builder-ink)]">{selectedConfigs.length} accounts selected</span>
+                  <span className="font-medium text-[var(--builder-ink)]">
+                    {effectiveSenderConfigs.length} account{effectiveSenderConfigs.length === 1 ? '' : 's'} {selectedConfigs.length === 0 && senderAssignment === 'list' ? 'auto-included' : 'selected'}
+                  </span>
                 </div>
                   <div>
                     <span className="text-[var(--builder-muted)] block mb-1">Audience Source</span>
@@ -1815,7 +2050,7 @@ const CampaignBuilder: React.FC<CampaignBuilderProps> = ({ emailConfigs }) => {
                   { label: 'Subject line set', valid: !!form.subject },
                   { label: 'Content added', valid: !!form.content },
                   { label: 'Recipients selected', valid: totalRecipients > 0 },
-                  { label: 'Senders configured', valid: selectedConfigs.length > 0 },
+                  { label: 'Senders configured', valid: effectiveSenderConfigs.length > 0 },
               ].map((item, i) => (
                   <div key={i} className="flex items-center gap-3 text-sm">
                     <div className={cn("w-5 h-5 rounded-full flex items-center justify-center", item.valid ? "bg-emerald-100 text-emerald-600" : "bg-slate-200 text-slate-400")}>
