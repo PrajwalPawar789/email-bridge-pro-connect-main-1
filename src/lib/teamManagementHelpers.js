@@ -53,7 +53,7 @@ export const getApprovalBadgeClass = (status) => {
 
 export const canActorInviteRole = (actorRole, targetRole) => {
   if (actorRole === "owner") return targetRole !== "owner";
-  if (actorRole === "admin" || actorRole === "sub_admin") return targetRole === "user";
+  if (actorRole === "admin") return targetRole === "user";
   return false;
 };
 
@@ -71,8 +71,12 @@ export const normalizeTeamErrorMessage = (error) => {
         : String(error?.message || error?.details || "Unexpected error");
 
   const lowered = message.toLowerCase();
+  if (lowered.includes("sender allocation exceeds the remaining capacity of the parent admin")) {
+    return "Max sender accounts exceeds the selected parent admin's remaining sender capacity. Lower the sender allocation or choose a different parent admin.";
+  }
   if (lowered.includes("outside of your scope")) return "That member is outside of your scope.";
   if (lowered.includes("not authorized")) return "You do not have permission for that action.";
+  if (lowered.includes("non-2xx status code")) return "The request failed. Check the form values and try again.";
   if (lowered.includes("approval")) return message;
   if (lowered.includes("allocation")) return message;
   if (lowered.includes("limit")) return message;

@@ -134,7 +134,7 @@ const DEFAULT_PLANS: Plan[] = [
 ];
 
 const coreRows: ComparisonRow[] = [
-  { label: 'Sender inboxes included', values: ['1', '5', '20', 'Unlimited'] },
+  { label: 'Sender inboxes included', values: ['1', '5', '50', 'Unlimited'] },
   { label: 'Campaigns included', values: ['3', '25', '100', 'Unlimited'] },
   { label: 'Campaign studio + sequencing', values: [true, true, true, true] },
   { label: 'AI follow-up automation', values: ['Basic', 'Advanced', 'Advanced + routing', 'Custom workflows'] },
@@ -1810,4 +1810,3 @@ export default function Subscription() {
     </DashboardLayout>
   );
 }
-

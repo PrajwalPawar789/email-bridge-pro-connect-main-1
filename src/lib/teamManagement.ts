@@ -1,4 +1,5 @@
 import { supabase } from "@/integrations/supabase/client";
+import { normalizeTeamErrorMessage as normalizeWorkspaceError } from "./teamManagementHelpers.js";
 export {
   approvalLabel,
   canActorInviteRole,
@@ -234,6 +235,44 @@ export type AllocationInput = {
 
 const db = supabase as any;
 
+const extractFunctionErrorMessage = async (error: any) => {
+  const fallback = String(error?.message || error?.details || "Unexpected error");
+  const response = error?.context;
+
+  if (!response) {
+    return fallback;
+  }
+
+  try {
+    if (typeof response.json === "function") {
+      const body = await response.json();
+      if (body && typeof body === "object") {
+        return String((body as any).error || (body as any).message || fallback);
+      }
+    }
+  } catch {
+    // Ignore JSON parsing issues and fall back to text below.
+  }
+
+  try {
+    if (typeof response.text === "function") {
+      const text = await response.text();
+      if (!text) return fallback;
+
+      try {
+        const parsed = JSON.parse(text);
+        return String(parsed?.error || parsed?.message || fallback);
+      } catch {
+        return text;
+      }
+    }
+  } catch {
+    // Ignore text parsing issues and use the fallback below.
+  }
+
+  return fallback;
+};
+
 const rewriteWorkspaceRpcError = (error: any, rpcName: string) => {
   const code = String(error?.code || "");
   const message = String(error?.message || "");
@@ -244,7 +283,7 @@ const rewriteWorkspaceRpcError = (error: any, rpcName: string) => {
     );
   }
 
-  throw error;
+  throw new Error(normalizeWorkspaceError(error));
 };
 
 const toSingle = <T>(value: unknown): T | null => {
@@ -340,9 +379,12 @@ export async function inviteWorkspaceMember(input: InviteWorkspaceMemberInput) {
     },
   });
 
-  if (error) throw error;
+  if (error) {
+    const message = await extractFunctionErrorMessage(error);
+    throw new Error(normalizeWorkspaceError(message));
+  }
   if ((data as any)?.error) {
-    throw new Error(String((data as any).error));
+    throw new Error(normalizeWorkspaceError(String((data as any).error)));
   }
   return data;
 }

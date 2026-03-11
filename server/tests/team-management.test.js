@@ -17,7 +17,7 @@ test('owner can invite admins and admins can only invite users', () => {
   assert.equal(canActorInviteRole('owner', 'owner'), false);
   assert.equal(canActorInviteRole('admin', 'user'), true);
   assert.equal(canActorInviteRole('admin', 'admin'), false);
-  assert.equal(canActorInviteRole('sub_admin', 'user'), true);
+  assert.equal(canActorInviteRole('sub_admin', 'user'), false);
   assert.equal(canActorInviteRole('reviewer', 'user'), false);
 });
 

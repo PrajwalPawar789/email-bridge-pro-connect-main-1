@@ -245,17 +245,97 @@ const escapeHtml = (value: string) =>
     .replace(/'/g, '&#39;');
 
 const looksLikeHtml = (value: string) => /<\s*[a-z][\w-]*(\s[^>]*)?>/i.test(value);
+const EMAIL_BUILDER_STATE_REGEX = /<!--\s*VINTRO_EMAIL_BUILDER_STATE:([\s\S]*?)-->/;
 
 const hasMarkdownFormatting = (value: string) =>
-  /(\*\*|__|^\s*(?:[-*]|\u2022)\s+|^\s*\d+[.)]\s+)/m.test(value);
+  /(\*\*|__|~~|(?<!\*)\*[^*\n]+?\*(?!\*)|^\s*(?:[-*]|\u2022)\s+|^\s*\d+[.)]\s+)/m.test(value);
+
+const fromBase64 = (value: string) => {
+  const binary = atob(value.replace(/\s+/g, ''));
+  const bytes = Uint8Array.from(binary, (char) => char.charCodeAt(0));
+  return new TextDecoder().decode(bytes);
+};
+
+const stripEmailBuilderState = (value: string) =>
+  String(value || '').replace(EMAIL_BUILDER_STATE_REGEX, '').trim();
+
+const normalizeTrackedLinkUrls = (value: unknown): string[] => {
+  if (!Array.isArray(value)) return [];
+  return value
+    .map((item) => String(item || '').trim())
+    .filter(Boolean);
+};
+
+const renderBuilderBlocksText = (blocks: any[]): string =>
+  blocks
+    .map((block) => String(block?.content?.text || '').trim())
+    .filter(Boolean)
+    .join('\n\n');
+
+const renderBuilderBlocksHtml = (blocks: any[]): string =>
+  blocks
+    .map((block) => {
+      const html = String(block?.content?.html || '').trim();
+      if (html) return html;
+      const text = String(block?.content?.text || '');
+      return text ? escapeHtml(text).replace(/\n/g, '<br />') : '';
+    })
+    .filter(Boolean)
+    .join('\n');
+
+const extractTrackingPreferences = (content: string) => {
+  const match = String(content || '').match(EMAIL_BUILDER_STATE_REGEX);
+  if (!match?.[1]) {
+    return {
+      cleanContent: stripEmailBuilderState(String(content || '')),
+      builderText: '',
+      builderHtml: '',
+      clickTrackingMode: 'all' as const,
+      trackedLinkUrls: [] as string[],
+    };
+  }
+
+  const cleanContent = stripEmailBuilderState(String(content || ''));
+  try {
+    const decoded = fromBase64(match[1]);
+    const parsed = JSON.parse(decoded);
+    const meta = parsed?.meta && typeof parsed.meta === 'object' ? parsed.meta : {};
+    const blocks = Array.isArray(parsed?.blocks) ? parsed.blocks : [];
+    const clickTrackingMode =
+      meta.clickTrackingMode === 'selected' || meta.clickTrackingMode === 'none'
+        ? meta.clickTrackingMode
+        : 'all';
+    return {
+      cleanContent,
+      builderText: renderBuilderBlocksText(blocks),
+      builderHtml: renderBuilderBlocksHtml(blocks),
+      clickTrackingMode,
+      trackedLinkUrls: normalizeTrackedLinkUrls(meta.trackedLinkUrls),
+    };
+  } catch {
+    return {
+      cleanContent,
+      builderText: '',
+      builderHtml: '',
+      clickTrackingMode: 'all' as const,
+      trackedLinkUrls: [] as string[],
+    };
+  }
+};
 
 const formatPlainTextToHtml = (value: string) => {
   if (!value) return '';
   const escaped = escapeHtml(value);
 
   const formatInline = (text: string) => {
-    const withBold = text.replace(/\*\*([\s\S]+?)\*\*/g, '<strong>$1</strong>');
-    return withBold.replace(/__([\s\S]+?)__/g, '<u>$1</u>');
+    const withLinks = text.replace(
+      /\[([^\]]+)\]\(((?:https?:\/\/|www\.)[^)\s]+)\)/g,
+      (_, label, url) => `<a href="${/^www\./i.test(url) ? `https://${url}` : url}">${label}</a>`
+    );
+    const withBold = withLinks.replace(/\*\*([\s\S]+?)\*\*/g, '<strong>$1</strong>');
+    const withUnderline = withBold.replace(/__([\s\S]+?)__/g, '<u>$1</u>');
+    const withStrike = withUnderline.replace(/~~([\s\S]+?)~~/g, '<s>$1</s>');
+    return withStrike.replace(/(^|[^\*])\*([^\*\n]+?)\*(?!\*)/g, '$1<em>$2</em>');
   };
 
   const lines = escaped.split(/\r?\n/);
@@ -378,10 +458,23 @@ const buildOpenTrackingUrl = (campaignId: string, recipientId: string, step: num
 const generateTrackingPixel = (trackingUrl: string) =>
   `<img src="${trackingUrl}" width="1" height="1" style="display:none;" alt="">`;
 
-const addTrackingToLinks = (htmlContent: string, campaignId: string, recipientId: string, step: number) => {
+const addTrackingToLinks = (
+  htmlContent: string,
+  campaignId: string,
+  recipientId: string,
+  step: number,
+  options: {
+    clickTrackingMode?: 'all' | 'selected' | 'none';
+    trackedLinkUrls?: string[];
+  } = {}
+) => {
   console.log('Processing links for tracking (v2.2)...');
   const trackingUrls: string[] = [];
   let urlCounter = 0;
+  const clickTrackingMode = options.clickTrackingMode || 'all';
+  const trackedLinkUrls = Array.from(new Set((options.trackedLinkUrls || []).map((item) => String(item || '').trim()).filter(Boolean)));
+  const shouldTrackAll = clickTrackingMode === 'all';
+  const shouldTrackNone = clickTrackingMode === 'none';
 
   // Regex to match URLs inside href attributes OR naked URLs.
   // Also supports bare www.example.com values by normalizing them to https://.
@@ -398,6 +491,10 @@ const addTrackingToLinks = (htmlContent: string, campaignId: string, recipientId
       if (!originalUrl) return match;
 
       const normalizedUrl = /^www\./i.test(originalUrl) ? `https://${originalUrl}` : originalUrl;
+      const shouldTrack = !shouldTrackNone && (shouldTrackAll || trackedLinkUrls.includes(originalUrl) || trackedLinkUrls.includes(normalizedUrl));
+      if (!shouldTrack) {
+        return match;
+      }
       const encodedUrl = encodeURIComponent(normalizedUrl);
       const trackingUrl = `${SUPABASE_URL}/functions/v1/track-email-click?campaign_id=${campaignId}&recipient_id=${recipientId}&url=${encodedUrl}&step=${step}`;
       trackingUrls.push(trackingUrl);
@@ -512,22 +609,39 @@ const sendEmail = async (
 
   const subjectToSend = contentOverride?.subject ?? campaign.subject;
   const bodyToSend = contentOverride?.body ?? campaign.body;
+  const trackingPreferences = extractTrackingPreferences(bodyToSend);
 
   const personalizedSubject = personalizeContent(subjectToSend, recipient, extraData, true);
   console.log(`Personalized subject: ${personalizedSubject}`);
 
-  const personalizedContent = personalizeContent(bodyToSend, recipient, extraData);
+  const sourceTextContent = stripEmailBuilderState(
+    trackingPreferences.builderText || trackingPreferences.cleanContent
+  );
+  const sourceHtmlContent = stripEmailBuilderState(
+    trackingPreferences.builderHtml || trackingPreferences.cleanContent
+  );
+  const personalizedContent = stripEmailBuilderState(
+    personalizeContent(sourceTextContent, recipient, extraData)
+  );
+  const personalizedHtmlContent = stripEmailBuilderState(
+    personalizeContent(sourceHtmlContent, recipient, extraData)
+  );
   console.log(`Personalizing content for recipient: ${recipient.id} (${recipient.email})`);
 
-  let isHtmlContent = contentOverride?.is_html ?? looksLikeHtml(bodyToSend);
-  if (hasMarkdownFormatting(bodyToSend)) {
+  let isHtmlContent =
+    Boolean(trackingPreferences.builderHtml) ||
+    (contentOverride?.is_html ?? looksLikeHtml(trackingPreferences.cleanContent));
+  if (!trackingPreferences.builderHtml && hasMarkdownFormatting(trackingPreferences.cleanContent)) {
     isHtmlContent = false;
   }
   const formattedContent = isHtmlContent
-    ? personalizedContent
+    ? personalizedHtmlContent
     : formatPlainTextToHtml(personalizedContent);
 
-  const { content: contentWithClickTracking, trackingUrls } = addTrackingToLinks(formattedContent, campaign.id, recipient.id, step);
+  const { content: contentWithClickTracking, trackingUrls } = addTrackingToLinks(formattedContent, campaign.id, recipient.id, step, {
+    clickTrackingMode: trackingPreferences.clickTrackingMode,
+    trackedLinkUrls: trackingPreferences.trackedLinkUrls,
+  });
   console.log(`Added tracking to ${trackingUrls.length} total URLs for recipient ${recipient.id}`);
 
   const openTrackingUrl = buildOpenTrackingUrl(campaign.id, recipient.id, step);
@@ -557,7 +671,7 @@ const sendEmail = async (
   const ghostLinkUrl = `${SUPABASE_URL}/functions/v1/track-email-click?campaign_id=${campaign.id}&recipient_id=${recipient.id}&url=${encodeURIComponent('http://example.com/unsubscribe')}&type=ghost&step=${step}`;
   const ghostLink = `<a href="${ghostLinkUrl}" style="display:none; visibility:hidden; opacity:0; position:absolute; left:-9999px;">Unsubscribe</a>`;
 
-  const finalContent = contentWithClickTracking + trackingPixel + ghostLink;
+  const finalContent = stripEmailBuilderState(contentWithClickTracking) + trackingPixel + ghostLink;
   console.log(`Final email content length: ${finalContent.length} characters`);
 
   const messageId = generateUniqueId();

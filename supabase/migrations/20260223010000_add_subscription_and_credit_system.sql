@@ -123,7 +123,7 @@ INSERT INTO public.billing_plans (
 VALUES
   ('free', 'Starter Trial', 'Validate your outbound workflow before scaling.', 0, 0, 2000, 24000, 1, true),
   ('growth', 'Growth', 'For lean GTM teams launching repeatable campaigns.', 7900, 6300, 100000, 1200000, 5, true),
-  ('scale', 'Scale', 'For revenue teams operating multiple inbox pods.', 14900, 11900, 300000, 3600000, 20, true),
+  ('scale', 'Scale', 'For revenue teams operating multiple inbox pods.', 14900, 11900, 300000, 3600000, 50, true),
   ('enterprise', 'Enterprise', 'For global teams with compliance and governance needs.', 0, 0, 0, 0, NULL, true)
 ON CONFLICT (id)
 DO UPDATE SET

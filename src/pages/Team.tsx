@@ -74,9 +74,8 @@ const Team = () => {
       hasPermission("manage_workspace"));
   const canManageMembers =
     teamRolesEnabled &&
-    (hasPermission("manage_workspace") ||
-      hasPermission("create_admin") ||
-      hasPermission("create_user"));
+    (workspace.role === "owner" || workspace.role === "admin") &&
+    (hasPermission("manage_workspace") || hasPermission("create_user") || hasPermission("create_admin"));
   const canReviewApprovals =
     teamApprovalsEnabled &&
     (hasPermission("manage_workspace") ||
@@ -235,15 +234,32 @@ const Team = () => {
     setMemberDialogOpen(true);
   };
 
+  const canEditMember = useCallback(
+    (member: WorkspaceMember) => {
+      if (!canManageMembers) return false;
+      if (workspace.role === "owner") return true;
+      return workspace.role === "admin" && member.role === "user";
+    },
+    [canManageMembers, workspace.role],
+  );
+
   const handleInvite = async (payload: Parameters<typeof inviteWorkspaceMember>[0]) => {
     setMemberDialogBusy(true);
     try {
       await inviteWorkspaceMember(payload);
-      await Promise.all([refreshWorkspace(), loadData()]);
       toast({
         title: "Invite sent",
         description: `${payload.email} was invited to the workspace.`,
       });
+      try {
+        await Promise.all([refreshWorkspace(), loadData()]);
+      } catch (refreshError) {
+        toast({
+          title: "Invite sent, refresh failed",
+          description: normalizeTeamErrorMessage(refreshError),
+          variant: "destructive",
+        });
+      }
     } catch (error) {
       toast({
         title: "Invite failed",
@@ -263,8 +279,29 @@ const Team = () => {
   ) => {
     setMemberDialogBusy(true);
     try {
-      await updateWorkspaceMember(userId, memberInput);
-      await setWorkspaceMemberAllocation(userId, allocationInput);
+      const currentMember = members.find((member) => member.user_id === userId) || null;
+      const currentSenderAllocation = currentMember?.max_sender_accounts ?? null;
+      const nextSenderAllocation =
+        allocationInput.maxSenderAccounts === undefined
+          ? currentSenderAllocation
+          : allocationInput.maxSenderAccounts;
+      const isParentChanging =
+        memberInput.parentUserId !== undefined &&
+        (memberInput.parentUserId ?? null) !== (currentMember?.parent_user_id ?? null);
+      const isSenderAllocationReducing =
+        currentSenderAllocation !== null &&
+        nextSenderAllocation !== null &&
+        nextSenderAllocation < currentSenderAllocation;
+
+      // When re-parenting and reducing sender allocation in the same save,
+      // apply the lower allocation first so the parent-change validation does not run against the stale higher limit.
+      if (isParentChanging && isSenderAllocationReducing) {
+        await setWorkspaceMemberAllocation(userId, allocationInput);
+        await updateWorkspaceMember(userId, memberInput);
+      } else {
+        await updateWorkspaceMember(userId, memberInput);
+        await setWorkspaceMemberAllocation(userId, allocationInput);
+      }
       await Promise.all([refreshWorkspace(), loadData()]);
       toast({
         title: "Member updated",
@@ -588,7 +625,7 @@ const Team = () => {
                         <TableCell>{member.active_senders} / {member.max_sender_accounts ?? "Unlimited"}</TableCell>
                         <TableCell>{member.sends_today} / {member.daily_send_limit ?? "Unlimited"}</TableCell>
                         <TableCell>
-                          {canManageMembers ? (
+                          {canEditMember(member) ? (
                             <Button variant="outline" size="sm" onClick={() => openEditDialog(member)}>
                               Edit
                             </Button>

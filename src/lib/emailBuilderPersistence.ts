@@ -55,6 +55,8 @@ export interface EmailBuilderTemplate {
   format: EmailBuilderFormat;
   blocks: EmailBuilderBlock[];
   rawHtml?: string;
+  clickTrackingMode?: 'all' | 'selected' | 'none';
+  trackedLinkUrls?: string[];
   audience: string;
   voice: string;
   goal: string;
@@ -65,7 +67,7 @@ export interface EmailBuilderTemplate {
 const DEFAULT_AUDIENCE = 'All';
 const DEFAULT_VOICE = 'Professional';
 const DEFAULT_GOAL = 'Cold outreach';
-const EMAIL_BUILDER_STATE_REGEX = /<!--\s*VINTRO_EMAIL_BUILDER_STATE:([A-Za-z0-9+/=]+)\s*-->/;
+const EMAIL_BUILDER_STATE_REGEX = /<!--\s*VINTRO_EMAIL_BUILDER_STATE:([\s\S]*?)-->/;
 
 const escapeHtml = (value: string) =>
   value
@@ -85,7 +87,7 @@ const toBase64 = (value: string) => {
 };
 
 const fromBase64 = (value: string) => {
-  const binary = atob(value);
+  const binary = atob(value.replace(/\s+/g, ''));
   const bytes = Uint8Array.from(binary, (char) => char.charCodeAt(0));
   return new TextDecoder().decode(bytes);
 };
@@ -185,6 +187,18 @@ const normalizeTheme = (value: any): EmailBuilderTheme => {
   };
 };
 
+const normalizeClickTrackingMode = (value: unknown): 'all' | 'selected' | 'none' => {
+  if (value === 'selected' || value === 'none') return value;
+  return 'all';
+};
+
+const normalizeTrackedLinkUrls = (value: unknown): string[] => {
+  if (!Array.isArray(value)) return [];
+  return value
+    .map((item) => String(item || '').trim())
+    .filter(Boolean);
+};
+
 const fallbackBlocksFromTemplate = (content: string, isHtml: boolean): EmailBuilderBlock[] => {
   if (!content.trim()) return [];
 
@@ -228,6 +242,8 @@ const extractBuilderState = (html: string) => {
       goal: DEFAULT_GOAL,
       format: 'html' as EmailBuilderFormat,
       theme: normalizeTheme(null),
+      clickTrackingMode: 'all' as const,
+      trackedLinkUrls: [] as string[],
     };
   }
 
@@ -247,6 +263,8 @@ const extractBuilderState = (html: string) => {
       goal: typeof meta.goal === 'string' && meta.goal.trim() ? meta.goal : DEFAULT_GOAL,
       format,
       theme: normalizeTheme(meta.theme),
+      clickTrackingMode: normalizeClickTrackingMode(meta.clickTrackingMode),
+      trackedLinkUrls: normalizeTrackedLinkUrls(meta.trackedLinkUrls),
     };
   } catch {
     return {
@@ -258,6 +276,8 @@ const extractBuilderState = (html: string) => {
       goal: DEFAULT_GOAL,
       format: 'html' as EmailBuilderFormat,
       theme: normalizeTheme(null),
+      clickTrackingMode: 'all' as const,
+      trackedLinkUrls: [] as string[],
     };
   }
 };
@@ -425,6 +445,8 @@ const serializeBuilderState = (template: EmailBuilderTemplate) => {
       goal: template.goal,
       format: template.format,
       theme: normalizeTheme(template.theme),
+      clickTrackingMode: normalizeClickTrackingMode(template.clickTrackingMode),
+      trackedLinkUrls: normalizeTrackedLinkUrls(template.trackedLinkUrls),
     },
   };
   return `<!-- VINTRO_EMAIL_BUILDER_STATE:${toBase64(JSON.stringify(payload))} -->`;
@@ -453,6 +475,8 @@ const toTemplate = (row: any): EmailBuilderTemplate => {
     format: hasBuilderState ? state.format : isHtml ? 'html' : 'plain',
     blocks,
     rawHtml: isHtml ? cleanContent || undefined : undefined,
+    clickTrackingMode: hasBuilderState ? state.clickTrackingMode : 'all',
+    trackedLinkUrls: hasBuilderState ? state.trackedLinkUrls : [],
     audience: hasBuilderState ? state.audience || DEFAULT_AUDIENCE : DEFAULT_AUDIENCE,
     voice: hasBuilderState ? state.voice || DEFAULT_VOICE : DEFAULT_VOICE,
     goal: hasBuilderState ? state.goal || DEFAULT_GOAL : DEFAULT_GOAL,
@@ -520,6 +544,8 @@ export const saveEmailBuilderTemplate = async (
     preheader: String(template.preheader || '').trim(),
     blocks: normalizeBlocks(template.blocks),
     rawHtml: sanitizeEmailHtml(String(template.rawHtml || '')) || undefined,
+    clickTrackingMode: normalizeClickTrackingMode(template.clickTrackingMode),
+    trackedLinkUrls: normalizeTrackedLinkUrls(template.trackedLinkUrls),
     audience: template.audience || DEFAULT_AUDIENCE,
     voice: template.voice || DEFAULT_VOICE,
     goal: template.goal || DEFAULT_GOAL,

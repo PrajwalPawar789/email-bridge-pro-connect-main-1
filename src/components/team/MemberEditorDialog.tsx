@@ -129,10 +129,13 @@ const MemberEditorDialog = ({
     setAllocation(toInitialAllocation());
   }, [actorRole, defaultParentUserId, mode, open, targetMember]);
 
-  const parentOptions = useMemo(
-    () => members.filter((member) => ["owner", "admin", "sub_admin"].includes(member.role)),
-    [members],
-  );
+  const parentOptions = useMemo(() => {
+    const managers = members.filter((member) => ["owner", "admin", "sub_admin"].includes(member.role));
+    if (actorRole === "admin") {
+      return managers.filter((member) => member.user_id === defaultParentUserId);
+    }
+    return managers;
+  }, [actorRole, defaultParentUserId, members]);
 
   const reviewerOptions = useMemo(
     () => members.filter((member) => ["owner", "admin", "sub_admin", "reviewer"].includes(member.role)),

@@ -7,6 +7,7 @@ import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from '@/
 import { Slider } from '@/components/ui/slider';
 import { Button } from '@/components/ui/button';
 import { cn } from '@/lib/utils';
+import { renderEmailTemplateText } from '@/lib/emailBuilderPersistence';
 
 const fontFamilies = [
   'Arial, Helvetica, sans-serif',
@@ -16,6 +17,78 @@ const fontFamilies = [
   'Tahoma, sans-serif',
   '"Trebuchet MS", sans-serif',
 ];
+
+const PLAIN_TEXT_STARTERS = [
+  {
+    id: 'cold-outreach',
+    label: 'Cold outreach',
+    description: 'Short first-touch email with one clear ask.',
+    subject: 'Quick question about {company}',
+    body:
+      'Hi {first_name},\n\nI noticed {company} is focused on growth and wanted to share an idea that could help your team move faster without adding extra overhead.\n\nWould you be open to a quick conversation next week?\n\nBest,\n{sender_name}',
+  },
+  {
+    id: 'follow-up',
+    label: 'Follow-up',
+    description: 'Simple reminder without sounding pushy.',
+    subject: 'Following up on my note',
+    body:
+      'Hi {first_name},\n\nJust following up in case my last note got buried.\n\nHappy to send over a short summary if that is easier.\n\nBest,\n{sender_name}',
+  },
+  {
+    id: 're-engage',
+    label: 'Re-engage',
+    description: 'Restart a conversation with context and a low-friction CTA.',
+    subject: 'Still relevant for {company}?',
+    body:
+      'Hi {first_name},\n\nWanted to circle back in case this is more relevant now.\n\nIf helpful, I can send a concise outline tailored to {company}.\n\nBest,\n{sender_name}',
+  },
+] as const;
+
+const PERSONALIZATION_TOKENS = ['{first_name}', '{last_name}', '{company}', '{job_title}', '{sender_name}', '{sender_email}'];
+const TRACKABLE_URL_REGEX = /(?:https?:\/\/|www\.)[^\s<>"']+/gi;
+
+const bodyToBlocks = (body: string, html?: string) => {
+  const normalizedText = String(body || '');
+  const normalizedHtml = String(html || '').trim();
+  if (normalizedText.length === 0 && normalizedHtml.length === 0) return [];
+  return [
+    {
+      id: crypto.randomUUID(),
+      type: 'text' as const,
+      content: {
+        text: normalizedText,
+        html: normalizedHtml || plainTextToRichHtml(normalizedText, 'text'),
+      },
+      styles: {
+        padding: '0',
+        backgroundColor: 'transparent',
+      },
+    },
+  ];
+};
+
+const extractLinkCandidates = (html: string, text: string) => {
+  const links = new Set<string>();
+  Array.from(String(text || '').matchAll(TRACKABLE_URL_REGEX)).forEach((match) => {
+    const value = String(match[0] || '').trim();
+    if (value) links.add(value);
+  });
+
+  if (typeof DOMParser !== 'undefined') {
+    try {
+      const doc = new DOMParser().parseFromString(String(html || ''), 'text/html');
+      Array.from(doc.querySelectorAll('a[href]')).forEach((anchor) => {
+        const href = String(anchor.getAttribute('href') || '').trim();
+        if (href) links.add(href);
+      });
+    } catch {
+      // Ignore parse issues.
+    }
+  }
+
+  return Array.from(links);
+};
 
 const safeStringify = (value: unknown) => {
   try {
@@ -91,21 +164,80 @@ function TemplateSettings() {
   const { currentTemplate, updateTemplateField } = useEmailBuilderStore();
   if (!currentTemplate) return null;
 
-  const wordCount = currentTemplate.blocks
-    .map((block) => String(block.content?.text || ''))
-    .join(' ')
-    .trim()
-    .split(/\s+/)
-    .filter(Boolean).length;
+  const plainPrimaryBlock =
+    currentTemplate.blocks.find((block) =>
+      block.type === 'text' || block.type === 'signature' || block.type === 'quote' || block.type === 'heading'
+    ) || null;
+  const plainBodyText =
+    (plainPrimaryBlock && typeof plainPrimaryBlock.content?.text === 'string'
+      ? plainPrimaryBlock.content.text
+      : renderEmailTemplateText(currentTemplate)) || '';
+  const plainBodyHtml =
+    (plainPrimaryBlock && typeof plainPrimaryBlock.content?.html === 'string'
+      ? plainPrimaryBlock.content.html
+      : plainTextToRichHtml(plainBodyText, 'text')) || '';
+  const wordCount = plainBodyText.trim().split(/\s+/).filter(Boolean).length;
 
   const readingTime = Math.max(1, Math.round(wordCount / 180));
   const theme = currentTemplate.theme;
+  const detectedLinks = extractLinkCandidates(plainBodyHtml, plainBodyText);
+  const clickTrackingMode = currentTemplate.clickTrackingMode || 'all';
+  const trackedLinkUrls = Array.from(new Set((currentTemplate.trackedLinkUrls || []).map((item) => String(item || '').trim()).filter(Boolean)));
+  const activeTrackedLinks = clickTrackingMode === 'all'
+    ? detectedLinks
+    : clickTrackingMode === 'selected'
+      ? trackedLinkUrls.filter((url) => detectedLinks.includes(url))
+      : [];
+  const writingTips = [
+    !/\{(?:\{|)?\s*(first_name|company)\s*(?:\}|)?\}/i.test(plainBodyText) ? 'Add {first_name} or {company} so the message feels personalized.' : '',
+    !/\?\s*$|reply|open to|would you|let me know/i.test(plainBodyText) ? 'End with one clear CTA so the recipient knows what to do next.' : '',
+    'The best writing experience keeps formatting close to the cursor, shortcuts predictable, and the draft visually quiet enough to stay focused.',
+  ].filter(Boolean);
 
   const updateTheme = (patch: Record<string, any>) =>
     updateTemplateField('theme', {
       ...theme,
       ...patch,
     });
+
+  const insertTokenAtEnd = (token: string) => {
+    const nextText = `${plainBodyText}${plainBodyText ? '\n' : ''}${token}`;
+    updateTemplateField('blocks', bodyToBlocks(nextText));
+  };
+
+  const applyStarter = (starter: (typeof PLAIN_TEXT_STARTERS)[number]) => {
+    if (!currentTemplate.subject.trim()) {
+      updateTemplateField('subject', starter.subject);
+    }
+    updateTemplateField('blocks', bodyToBlocks(starter.body));
+  };
+
+  const updateClickTrackingMode = (mode: 'all' | 'selected' | 'none') => {
+    updateTemplateField('clickTrackingMode', mode);
+    if (mode === 'all') {
+      updateTemplateField('trackedLinkUrls', detectedLinks);
+      return;
+    }
+    if (mode === 'none') {
+      updateTemplateField('trackedLinkUrls', []);
+      return;
+    }
+    const preserved = trackedLinkUrls.filter((url) => detectedLinks.includes(url));
+    updateTemplateField('trackedLinkUrls', preserved.length > 0 ? preserved : detectedLinks.slice(0, 1));
+  };
+
+  const toggleTrackedLink = (url: string) => {
+    if (clickTrackingMode !== 'selected') {
+      updateClickTrackingMode('selected');
+      return;
+    }
+    updateTemplateField(
+      'trackedLinkUrls',
+      trackedLinkUrls.includes(url)
+        ? trackedLinkUrls.filter((item) => item !== url)
+        : [...trackedLinkUrls, url]
+    );
+  };
 
   return (
     <div>
@@ -250,14 +382,113 @@ function TemplateSettings() {
           </AccordionItem>
         ) : (
           <AccordionItem value="plain-text">
-            <AccordionTrigger className="text-sm font-medium">Plain Text Tips</AccordionTrigger>
-            <AccordionContent className="space-y-3">
-              <div className="rounded-lg border border-emerald-200 bg-emerald-50/80 p-3 text-xs leading-5 text-emerald-800">
-                Keep plain text emails short, personal, and easy to reply to. Think conversational note, not newsletter.
-              </div>
-              <MetricCard label="Ideal Length" value="80-120 words" />
-              <MetricCard label="Best CTA" value="One simple question" />
-              <MetricCard label="Formatting" value="Short paragraphs, no heavy styling" />
+            <AccordionTrigger className="text-sm font-medium">Plain Text Blueprint</AccordionTrigger>
+            <AccordionContent className="space-y-4">
+              <Field label="Starter Templates">
+                <div className="space-y-2">
+                  {PLAIN_TEXT_STARTERS.map((starter) => (
+                    <button
+                      key={starter.id}
+                      type="button"
+                      onClick={() => applyStarter(starter)}
+                      className="w-full rounded-xl border border-border bg-muted/20 p-3 text-left transition-colors hover:border-primary/30 hover:bg-primary/5"
+                    >
+                      <p className="text-sm font-medium text-foreground">{starter.label}</p>
+                      <p className="mt-1 text-xs leading-5 text-muted-foreground">{starter.description}</p>
+                    </button>
+                  ))}
+                </div>
+              </Field>
+
+              <Field label="Click Tracking">
+                <div className="space-y-3">
+                  <div className="flex flex-wrap gap-2">
+                    {[
+                      ['all', 'Track all links'],
+                      ['selected', 'Track selected links'],
+                      ['none', 'Do not track clicks'],
+                    ].map(([value, label]) => (
+                      <button
+                        key={value}
+                        type="button"
+                        onClick={() => updateClickTrackingMode(value as 'all' | 'selected' | 'none')}
+                        className={cn(
+                          'rounded-full border px-3 py-1.5 text-xs font-medium transition-colors',
+                          clickTrackingMode === value
+                            ? 'border-primary bg-primary/10 text-primary'
+                            : 'border-border bg-background text-muted-foreground hover:bg-muted'
+                        )}
+                      >
+                        {label}
+                      </button>
+                    ))}
+                  </div>
+
+                  {detectedLinks.length > 0 ? (
+                    <div className="space-y-2">
+                      {detectedLinks.map((url) => (
+                        <label
+                          key={url}
+                          className={cn(
+                            'flex items-start gap-3 rounded-xl border p-3 text-xs transition-colors',
+                            activeTrackedLinks.includes(url) ? 'border-emerald-200 bg-emerald-50/70' : 'border-border bg-background',
+                            clickTrackingMode !== 'selected' ? 'opacity-70' : 'cursor-pointer'
+                          )}
+                        >
+                          <input
+                            type="checkbox"
+                            checked={activeTrackedLinks.includes(url)}
+                            disabled={clickTrackingMode !== 'selected'}
+                            onChange={() => toggleTrackedLink(url)}
+                            className="mt-0.5"
+                          />
+                          <span className="break-all leading-5 text-foreground">{url}</span>
+                        </label>
+                      ))}
+                    </div>
+                  ) : (
+                    <div className="rounded-xl border border-dashed border-border bg-muted/20 p-3 text-xs leading-5 text-muted-foreground">
+                      Add at least one URL like `https://example.com` or create a hyperlink from the toolbar to control click tracking here.
+                    </div>
+                  )}
+                </div>
+              </Field>
+
+              <Field label="Personalization Tokens">
+                <div className="flex flex-wrap gap-2">
+                  {PERSONALIZATION_TOKENS.map((token) => (
+                    <Button key={token} type="button" variant="outline" size="sm" className="h-8 text-xs" onClick={() => insertTokenAtEnd(token)}>
+                      {token}
+                    </Button>
+                  ))}
+                </div>
+              </Field>
+
+              <Field label="Writing Tips">
+                <div className="space-y-2">
+                  {writingTips.map((tip) => (
+                    <div key={tip} className="rounded-xl border border-amber-200 bg-amber-50/80 p-3 text-xs leading-5 text-amber-800">
+                      {tip}
+                    </div>
+                  ))}
+                </div>
+              </Field>
+
+              <Field label="Compose Flow">
+                <div className="space-y-2 text-xs leading-5 text-muted-foreground">
+                  <div className="rounded-xl border border-border bg-muted/20 p-3">Start with text, then use shortcuts for emphasis instead of stopping to hunt for controls.</div>
+                  <div className="rounded-xl border border-border bg-muted/20 p-3">Use links only where they help the reader move forward.</div>
+                  <div className="rounded-xl border border-border bg-muted/20 p-3">Keep one idea per paragraph and one action at the end.</div>
+                </div>
+              </Field>
+
+              <Field label="Quick Checks">
+                <div className="space-y-2 text-xs leading-5 text-muted-foreground">
+                  <div className="rounded-xl border border-border bg-muted/20 p-3">Use a short subject line that reads naturally.</div>
+                  <div className="rounded-xl border border-border bg-muted/20 p-3">Keep the body skimmable with blank lines between ideas.</div>
+                  <div className="rounded-xl border border-border bg-muted/20 p-3">End with one low-friction CTA, not multiple asks.</div>
+                </div>
+              </Field>
             </AccordionContent>
           </AccordionItem>
         )}
