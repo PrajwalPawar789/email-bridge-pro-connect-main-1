@@ -153,6 +153,8 @@ const MemberEditorDialog = ({
     return allowed;
   }, [actorRole, mode, supportsApprovalFlows, targetMember?.role]);
 
+  const approvalControlsLocked = role === "owner" || role === "admin" || role === "reviewer";
+
   const handleSubmit = async () => {
     if (!fullName.trim()) return;
     if (mode === "invite" && !email.trim()) return;
@@ -174,9 +176,9 @@ const MemberEditorDialog = ({
         assignedReviewerUserId: supportsApprovalFlows ? assignedReviewerUserId || null : null,
         canManageBilling,
         canManageWorkspace,
-        requireCampaignApproval: supportsApprovalFlows ? requireCampaignApproval : null,
-        requireSenderApproval: supportsApprovalFlows ? requireSenderApproval : null,
-        requireAutomationApproval: supportsApprovalFlows ? requireAutomationApproval : null,
+        requireCampaignApproval: supportsApprovalFlows && !approvalControlsLocked ? requireCampaignApproval : null,
+        requireSenderApproval: supportsApprovalFlows && !approvalControlsLocked ? requireSenderApproval : null,
+        requireAutomationApproval: supportsApprovalFlows && !approvalControlsLocked ? requireAutomationApproval : null,
         ...allocationPayload,
       });
       onOpenChange(false);
@@ -195,9 +197,9 @@ const MemberEditorDialog = ({
         assignedReviewerUserId: supportsApprovalFlows ? assignedReviewerUserId || null : undefined,
         canManageBilling,
         canManageWorkspace,
-        requireCampaignApproval: supportsApprovalFlows ? requireCampaignApproval : undefined,
-        requireSenderApproval: supportsApprovalFlows ? requireSenderApproval : undefined,
-        requireAutomationApproval: supportsApprovalFlows ? requireAutomationApproval : undefined,
+        requireCampaignApproval: supportsApprovalFlows && !approvalControlsLocked ? requireCampaignApproval : null,
+        requireSenderApproval: supportsApprovalFlows && !approvalControlsLocked ? requireSenderApproval : null,
+        requireAutomationApproval: supportsApprovalFlows && !approvalControlsLocked ? requireAutomationApproval : null,
       },
       allocationPayload,
     );
@@ -387,6 +389,7 @@ const MemberEditorDialog = ({
                 <Switch
                   checked={Boolean(requireCampaignApproval)}
                   onCheckedChange={(checked) => setRequireCampaignApproval(checked)}
+                  disabled={approvalControlsLocked}
                 />
               </div>
               <div className="flex items-center justify-between gap-4">
@@ -397,6 +400,7 @@ const MemberEditorDialog = ({
                 <Switch
                   checked={Boolean(requireSenderApproval)}
                   onCheckedChange={(checked) => setRequireSenderApproval(checked)}
+                  disabled={approvalControlsLocked}
                 />
               </div>
               <div className="flex items-center justify-between gap-4 md:col-span-2">
@@ -407,8 +411,14 @@ const MemberEditorDialog = ({
                 <Switch
                   checked={Boolean(requireAutomationApproval)}
                   onCheckedChange={(checked) => setRequireAutomationApproval(checked)}
+                  disabled={approvalControlsLocked}
                 />
               </div>
+              {approvalControlsLocked ? (
+                <div className="rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm text-slate-600 md:col-span-2">
+                  Owners, admins, and reviewers are always exempt from approval gates.
+                </div>
+              ) : null}
             </>
           ) : (
             <div className="rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm text-slate-600 md:col-span-2">

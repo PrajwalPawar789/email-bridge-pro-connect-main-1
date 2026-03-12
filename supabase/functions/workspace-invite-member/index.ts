@@ -425,15 +425,15 @@ serve(async (req: Request) => {
       extra_permissions: Array.isArray(payload.extraPermissions) ? payload.extraPermissions : [],
       revoked_permissions: Array.isArray(payload.revokedPermissions) ? payload.revokedPermissions : [],
       require_campaign_approval:
-        payload.requireCampaignApproval === null || payload.requireCampaignApproval === undefined
+        role === "admin" || role === "reviewer" || payload.requireCampaignApproval === null || payload.requireCampaignApproval === undefined
           ? undefined
           : Boolean(payload.requireCampaignApproval),
       require_sender_approval:
-        payload.requireSenderApproval === null || payload.requireSenderApproval === undefined
+        role === "admin" || role === "reviewer" || payload.requireSenderApproval === null || payload.requireSenderApproval === undefined
           ? undefined
           : Boolean(payload.requireSenderApproval),
       require_automation_approval:
-        payload.requireAutomationApproval === null || payload.requireAutomationApproval === undefined
+        role === "admin" || role === "reviewer" || payload.requireAutomationApproval === null || payload.requireAutomationApproval === undefined
           ? undefined
           : Boolean(payload.requireAutomationApproval),
       ...allocationMetadata,

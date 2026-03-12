@@ -3,7 +3,13 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { Separator } from "@/components/ui/separator";
 import { Switch } from "@/components/ui/switch";
 import { Textarea } from "@/components/ui/textarea";
@@ -25,6 +31,7 @@ interface WorkflowInspectorProps {
   onChangeStatus: (value: WorkflowNode["status"]) => void;
   onPatchConfig: (patch: Record<string, unknown>) => void;
   onTestSend: () => void;
+  onDisconnectNode?: () => void;
   compact?: boolean;
   webhookSetup?: {
     triggerType: "list_joined" | "manual" | "custom_event";
@@ -54,6 +61,7 @@ const WorkflowInspector = ({
   onChangeStatus,
   onPatchConfig,
   onTestSend,
+  onDisconnectNode,
   compact = false,
   webhookSetup,
   onWebhookEventNameChange,
@@ -62,20 +70,34 @@ const WorkflowInspector = ({
   onWebhookCopy,
   onWebhookTest,
 }: WorkflowInspectorProps) => {
-  const [emailEditorMode, setEmailEditorMode] = useState<"compose" | "preview">("compose");
+  const [emailEditorMode, setEmailEditorMode] = useState<"compose" | "preview">(
+    "compose",
+  );
 
   if (!node) {
     return (
-      <aside className={cn("h-full bg-white", compact ? "rounded-xl p-3" : "rounded-2xl border border-slate-200 p-4 shadow-sm")}>
-        <p className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-500">Inspector</p>
-        <p className="mt-4 text-sm text-slate-600">Select a node to edit settings, status, and runtime behavior.</p>
+      <aside
+        className={cn(
+          "h-full bg-white",
+          compact
+            ? "rounded-xl p-3"
+            : "rounded-2xl border border-slate-200 p-4 shadow-sm",
+        )}
+      >
+        <p className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-500">
+          Inspector
+        </p>
+        <p className="mt-4 text-sm text-slate-600">
+          Select a node to edit settings, status, and runtime behavior.
+        </p>
       </aside>
     );
   }
 
   const plugin = nodePluginMap[node.kind];
   const config = (node.config || {}) as Record<string, unknown>;
-  const conditionConfig = node.kind === "condition" ? normalizeConditionConfig(config) : null;
+  const conditionConfig =
+    node.kind === "condition" ? normalizeConditionConfig(config) : null;
   const triggerTypeValue =
     node.kind === "trigger"
       ? String(webhookSetup?.triggerType || config.triggerType || "list_joined")
@@ -93,12 +115,16 @@ const WorkflowInspector = ({
     <aside
       className={cn(
         "h-full bg-white",
-        compact ? "rounded-xl p-3" : "rounded-2xl border border-slate-200 p-3 shadow-sm"
+        compact
+          ? "rounded-xl p-3"
+          : "rounded-2xl border border-slate-200 p-3 shadow-sm",
       )}
     >
       <div className="mb-3 flex items-center justify-between">
         <div>
-          <p className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-500">Inspector</p>
+          <p className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-500">
+            Inspector
+          </p>
           <p className="text-sm font-semibold text-slate-900">{plugin.title}</p>
         </div>
         <Badge variant="secondary" className="capitalize">
@@ -106,28 +132,57 @@ const WorkflowInspector = ({
         </Badge>
       </div>
 
-      <div className={cn("overflow-auto pr-1", compact ? "h-[calc(100%-52px)]" : "h-[calc(100%-42px)]")}>
+      <div
+        className={cn(
+          "overflow-auto pr-1",
+          compact ? "h-[calc(100%-52px)]" : "h-[calc(100%-42px)]",
+        )}
+      >
         <div className="space-y-4 pb-6">
           <div className="space-y-2">
             <Label>Node title</Label>
-            <Input value={node.title} onChange={(event) => onChangeTitle(event.target.value)} />
+            <Input
+              value={node.title}
+              onChange={(event) => onChangeTitle(event.target.value)}
+            />
           </div>
 
           <div className="space-y-2">
             <Label>Status</Label>
-            <Select value={node.status} onValueChange={(value) => onChangeStatus(value as WorkflowNode["status"])}>
+            <Select
+              value={node.status}
+              onValueChange={(value) =>
+                onChangeStatus(value as WorkflowNode["status"])
+              }
+            >
               <SelectTrigger>
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
                 {statusOptions.map((status) => (
-                  <SelectItem key={status} value={status} className="capitalize">
+                  <SelectItem
+                    key={status}
+                    value={status}
+                    className="capitalize"
+                  >
                     {status}
                   </SelectItem>
                 ))}
               </SelectContent>
             </Select>
           </div>
+
+          {node.kind !== "trigger" ? (
+            <Button
+              type="button"
+              variant="outline"
+              className="w-full"
+              onClick={onDisconnectNode}
+              disabled={!onDisconnectNode}
+            >
+              Disconnect node
+            </Button>
+          ) : null}
 
           <Separator />
 
@@ -142,7 +197,9 @@ const WorkflowInspector = ({
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="list_joined">Contact enters list</SelectItem>
+                  <SelectItem value="list_joined">
+                    Contact enters list
+                  </SelectItem>
                   <SelectItem value="manual">Manual enrollment</SelectItem>
                   <SelectItem value="custom_event">Custom event</SelectItem>
                 </SelectContent>
@@ -151,7 +208,9 @@ const WorkflowInspector = ({
               <Label>List</Label>
               <Select
                 value={String(config.listId || "__none")}
-                onValueChange={(value) => onPatchConfig({ listId: value === "__none" ? "" : value })}
+                onValueChange={(value) =>
+                  onPatchConfig({ listId: value === "__none" ? "" : value })
+                }
               >
                 <SelectTrigger>
                   <SelectValue placeholder="Select list" />
@@ -171,8 +230,12 @@ const WorkflowInspector = ({
                   <div className="space-y-2">
                     <Label>Event name</Label>
                     <Input
-                      value={String(webhookSetup?.eventName || config.eventName || "")}
-                      onChange={(event) => onPatchConfig({ eventName: event.target.value })}
+                      value={String(
+                        webhookSetup?.eventName || config.eventName || "",
+                      )}
+                      onChange={(event) =>
+                        onPatchConfig({ eventName: event.target.value })
+                      }
                       placeholder="account_activated"
                     />
                   </div>
@@ -188,7 +251,9 @@ const WorkflowInspector = ({
                         <div className="flex gap-2">
                           <Input
                             value={webhookSetup.secret}
-                            onChange={(event) => onWebhookSecretChange?.(event.target.value.trim())}
+                            onChange={(event) =>
+                              onWebhookSecretChange?.(event.target.value.trim())
+                            }
                             placeholder="whsec_..."
                             readOnly={!onWebhookSecretChange}
                           />
@@ -203,7 +268,12 @@ const WorkflowInspector = ({
                           <Button
                             type="button"
                             variant="outline"
-                            onClick={() => onWebhookCopy?.(webhookSetup.secret, "Webhook secret")}
+                            onClick={() =>
+                              onWebhookCopy?.(
+                                webhookSetup.secret,
+                                "Webhook secret",
+                              )
+                            }
                             disabled={!webhookSetup.secret || !onWebhookCopy}
                           >
                             Copy
@@ -225,7 +295,12 @@ const WorkflowInspector = ({
                           <Button
                             type="button"
                             variant="outline"
-                            onClick={() => onWebhookCopy?.(webhookSetup.endpoint, "Webhook URL")}
+                            onClick={() =>
+                              onWebhookCopy?.(
+                                webhookSetup.endpoint,
+                                "Webhook URL",
+                              )
+                            }
                             disabled={!webhookSetup.endpoint || !onWebhookCopy}
                           >
                             Copy URL
@@ -235,7 +310,11 @@ const WorkflowInspector = ({
 
                       <div className="space-y-2">
                         <Label>Sample JSON payload</Label>
-                        <Textarea readOnly value={webhookSetup.samplePayload} className="min-h-[100px] font-mono text-xs" />
+                        <Textarea
+                          readOnly
+                          value={webhookSetup.samplePayload}
+                          className="min-h-[100px] font-mono text-xs"
+                        />
                       </div>
 
                       <div className="flex flex-wrap items-center gap-2">
@@ -243,7 +322,11 @@ const WorkflowInspector = ({
                           type="button"
                           variant="outline"
                           onClick={onWebhookTest}
-                          disabled={!onWebhookTest || !webhookSetup.endpoint || webhookSetup.testing}
+                          disabled={
+                            !onWebhookTest ||
+                            !webhookSetup.endpoint ||
+                            webhookSetup.testing
+                          }
                         >
                           {webhookSetup.testing ? "Testing..." : "Test webhook"}
                         </Button>
@@ -252,7 +335,9 @@ const WorkflowInspector = ({
                           <p
                             className={cn(
                               "text-xs",
-                              webhookSetup.testStatus === "success" ? "text-emerald-700" : "text-rose-700"
+                              webhookSetup.testStatus === "success"
+                                ? "text-emerald-700"
+                                : "text-rose-700",
                             )}
                           >
                             {webhookSetup.testMessage}
@@ -274,7 +359,9 @@ const WorkflowInspector = ({
                   onClick={() => setEmailEditorMode("compose")}
                   className={cn(
                     "h-8 rounded text-xs font-medium transition-colors",
-                    emailEditorMode === "compose" ? "bg-white text-slate-900 shadow-sm" : "text-slate-600"
+                    emailEditorMode === "compose"
+                      ? "bg-white text-slate-900 shadow-sm"
+                      : "text-slate-600",
                   )}
                 >
                   Compose
@@ -284,7 +371,9 @@ const WorkflowInspector = ({
                   onClick={() => setEmailEditorMode("preview")}
                   className={cn(
                     "h-8 rounded text-xs font-medium transition-colors",
-                    emailEditorMode === "preview" ? "bg-white text-slate-900 shadow-sm" : "text-slate-600"
+                    emailEditorMode === "preview"
+                      ? "bg-white text-slate-900 shadow-sm"
+                      : "text-slate-600",
                   )}
                 >
                   Preview
@@ -293,103 +382,123 @@ const WorkflowInspector = ({
 
               {emailEditorMode === "compose" ? (
                 <div className="space-y-3">
-                <div className="space-y-2">
-                  <Label>Sender</Label>
-                  <Select
-                    value={String(config.senderConfigId || "__none")}
-                    onValueChange={(value) => onPatchConfig({ senderConfigId: value === "__none" ? "" : value })}
-                  >
-                    <SelectTrigger>
-                      <SelectValue placeholder="Select sender" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="__none">Auto sender</SelectItem>
-                      {dependencies.emailConfigs.map((sender) => (
-                        <SelectItem key={sender.id} value={sender.id}>
-                          {sender.sender_name || sender.smtp_username}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                </div>
-
-                <div className="space-y-2">
-                  <Label>Template</Label>
-                  <Select
-                    value={String(config.templateId || "__none")}
-                    onValueChange={(value) => {
-                      if (value === "__none") {
-                        onPatchConfig({ templateId: "" });
-                        return;
+                  <div className="space-y-2">
+                    <Label>Sender</Label>
+                    <Select
+                      value={String(config.senderConfigId || "__none")}
+                      onValueChange={(value) =>
+                        onPatchConfig({
+                          senderConfigId: value === "__none" ? "" : value,
+                        })
                       }
-                      const template = dependencies.emailTemplates.find((item) => item.id === value);
-                      onPatchConfig({
-                        templateId: value,
-                        subject: template?.subject || config.subject,
-                        body: template?.content || config.body,
-                      });
-                    }}
-                  >
-                    <SelectTrigger>
-                      <SelectValue placeholder="Pick template" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="__none">No template</SelectItem>
-                      {dependencies.emailTemplates.map((template) => (
-                        <SelectItem key={template.id} value={template.id}>
-                          {template.name}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                </div>
+                    >
+                      <SelectTrigger>
+                        <SelectValue placeholder="Select sender" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="__none">Auto sender</SelectItem>
+                        {dependencies.emailConfigs.map((sender) => (
+                          <SelectItem key={sender.id} value={sender.id}>
+                            {sender.sender_name || sender.smtp_username}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
 
-                <div className="space-y-2">
-                  <Label>Subject</Label>
-                  <Input
-                    value={String(config.subject || "")}
-                    onChange={(event) => onPatchConfig({ subject: event.target.value })}
-                    placeholder="Subject"
-                  />
-                </div>
+                  <div className="space-y-2">
+                    <Label>Template</Label>
+                    <Select
+                      value={String(config.templateId || "__none")}
+                      onValueChange={(value) => {
+                        if (value === "__none") {
+                          onPatchConfig({ templateId: "" });
+                          return;
+                        }
+                        const template = dependencies.emailTemplates.find(
+                          (item) => item.id === value,
+                        );
+                        onPatchConfig({
+                          templateId: value,
+                          subject: template?.subject || config.subject,
+                          body: template?.content || config.body,
+                        });
+                      }}
+                    >
+                      <SelectTrigger>
+                        <SelectValue placeholder="Pick template" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="__none">No template</SelectItem>
+                        {dependencies.emailTemplates.map((template) => (
+                          <SelectItem key={template.id} value={template.id}>
+                            {template.name}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
 
-                <div className="space-y-2">
-                  <Label>Body</Label>
-                  <Textarea
-                    className="min-h-[140px]"
-                    value={String(config.body || "")}
-                    onChange={(event) => onPatchConfig({ body: event.target.value })}
-                    placeholder="Hi {first_name}, ..."
-                  />
-                </div>
+                  <div className="space-y-2">
+                    <Label>Subject</Label>
+                    <Input
+                      value={String(config.subject || "")}
+                      onChange={(event) =>
+                        onPatchConfig({ subject: event.target.value })
+                      }
+                      placeholder="Subject"
+                    />
+                  </div>
 
-                <div className="rounded-lg border border-slate-200 bg-slate-50 p-2 text-xs text-slate-600">
-                  Tokens: {Array.isArray(config.personalizationTokens) && config.personalizationTokens.length > 0
-                    ? (config.personalizationTokens as string[]).join(", ")
-                    : "{first_name}, {company}, {sender_name}"}
-                </div>
+                  <div className="space-y-2">
+                    <Label>Body</Label>
+                    <Textarea
+                      className="min-h-[140px]"
+                      value={String(config.body || "")}
+                      onChange={(event) =>
+                        onPatchConfig({ body: event.target.value })
+                      }
+                      placeholder="Hi {first_name}, ..."
+                    />
+                  </div>
 
-                <div className="flex items-center justify-between rounded-lg border border-slate-200 p-2 text-sm">
-                  <span>Thread with previous email</span>
-                  <Switch
-                    checked={config.threadWithPrevious !== false}
-                    onCheckedChange={(checked) => onPatchConfig({ threadWithPrevious: checked })}
-                  />
-                </div>
+                  <div className="rounded-lg border border-slate-200 bg-slate-50 p-2 text-xs text-slate-600">
+                    Tokens:{" "}
+                    {Array.isArray(config.personalizationTokens) &&
+                    config.personalizationTokens.length > 0
+                      ? (config.personalizationTokens as string[]).join(", ")
+                      : "{first_name}, {company}, {sender_name}"}
+                  </div>
+
+                  <div className="flex items-center justify-between rounded-lg border border-slate-200 p-2 text-sm">
+                    <span>Thread with previous email</span>
+                    <Switch
+                      checked={config.threadWithPrevious !== false}
+                      onCheckedChange={(checked) =>
+                        onPatchConfig({ threadWithPrevious: checked })
+                      }
+                    />
+                  </div>
                 </div>
               ) : null}
 
               {emailEditorMode === "preview" ? (
                 <div className="space-y-3">
-                <div className="rounded-xl border border-slate-200 bg-slate-50 p-3">
-                  <p className="text-xs font-semibold uppercase tracking-[0.12em] text-slate-500">Subject</p>
-                  <p className="text-sm text-slate-900">{String(config.subject || "(empty)")}</p>
-                  <Separator className="my-2" />
-                  <pre className="whitespace-pre-wrap text-xs text-slate-700">{preview || "Email body preview"}</pre>
-                </div>
-                <Button type="button" onClick={onTestSend} className="w-full">
-                  Test send
-                </Button>
+                  <div className="rounded-xl border border-slate-200 bg-slate-50 p-3">
+                    <p className="text-xs font-semibold uppercase tracking-[0.12em] text-slate-500">
+                      Subject
+                    </p>
+                    <p className="text-sm text-slate-900">
+                      {String(config.subject || "(empty)")}
+                    </p>
+                    <Separator className="my-2" />
+                    <pre className="whitespace-pre-wrap text-xs text-slate-700">
+                      {preview || "Email body preview"}
+                    </pre>
+                  </div>
+                  <Button type="button" onClick={onTestSend} className="w-full">
+                    Test send
+                  </Button>
                 </div>
               ) : null}
             </div>
@@ -404,12 +513,19 @@ const WorkflowInspector = ({
                     type="number"
                     min={1}
                     value={String(config.duration || 1)}
-                    onChange={(event) => onPatchConfig({ duration: Number(event.target.value || 1) })}
+                    onChange={(event) =>
+                      onPatchConfig({
+                        duration: Number(event.target.value || 1),
+                      })
+                    }
                   />
                 </div>
                 <div className="space-y-2">
                   <Label>Unit</Label>
-                  <Select value={String(config.unit || "days")} onValueChange={(value) => onPatchConfig({ unit: value })}>
+                  <Select
+                    value={String(config.unit || "days")}
+                    onValueChange={(value) => onPatchConfig({ unit: value })}
+                  >
                     <SelectTrigger>
                       <SelectValue />
                     </SelectTrigger>
@@ -428,7 +544,9 @@ const WorkflowInspector = ({
                   <Input
                     type="time"
                     value={String(config.timeWindowStart || "09:00")}
-                    onChange={(event) => onPatchConfig({ timeWindowStart: event.target.value })}
+                    onChange={(event) =>
+                      onPatchConfig({ timeWindowStart: event.target.value })
+                    }
                   />
                 </div>
                 <div className="space-y-2">
@@ -436,7 +554,9 @@ const WorkflowInspector = ({
                   <Input
                     type="time"
                     value={String(config.timeWindowEnd || "18:00")}
-                    onChange={(event) => onPatchConfig({ timeWindowEnd: event.target.value })}
+                    onChange={(event) =>
+                      onPatchConfig({ timeWindowEnd: event.target.value })
+                    }
                   />
                 </div>
               </div>
@@ -445,7 +565,9 @@ const WorkflowInspector = ({
                 <span>Randomized delay</span>
                 <Switch
                   checked={config.randomized === true}
-                  onCheckedChange={(checked) => onPatchConfig({ randomized: checked })}
+                  onCheckedChange={(checked) =>
+                    onPatchConfig({ randomized: checked })
+                  }
                 />
               </div>
 
@@ -456,7 +578,11 @@ const WorkflowInspector = ({
                     type="number"
                     min={1}
                     value={String(config.randomMaxMinutes || 60)}
-                    onChange={(event) => onPatchConfig({ randomMaxMinutes: Number(event.target.value || 60) })}
+                    onChange={(event) =>
+                      onPatchConfig({
+                        randomMaxMinutes: Number(event.target.value || 60),
+                      })
+                    }
                   />
                 </div>
               ) : null}
@@ -475,28 +601,47 @@ const WorkflowInspector = ({
                   clause.rule === "email_reply_contains";
 
                 const updateClause = (patch: Record<string, unknown>) => {
-                  const nextClauses = conditionConfig.clauses.map((item, itemIndex) =>
-                    itemIndex === index
-                      ? {
-                          ...item,
-                          ...patch,
-                        }
-                      : item
+                  const nextClauses = conditionConfig.clauses.map(
+                    (item, itemIndex) =>
+                      itemIndex === index
+                        ? {
+                            ...item,
+                            ...patch,
+                          }
+                        : item,
                   );
                   onPatchConfig({ clauses: nextClauses });
                 };
 
                 const removeClause = () => {
-                  const nextClauses = conditionConfig.clauses.filter((_, itemIndex) => itemIndex !== index);
-                  onPatchConfig({ clauses: nextClauses.length > 0 ? nextClauses : [createDefaultConditionClause(0)] });
+                  const nextClauses = conditionConfig.clauses.filter(
+                    (_, itemIndex) => itemIndex !== index,
+                  );
+                  onPatchConfig({
+                    clauses:
+                      nextClauses.length > 0
+                        ? nextClauses
+                        : [createDefaultConditionClause(0)],
+                  });
                 };
 
                 return (
-                  <div key={`${clause.id}_${index}`} className="space-y-2 rounded-lg border border-slate-200 p-3">
+                  <div
+                    key={`${clause.id}_${index}`}
+                    className="space-y-2 rounded-lg border border-slate-200 p-3"
+                  >
                     <div className="flex items-center justify-between">
-                      <Label className="text-xs font-semibold uppercase tracking-[0.12em] text-slate-500">{label}</Label>
+                      <Label className="text-xs font-semibold uppercase tracking-[0.12em] text-slate-500">
+                        {label}
+                      </Label>
                       {index > 0 ? (
-                        <Button type="button" variant="ghost" size="sm" onClick={removeClause} className="h-7 px-2 text-xs">
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="sm"
+                          onClick={removeClause}
+                          className="h-7 px-2 text-xs"
+                        >
                           Remove
                         </Button>
                       ) : null}
@@ -504,18 +649,33 @@ const WorkflowInspector = ({
 
                     <div className="space-y-2">
                       <Label>Rule</Label>
-                      <Select value={clause.rule} onValueChange={(value) => updateClause({ rule: value })}>
+                      <Select
+                        value={clause.rule}
+                        onValueChange={(value) => updateClause({ rule: value })}
+                      >
                         <SelectTrigger>
                           <SelectValue />
                         </SelectTrigger>
                         <SelectContent>
-                          <SelectItem value="user_property">User property</SelectItem>
-                          <SelectItem value="email_replied">Email replied</SelectItem>
-                          <SelectItem value="email_reply_contains">Email reply contains</SelectItem>
-                          <SelectItem value="email_opened">Email opened</SelectItem>
-                          <SelectItem value="email_clicked">Email clicked</SelectItem>
+                          <SelectItem value="user_property">
+                            User property
+                          </SelectItem>
+                          <SelectItem value="email_replied">
+                            Email replied
+                          </SelectItem>
+                          <SelectItem value="email_reply_contains">
+                            Email reply contains
+                          </SelectItem>
+                          <SelectItem value="email_opened">
+                            Email opened
+                          </SelectItem>
+                          <SelectItem value="email_clicked">
+                            Email clicked
+                          </SelectItem>
                           <SelectItem value="tag_exists">Tag exists</SelectItem>
-                          <SelectItem value="custom_event">Custom event</SelectItem>
+                          <SelectItem value="custom_event">
+                            Custom event
+                          </SelectItem>
                         </SelectContent>
                       </Select>
                     </div>
@@ -525,12 +685,19 @@ const WorkflowInspector = ({
                         <Label>Property key</Label>
                         <Input
                           value={String(clause.propertyKey || "")}
-                          onChange={(event) => updateClause({ propertyKey: event.target.value })}
+                          onChange={(event) =>
+                            updateClause({ propertyKey: event.target.value })
+                          }
                           placeholder="company"
                         />
 
                         <Label>Comparator</Label>
-                        <Select value={String(clause.comparator || "contains")} onValueChange={(value) => updateClause({ comparator: value })}>
+                        <Select
+                          value={String(clause.comparator || "contains")}
+                          onValueChange={(value) =>
+                            updateClause({ comparator: value })
+                          }
+                        >
                           <SelectTrigger>
                             <SelectValue />
                           </SelectTrigger>
@@ -554,7 +721,9 @@ const WorkflowInspector = ({
                         </Label>
                         <Input
                           value={String(clause.value || "")}
-                          onChange={(event) => updateClause({ value: event.target.value })}
+                          onChange={(event) =>
+                            updateClause({ value: event.target.value })
+                          }
                           placeholder={
                             clause.rule === "custom_event"
                               ? "trial_started"
@@ -575,7 +744,10 @@ const WorkflowInspector = ({
                 size="sm"
                 onClick={() => {
                   onPatchConfig({
-                    clauses: [...conditionConfig.clauses, createNextElseIfClause(conditionConfig.clauses)],
+                    clauses: [
+                      ...conditionConfig.clauses,
+                      createNextElseIfClause(conditionConfig.clauses),
+                    ],
                   });
                 }}
               >
@@ -583,7 +755,8 @@ const WorkflowInspector = ({
               </Button>
 
               <div className="rounded-lg border border-dashed border-slate-200 bg-slate-50 p-2 text-xs text-slate-600">
-                Else branch is always available and runs when no condition matches.
+                Else branch is always available and runs when no condition
+                matches.
               </div>
             </div>
           ) : null}
@@ -599,7 +772,10 @@ const WorkflowInspector = ({
                     max={100}
                     value={String(config.percentageA ?? 50)}
                     onChange={(event) => {
-                      const nextA = Math.max(0, Math.min(100, Number(event.target.value)));
+                      const nextA = Math.max(
+                        0,
+                        Math.min(100, Number(event.target.value)),
+                      );
                       const safeA = Number.isFinite(nextA) ? nextA : 50;
                       onPatchConfig({
                         percentageA: safeA,
@@ -616,7 +792,10 @@ const WorkflowInspector = ({
                     max={100}
                     value={String(config.percentageB ?? 50)}
                     onChange={(event) => {
-                      const nextB = Math.max(0, Math.min(100, Number(event.target.value)));
+                      const nextB = Math.max(
+                        0,
+                        Math.min(100, Number(event.target.value)),
+                      );
                       const safeB = Number.isFinite(nextB) ? nextB : 50;
                       onPatchConfig({
                         percentageB: safeB,
@@ -626,7 +805,9 @@ const WorkflowInspector = ({
                   />
                 </div>
               </div>
-              <p className="text-xs text-slate-500">Variant A and Variant B always total 100%.</p>
+              <p className="text-xs text-slate-500">
+                Variant A and Variant B always total 100%.
+              </p>
             </div>
           ) : null}
 
@@ -636,14 +817,19 @@ const WorkflowInspector = ({
                 <Label>Webhook URL</Label>
                 <Input
                   value={String(config.url || "")}
-                  onChange={(event) => onPatchConfig({ url: event.target.value })}
+                  onChange={(event) =>
+                    onPatchConfig({ url: event.target.value })
+                  }
                   placeholder="https://api.example.com/hooks"
                 />
               </div>
 
               <div className="space-y-2">
                 <Label>Method</Label>
-                <Select value={String(config.method || "POST")} onValueChange={(value) => onPatchConfig({ method: value })}>
+                <Select
+                  value={String(config.method || "POST")}
+                  onValueChange={(value) => onPatchConfig({ method: value })}
+                >
                   <SelectTrigger>
                     <SelectValue />
                   </SelectTrigger>
@@ -660,7 +846,10 @@ const WorkflowInspector = ({
 
               <div className="space-y-2">
                 <Label>Auth</Label>
-                <Select value={String(config.authType || "none")} onValueChange={(value) => onPatchConfig({ authType: value })}>
+                <Select
+                  value={String(config.authType || "none")}
+                  onValueChange={(value) => onPatchConfig({ authType: value })}
+                >
                   <SelectTrigger>
                     <SelectValue />
                   </SelectTrigger>
@@ -674,10 +863,16 @@ const WorkflowInspector = ({
 
               {String(config.authType || "none") !== "none" ? (
                 <div className="space-y-2">
-                  <Label>{String(config.authType || "none") === "api_key" ? "API key" : "Bearer token"}</Label>
+                  <Label>
+                    {String(config.authType || "none") === "api_key"
+                      ? "API key"
+                      : "Bearer token"}
+                  </Label>
                   <Input
                     value={String(config.authToken || "")}
-                    onChange={(event) => onPatchConfig({ authToken: event.target.value })}
+                    onChange={(event) =>
+                      onPatchConfig({ authToken: event.target.value })
+                    }
                     placeholder="Paste secret token"
                   />
                 </div>
@@ -688,7 +883,9 @@ const WorkflowInspector = ({
                   <Label>API key header</Label>
                   <Input
                     value={String(config.authHeader || "x-api-key")}
-                    onChange={(event) => onPatchConfig({ authHeader: event.target.value })}
+                    onChange={(event) =>
+                      onPatchConfig({ authHeader: event.target.value })
+                    }
                     placeholder="x-api-key"
                   />
                 </div>
@@ -699,7 +896,9 @@ const WorkflowInspector = ({
                 <Textarea
                   className="min-h-[100px]"
                   value={String(config.payloadTemplate || "")}
-                  onChange={(event) => onPatchConfig({ payloadTemplate: event.target.value })}
+                  onChange={(event) =>
+                    onPatchConfig({ payloadTemplate: event.target.value })
+                  }
                 />
               </div>
 
@@ -710,7 +909,11 @@ const WorkflowInspector = ({
                   min={1000}
                   max={30000}
                   value={String(config.timeoutMs || 12000)}
-                  onChange={(event) => onPatchConfig({ timeoutMs: Number(event.target.value || 12000) })}
+                  onChange={(event) =>
+                    onPatchConfig({
+                      timeoutMs: Number(event.target.value || 12000),
+                    })
+                  }
                 />
               </div>
             </div>
@@ -719,7 +922,10 @@ const WorkflowInspector = ({
           {node.kind === "exit" ? (
             <div className="space-y-2">
               <Label>Exit reason</Label>
-              <Select value={String(config.reason || "completed")} onValueChange={(value) => onPatchConfig({ reason: value })}>
+              <Select
+                value={String(config.reason || "completed")}
+                onValueChange={(value) => onPatchConfig({ reason: value })}
+              >
                 <SelectTrigger>
                   <SelectValue />
                 </SelectTrigger>
