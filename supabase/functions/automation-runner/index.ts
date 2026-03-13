@@ -27,6 +27,9 @@ const CREDIT_RETRY_MINUTES = 60;
 const WEBHOOK_RETRY_MINUTES = 10;
 const WEBHOOK_DEFAULT_TIMEOUT_MS = 12000;
 const WEBHOOK_MAX_BODY_CHARS = 2000;
+const ENGAGEMENT_CONDITION_RECHECK_MINUTES = 15;
+const TRACKING_LINK_REGEX =
+  /(href\s*=\s*["'])((?:https?:\/\/|www\.)[^\s"']+)(["'])|((?:https?:\/\/|www\.)[^\s<>"']+)/gi;
 
 const jsonResponse = (payload: Record<string, unknown>, status = 200) =>
   new Response(JSON.stringify(payload), {
@@ -119,6 +122,103 @@ const formatPlainTextToHtml = (value: string) => {
     .split(/\r?\n\r?\n/)
     .map((block) => `<p>${block.replace(/\r?\n/g, "<br />")}</p>`)
     .join("");
+};
+
+const buildFunctionUrl = (functionName: string, params: Record<string, unknown>) => {
+  const baseUrl = SUPABASE_URL.trim().replace(/\/+$/, "");
+  if (!baseUrl) return "";
+  const search = new URLSearchParams();
+  Object.entries(params).forEach(([key, value]) => {
+    if (value === null || value === undefined) return;
+    const normalized = String(value).trim();
+    if (!normalized) return;
+    search.set(key, normalized);
+  });
+  const query = search.toString();
+  return query
+    ? `${baseUrl}/functions/v1/${functionName}?${query}`
+    : `${baseUrl}/functions/v1/${functionName}`;
+};
+
+const buildAutomationOpenTrackingUrl = (
+  workflowId: string,
+  contactId: string,
+  nodeId: string,
+  stepIndex: number,
+  messageId: string
+) =>
+  buildFunctionUrl("track-email-open", {
+    workflow_id: workflowId,
+    contact_id: contactId,
+    node_id: nodeId,
+    step: stepIndex,
+    message_id: messageId,
+  });
+
+const buildAutomationClickTrackingUrl = (
+  workflowId: string,
+  contactId: string,
+  nodeId: string,
+  stepIndex: number,
+  messageId: string,
+  targetUrl: string,
+  type = ""
+) =>
+  buildFunctionUrl("track-email-click", {
+    workflow_id: workflowId,
+    contact_id: contactId,
+    node_id: nodeId,
+    step: stepIndex,
+    message_id: messageId,
+    url: targetUrl,
+    type,
+  });
+
+const generateTrackingPixel = (trackingUrl: string) =>
+  trackingUrl
+    ? `<img src="${trackingUrl}" width="1" height="1" style="display:none;" alt="" />`
+    : "";
+
+const addAutomationTrackingToLinks = (
+  htmlContent: string,
+  workflowId: string,
+  contactId: string,
+  nodeId: string,
+  stepIndex: number,
+  messageId: string
+) => {
+  if (!htmlContent || !SUPABASE_URL) {
+    return { content: htmlContent, trackingUrls: [] as string[] };
+  }
+
+  const trackingUrls: string[] = [];
+  const content = htmlContent.replace(
+    TRACKING_LINK_REGEX,
+    (match, hrefPrefix, hrefUrl, hrefSuffix, nakedUrl) => {
+      const originalUrl = hrefUrl || nakedUrl;
+      if (!originalUrl) return match;
+      const normalizedUrl = /^www\./i.test(originalUrl) ? `https://${originalUrl}` : originalUrl;
+      const trackingUrl = buildAutomationClickTrackingUrl(
+        workflowId,
+        contactId,
+        nodeId,
+        stepIndex,
+        messageId,
+        normalizedUrl
+      );
+
+      if (!trackingUrl) return match;
+      trackingUrls.push(trackingUrl);
+
+      if (hrefUrl) {
+        return `${hrefPrefix}${trackingUrl}${hrefSuffix}`;
+      }
+
+      return `<a href="${trackingUrl}">${nakedUrl}</a>`;
+    }
+  );
+
+  return { content, trackingUrls };
 };
 
 const addMinutes = (base: Date, minutes: number) =>
@@ -570,6 +670,27 @@ const logAutomationEvent = async (
   }
 };
 
+const touchProspectActivity = async (
+  prospectId: string | null | undefined,
+  activityType: string,
+  activityAt = new Date().toISOString()
+) => {
+  const normalizedProspectId = String(prospectId || "").trim();
+  if (!normalizedProspectId) return;
+
+  try {
+    await admin
+      .from("prospects")
+      .update({
+        last_activity_at: activityAt,
+        last_activity_type: activityType,
+      })
+      .eq("id", normalizedProspectId);
+  } catch (error) {
+    console.error("Failed to update prospect activity state:", getErrorMessage(error));
+  }
+};
+
 const releaseContactForRetry = async (
   contactId: string,
   nextRunAt: Date,
@@ -607,6 +728,115 @@ const completeContact = async (
     .eq("id", contactId);
 };
 
+const parseIsoTimestamp = (value: unknown) => {
+  const text = String(value || "").trim();
+  if (!text) return null;
+  const timestamp = Date.parse(text);
+  return Number.isFinite(timestamp) ? timestamp : null;
+};
+
+const hasTrackedEventInCurrentCycle = (
+  state: Record<string, unknown>,
+  timestampKey: string,
+  booleanKeys: string[] = []
+) => {
+  const eventAt = parseIsoTimestamp(state[timestampKey]);
+  const lastSentAt = parseIsoTimestamp(state.last_sent_at);
+
+  if (eventAt !== null) {
+    return lastSentAt === null || eventAt >= lastSentAt;
+  }
+
+  return booleanKeys.some((key) => state[key] === true);
+};
+
+const stripConditionWaitState = (state: Record<string, unknown>) => {
+  const nextState = { ...state };
+  delete nextState.condition_wait_node_id;
+  delete nextState.condition_wait_rules;
+  delete nextState.condition_wait_until;
+  delete nextState.condition_wait_started_at;
+  return nextState;
+};
+
+const conditionRuleNeedsExternalEvent = (rule: unknown) => {
+  const normalized = String(rule || "").toLowerCase();
+  return (
+    normalized === "email_opened" ||
+    normalized === "email_clicked" ||
+    normalized === "email_replied" ||
+    normalized === "email_reply_contains" ||
+    normalized === "has_replied"
+  );
+};
+
+const conditionRuleHasEventEvidence = (rule: unknown, state: Record<string, unknown>) => {
+  const normalized = String(rule || "").toLowerCase();
+  if (normalized === "email_opened") {
+    return hasTrackedEventInCurrentCycle(state, "last_opened_at", ["email_opened", "opened"]);
+  }
+  if (normalized === "email_clicked") {
+    return hasTrackedEventInCurrentCycle(state, "last_clicked_at", ["email_clicked", "clicked"]);
+  }
+  if (
+    normalized === "email_replied" ||
+    normalized === "email_reply_contains" ||
+    normalized === "has_replied"
+  ) {
+    return hasTrackedEventInCurrentCycle(state, "last_replied_at", ["email_replied", "replied"]);
+  }
+  return false;
+};
+
+const shouldWaitForConditionEvent = (
+  config: Record<string, unknown>,
+  state: Record<string, unknown>,
+  branchSelection: { handle: string }
+) => {
+  if (branchSelection.handle !== "else") return false;
+  const normalized = normalizeGraphConditionConfig(config);
+  if (normalized.clauses.length === 0) return false;
+  if (!normalized.clauses.every((clause) => conditionRuleNeedsExternalEvent(clause.rule))) {
+    return false;
+  }
+  return !normalized.clauses.some((clause) => conditionRuleHasEventEvidence(clause.rule, state));
+};
+
+const loadLatestInboundReply = async (
+  workflow: Record<string, unknown>,
+  contact: Record<string, unknown>,
+  state: Record<string, unknown>
+) => {
+  const email = normalizeEmail(contact.email);
+  let query = admin
+    .from("email_messages")
+    .select("id, body, date")
+    .eq("user_id", workflow.user_id)
+    .eq("direction", "inbound")
+    .ilike("from_email", email)
+    .order("date", { ascending: false })
+    .limit(1);
+
+  if (state.last_sent_at) {
+    query = query.gte("date", String(state.last_sent_at));
+  }
+  if (state.last_sender_email) {
+    query = query.ilike("to_email", String(state.last_sender_email));
+  }
+
+  const { data, error } = await query.maybeSingle();
+  if (error) {
+    throw new Error(`Condition check failed: ${error.message}`);
+  }
+  if (!data) return null;
+
+  return {
+    id: String(data.id || ""),
+    body: String(data.body || ""),
+    date: String(data.date || ""),
+  };
+};
+
 const evaluateCondition = async (
   workflow: Record<string, unknown>,
   contact: Record<string, unknown>,
@@ -618,34 +848,36 @@ const evaluateCondition = async (
   const email = normalizeEmail(contact.email);
   const comparator = String(config.comparator || "exists").toLowerCase();
 
-  if (rule === "has_replied" || rule === "email_opened") {
-    let query = admin
-      .from("email_messages")
-      .select("id", { count: "exact", head: true })
-      .eq("user_id", workflow.user_id)
-      .eq("direction", "inbound")
-      .ilike("from_email", email);
-
-    if (state.last_sent_at) {
-      query = query.gte("date", String(state.last_sent_at));
-    }
-    if (state.last_sender_email) {
-      query = query.ilike("to_email", String(state.last_sender_email));
-    }
-
-    const { count, error } = await query;
-    if (error) {
-      throw new Error(`Condition check failed: ${error.message}`);
-    }
-
-    return Number(count || 0) > 0;
+  if (rule === "email_opened") {
+    return hasTrackedEventInCurrentCycle(state, "last_opened_at", ["email_opened", "opened"]);
   }
 
   if (rule === "email_clicked") {
-    if (state.last_clicked_at || state.email_clicked === true || state.clicked === true) {
+    return hasTrackedEventInCurrentCycle(state, "last_clicked_at", ["email_clicked", "clicked"]);
+  }
+
+  if (rule === "has_replied" || rule === "email_replied") {
+    if (hasTrackedEventInCurrentCycle(state, "last_replied_at", ["email_replied", "replied"])) {
       return true;
     }
-    return false;
+
+    const reply = await loadLatestInboundReply(workflow, contact, state);
+    return Boolean(reply);
+  }
+
+  if (rule === "email_reply_contains") {
+    if (!rawValue) return false;
+
+    if (hasTrackedEventInCurrentCycle(state, "last_replied_at", ["email_replied", "replied"])) {
+      const replyText = String(state.last_reply_text || "").toLowerCase();
+      if (replyText.includes(rawValue)) {
+        return true;
+      }
+    }
+
+    const reply = await loadLatestInboundReply(workflow, contact, state);
+    if (!reply) return false;
+    return String(reply.body || "").toLowerCase().includes(rawValue);
   }
 
   if (rule === "user_property") {
@@ -809,7 +1041,7 @@ const sendEmailForStep = async (
   } = {}
 ) => {
   const config = safeJsonObject(step.config);
-  const state = safeJsonObject(contact.state);
+  const state = stripConditionWaitState(safeJsonObject(contact.state));
   const nodeId = options.nodeId || String(step.id || "");
   const stepLabel = String(step.name || "Email");
   const sender = await loadEmailConfig(workflow.user_id, String(config.sender_config_id || ""));
@@ -959,11 +1191,40 @@ const sendEmailForStep = async (
         : String(state.last_message_id);
     }
 
+    const openTrackingUrl = buildAutomationOpenTrackingUrl(
+      String(workflow.id || ""),
+      String(contact.id || ""),
+      nodeId,
+      stepIndex,
+      generatedMessageId
+    );
+    const { content: htmlBodyWithTracking, trackingUrls } = addAutomationTrackingToLinks(
+      htmlBody,
+      String(workflow.id || ""),
+      String(contact.id || ""),
+      nodeId,
+      stepIndex,
+      generatedMessageId
+    );
+    const ghostTrackingUrl = buildAutomationClickTrackingUrl(
+      String(workflow.id || ""),
+      String(contact.id || ""),
+      nodeId,
+      stepIndex,
+      generatedMessageId,
+      "http://example.com/unsubscribe",
+      "ghost"
+    );
+    const ghostLink = ghostTrackingUrl
+      ? `<a href="${ghostTrackingUrl}" style="display:none;visibility:hidden;opacity:0;position:absolute;left:-9999px;">Unsubscribe</a>`
+      : "";
+    const finalHtmlBody = `${htmlBodyWithTracking}${generateTrackingPixel(openTrackingUrl)}${ghostLink}`;
+
     const info = await transporter.sendMail({
       from: `"${senderName}" <${senderEmail}>`,
       to: String(contact.email || ""),
       subject: personalizedSubject,
-      html: htmlBody,
+      html: finalHtmlBody,
       text: personalizedBody,
       messageId: generatedMessageId,
       headers,
@@ -975,15 +1236,30 @@ const sendEmailForStep = async (
 
     const nextState = {
       ...state,
+      ...(options.statePatch || {}),
       full_name: String(contact.full_name || state.full_name || ""),
       email: String(contact.email || ""),
       last_sent_at: sentAt,
       last_message_id: infoMessageId,
+      last_tracking_message_id: generatedMessageId,
       thread_id: threadId,
       last_sender_email: senderEmail,
       last_sender_config_id: sender.id,
       last_subject: personalizedSubject,
-      ...(options.statePatch || {}),
+      last_email_node_id: nodeId,
+      last_email_step_index: stepIndex,
+      track_open_link: openTrackingUrl || null,
+      track_click_link: trackingUrls[0] || null,
+      email_opened: false,
+      email_clicked: false,
+      email_replied: false,
+      opened: false,
+      clicked: false,
+      replied: false,
+      last_opened_at: null,
+      last_clicked_at: null,
+      last_replied_at: null,
+      last_reply_text: "",
     };
 
     await admin
@@ -1025,14 +1301,18 @@ const sendEmailForStep = async (
       contact.id,
       "email_sent",
       stepIndex,
-      `Sent step "${stepLabel}" to ${contact.email}.`,
-      {
-        sender_config_id: sender.id,
-        message_id: infoMessageId,
-        smtp_response: info?.response || null,
-        node_id: nodeId || null,
-      }
-    );
+        `Sent step "${stepLabel}" to ${contact.email}.`,
+        {
+          sender_config_id: sender.id,
+          message_id: infoMessageId,
+          smtp_response: info?.response || null,
+          tracked_link_count: trackingUrls.length,
+          track_open_link: openTrackingUrl || null,
+          node_id: nodeId || null,
+        }
+      );
+
+    await touchProspectActivity(String(contact.prospect_id || ""), "automation_email_sent", sentAt);
 
     if (options.completeAfterSend) {
       await logAutomationEvent(
@@ -1642,9 +1922,10 @@ const processContactGraph = async (
     }
 
     if (node.kind === "condition") {
+      const conditionConfig = safeJsonObject(node.config);
       let branchSelection;
       try {
-        branchSelection = await pickGraphConditionBranch(workflow, contact, safeJsonObject(node.config), state);
+        branchSelection = await pickGraphConditionBranch(workflow, contact, conditionConfig, state);
       } catch (error) {
         await releaseContactForRetry(
           contact.id,
@@ -1661,6 +1942,44 @@ const processContactGraph = async (
           { node_id: node.id }
         );
         return { failed: 1 };
+      }
+
+      if (shouldWaitForConditionEvent(conditionConfig, state, branchSelection)) {
+        const nextRunAt = addMinutes(new Date(), ENGAGEMENT_CONDITION_RECHECK_MINUTES);
+        const waitingState = {
+          ...state,
+          current_node_id: node.id,
+          condition_wait_node_id: node.id,
+          condition_wait_rules: normalizeGraphConditionConfig(conditionConfig).clauses.map((clause) => clause.rule),
+          condition_wait_until: nextRunAt.toISOString(),
+          condition_wait_started_at:
+            String(state.condition_wait_started_at || "").trim() || new Date().toISOString(),
+        };
+
+        await admin
+          .from("automation_contacts")
+          .update({
+            status: "active",
+            next_run_at: nextRunAt.toISOString(),
+            processing_started_at: null,
+            state: waitingState,
+            last_error: null,
+          })
+          .eq("id", contact.id);
+
+        await logAutomationEvent(
+          workflow,
+          contact.id,
+          "condition_waiting",
+          currentStep,
+          "Waiting for email engagement before evaluating the condition.",
+          {
+            node_id: node.id,
+            next_run_at: nextRunAt.toISOString(),
+            rules: normalizeGraphConditionConfig(conditionConfig).clauses.map((clause) => clause.rule),
+          }
+        );
+        return { waiting: 1 };
       }
 
       let next =
@@ -1703,7 +2022,7 @@ const processContactGraph = async (
 
       currentNodeId = next.target;
       state = {
-        ...state,
+        ...stripConditionWaitState(state),
         current_node_id: currentNodeId,
       };
 
@@ -1820,11 +2139,9 @@ const processContactGraph = async (
         currentStep,
         {
           statePatch: {
-            ...state,
             current_node_id: nextNodeId,
           },
           retryStatePatch: {
-            ...state,
             current_node_id: node.id,
           },
           nodeId: node.id,
@@ -2001,9 +2318,32 @@ const claimDueContacts = async (workflowId: string, batchSize = DUE_CONTACTS_BAT
   return claimed;
 };
 
+const claimSpecificContact = async (workflowId: string, contactId: string) => {
+  if (!workflowId || !contactId) return [];
+
+  const nowIso = new Date().toISOString();
+  const { data, error } = await admin
+    .from("automation_contacts")
+    .update({
+      status: "processing",
+      processing_started_at: nowIso,
+    })
+    .eq("id", contactId)
+    .eq("workflow_id", workflowId)
+    .eq("status", "active")
+    .select("*")
+    .maybeSingle();
+
+  if (error) {
+    throw new Error(`Unable to claim contact ${contactId}: ${error.message}`);
+  }
+
+  return data ? [data] : [];
+};
+
 const runWorkflow = async (
   workflow: Record<string, unknown>,
-  options: { force?: boolean; enroll?: boolean; batchSize?: number } = {}
+  options: { force?: boolean; enroll?: boolean; batchSize?: number; contactId?: string } = {}
 ) => {
   const status = toWorkflowStatus(workflow.status);
   const shouldRun = options.force || status === "live" || status === "paused";
@@ -2059,7 +2399,9 @@ const runWorkflow = async (
     .lt("processing_started_at", addMinutes(new Date(), -15).toISOString());
 
   const graphRuntime = normalizeWorkflowGraph(workflow);
-  const claimedContacts = await claimDueContacts(workflow.id, options.batchSize || DUE_CONTACTS_BATCH);
+  const claimedContacts = options.contactId
+    ? await claimSpecificContact(String(workflow.id || ""), String(options.contactId))
+    : await claimDueContacts(workflow.id, options.batchSize || DUE_CONTACTS_BATCH);
   for (const contact of claimedContacts) {
     summary.processed += 1;
     const result = await processContact(workflow, contact, graphRuntime);
@@ -2158,6 +2500,7 @@ serve(async (req: Request) => {
         force: true,
         enroll: true,
         batchSize: Number(payload.batchSize || DUE_CONTACTS_BATCH),
+        contactId: payload.contactId || payload.contact_id || undefined,
       });
       return jsonResponse({ success: true, action, summary });
     }

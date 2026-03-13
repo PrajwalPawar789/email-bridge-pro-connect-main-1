@@ -1,8 +1,9 @@
 import { useEffect, useMemo, useState } from 'react';
 import LandingPage from './LandingPage';
 import { resolveSiteDomain, type ResolvedSiteDomain } from '@/lib/siteConnectorPersistence';
-import { extractHtmlBodyContent, extractHtmlTitle } from '@/lib/htmlDocument';
+import { extractHtmlTitle } from '@/lib/htmlDocument';
 import { normalizeSiteConnectorHost, shouldResolveSiteDomainHost } from '@/lib/siteConnectorHost';
+import LandingPageRenderer from '@/components/landing-pages/LandingPageRenderer';
 
 const RootPage = () => {
   const [loading, setLoading] = useState(true);
@@ -61,7 +62,7 @@ const RootPage = () => {
     return <LandingPage />;
   }
 
-  return <div dangerouslySetInnerHTML={{ __html: extractHtmlBodyContent(resolvedDomain.page.contentHtml) }} />;
+  return <LandingPageRenderer page={resolvedDomain.page} />;
 };
 
 export default RootPage;

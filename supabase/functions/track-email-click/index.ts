@@ -2,9 +2,11 @@
 import { serve } from "https://deno.land/std@0.190.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 
+const SUPABASE_URL = Deno.env.get("SUPABASE_URL") ?? "";
+const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? "";
 const supabase = createClient(
-  Deno.env.get("SUPABASE_URL") ?? "",
-  Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? ""
+  SUPABASE_URL,
+  SUPABASE_SERVICE_ROLE_KEY
 );
 
 const BOT_SCORE_THRESHOLD = 70;
@@ -63,11 +65,316 @@ const IMAGE_PROXY_UA_TOKENS = [
 const hasToken = (value: string, tokens: string[]) =>
   tokens.some((token) => value.includes(token));
 
+const safeJsonObject = (value: unknown) =>
+  value && typeof value === "object" && !Array.isArray(value)
+    ? { ...(value as Record<string, unknown>) }
+    : {};
+
+const parseIsoTimestamp = (value: unknown) => {
+  const text = String(value || "").trim();
+  if (!text) return null;
+  const timestamp = Date.parse(text);
+  return Number.isFinite(timestamp) ? timestamp : null;
+};
+
+const hasEventInCurrentCycle = (state: Record<string, unknown>, key: string) => {
+  const eventAt = parseIsoTimestamp(state[key]);
+  const sentAt = parseIsoTimestamp(state.last_sent_at);
+  if (eventAt === null) return false;
+  return sentAt === null || eventAt >= sentAt;
+};
+
+const logAutomationEvent = async (
+  workflowId: string,
+  contactId: string,
+  userId: string,
+  eventType: string,
+  message: string,
+  metadata: Record<string, unknown> = {},
+  stepIndex: number | null = null
+) => {
+  try {
+    await supabase.from("automation_logs").insert({
+      workflow_id: workflowId,
+      contact_id: contactId,
+      user_id: userId,
+      event_type: eventType,
+      step_index: stepIndex,
+      message,
+      metadata,
+    });
+  } catch (error) {
+    console.error("Failed to log automation click event:", error);
+  }
+};
+
+const touchProspectActivity = async (
+  prospectId: string | null | undefined,
+  activityType: string,
+  activityAt = new Date().toISOString()
+) => {
+  const normalizedProspectId = String(prospectId || "").trim();
+  if (!normalizedProspectId) return;
+
+  try {
+    await supabase
+      .from("prospects")
+      .update({
+        last_activity_at: activityAt,
+        last_activity_type: activityType,
+      })
+      .eq("id", normalizedProspectId);
+  } catch (error) {
+    console.error("Failed to update prospect after click:", error);
+  }
+};
+
+const triggerAutomationRunner = async (workflowId: string, contactId?: string) => {
+  if (!SUPABASE_URL || !SUPABASE_SERVICE_ROLE_KEY || !workflowId) return;
+
+  try {
+    await fetch(`${SUPABASE_URL.replace(/\/+$/, "")}/functions/v1/automation-runner`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${SUPABASE_SERVICE_ROLE_KEY}`,
+      },
+      body: JSON.stringify({
+        action: "run_now",
+        workflowId,
+        contactId: contactId || undefined,
+        batchSize: 40,
+      }),
+    });
+  } catch (error) {
+    console.error("Failed to trigger automation runner after click:", error);
+  }
+};
+
+const processAutomationClick = async (
+  workflowId: string,
+  contactId: string,
+  nodeId: string,
+  trackedMessageId: string,
+  targetUrl: string,
+  isGhost: boolean,
+  step: number | null,
+  req: Request
+) => {
+  const userAgent = req.headers.get("user-agent") || "";
+  const forwardedFor = req.headers.get("x-forwarded-for") || "";
+  const ip = forwardedFor.split(",")[0]?.trim() || req.headers.get("cf-connecting-ip") || "";
+  const accept = req.headers.get("accept") || "";
+  const via = req.headers.get("via") || "";
+  const secFetchSite = req.headers.get("sec-fetch-site") || "";
+  const secFetchMode = req.headers.get("sec-fetch-mode") || "";
+  const secFetchDest = req.headers.get("sec-fetch-dest") || "";
+
+  const { data: contact } = await supabase
+    .from("automation_contacts")
+    .select("id, workflow_id, user_id, prospect_id, status, state")
+    .eq("id", contactId)
+    .eq("workflow_id", workflowId)
+    .maybeSingle();
+
+  if (!contact) {
+    console.error(`Automation contact not found for click tracking: ${workflowId}/${contactId}`);
+    return;
+  }
+
+  if (["completed", "failed", "paused", "unsubscribed"].includes(String(contact.status || "").toLowerCase())) {
+    return;
+  }
+
+  const state = safeJsonObject(contact.state);
+  const currentTrackedMessageId = String(state.last_tracking_message_id || state.last_message_id || "").trim();
+  if (trackedMessageId && currentTrackedMessageId && trackedMessageId !== currentTrackedMessageId) {
+    await logAutomationEvent(
+      workflowId,
+      contactId,
+      String(contact.user_id || ""),
+      "email_click_ignored",
+      "Ignored stale click event for a previous automation email.",
+      {
+        node_id: nodeId || null,
+        tracked_message_id: trackedMessageId,
+        active_message_id: currentTrackedMessageId,
+        target_url: targetUrl || null,
+        ip_address: ip || null,
+      },
+      step
+    );
+    return;
+  }
+
+  let botScore = 0;
+  const botReasons: string[] = [];
+  let msSinceSend: number | null = null;
+  let msSinceOpen: number | null = null;
+
+  const addReason = (score: number, reason: string) => {
+    botScore += score;
+    if (!botReasons.includes(reason)) {
+      botReasons.push(reason);
+    }
+  };
+
+  if (req.method && req.method.toUpperCase() === "HEAD") {
+    addReason(80, "head_request");
+  }
+
+  if (state.last_sent_at) {
+    const sentTime = new Date(String(state.last_sent_at)).getTime();
+    const now = Date.now();
+    const timeDiff = now - sentTime;
+    msSinceSend = timeDiff;
+
+    if (timeDiff >= 0 && timeDiff <= SPEED_TRAP_CRITICAL_MS) {
+      addReason(95, "speed_trap_critical");
+    } else if (timeDiff >= 0 && timeDiff <= SPEED_TRAP_SUSPICIOUS_MS) {
+      addReason(50, "speed_trap_suspicious");
+    } else if (timeDiff >= 0 && timeDiff <= SPEED_TRAP_MILD_MS) {
+      addReason(20, "speed_trap_mild");
+    }
+  }
+
+  if (state.last_opened_at) {
+    const openTime = new Date(String(state.last_opened_at)).getTime();
+    const now = Date.now();
+    const gapMs = now - openTime;
+    msSinceOpen = gapMs;
+
+    if (gapMs >= 0 && gapMs <= OPEN_CLICK_CRITICAL_MS) {
+      addReason(60, "open_click_gap_critical");
+    } else if (gapMs >= 0 && gapMs <= OPEN_CLICK_SUSPICIOUS_MS) {
+      addReason(35, "open_click_gap_suspicious");
+    }
+  }
+
+  if (
+    msSinceSend !== null &&
+    msSinceOpen !== null &&
+    msSinceSend >= 0 &&
+    msSinceOpen >= 0 &&
+    msSinceSend <= OPEN_CLICK_BURST_AFTER_SEND_MS &&
+    msSinceOpen <= OPEN_CLICK_SUSPICIOUS_MS
+  ) {
+    addReason(45, "open_click_burst_after_send");
+  }
+
+  if (isGhost) {
+    addReason(100, "honeypot_clicked");
+  }
+
+  const ua = userAgent.toLowerCase();
+  if (!ua) {
+    addReason(100, "empty_user_agent");
+  } else {
+    if (hasToken(ua, HIGH_CONFIDENCE_UA_TOKENS)) addReason(100, "known_bot_ua");
+    if (hasToken(ua, HTTP_LIBRARY_UA_TOKENS)) addReason(80, "http_library_ua");
+    if (hasToken(ua, IMAGE_PROXY_UA_TOKENS)) addReason(40, "image_proxy");
+  }
+
+  const acceptLower = accept.toLowerCase();
+  if (acceptLower && !acceptLower.includes("text/html")) {
+    addReason(20, "accept_not_html");
+  }
+
+  const isBot = botScore >= BOT_SCORE_THRESHOLD;
+  if (isBot) {
+    await logAutomationEvent(
+      workflowId,
+      contactId,
+      String(contact.user_id || ""),
+      "email_click_ignored_bot",
+      "Ignored automation email click because the event looks like a bot or secure-link prefetch.",
+      {
+        node_id: nodeId || null,
+        tracked_message_id: trackedMessageId || null,
+        target_url: targetUrl || null,
+        is_ghost: isGhost,
+        bot_score: botScore,
+        bot_reasons: botReasons,
+        user_agent: userAgent || null,
+        ip_address: ip || null,
+        accept: accept || null,
+        via: via || null,
+        sec_fetch_site: secFetchSite || null,
+        sec_fetch_mode: secFetchMode || null,
+        sec_fetch_dest: secFetchDest || null,
+        ms_since_send: msSinceSend,
+        ms_since_open: msSinceOpen,
+      },
+      step
+    );
+    return;
+  }
+
+  if (hasEventInCurrentCycle(state, "last_clicked_at")) {
+    return;
+  }
+
+  const clickedAt = new Date().toISOString();
+  const nextState = {
+    ...state,
+    email_opened: true,
+    opened: true,
+    email_clicked: true,
+    clicked: true,
+    last_opened_at: hasEventInCurrentCycle(state, "last_opened_at")
+      ? String(state.last_opened_at)
+      : clickedAt,
+    last_clicked_at: clickedAt,
+  };
+
+  const { error: updateError } = await supabase
+    .from("automation_contacts")
+    .update({
+      status: "active",
+      next_run_at: clickedAt,
+      processing_started_at: null,
+      last_error: null,
+      state: nextState,
+    })
+    .eq("id", contactId);
+
+  if (updateError) {
+    console.error("Failed to update automation contact click state:", updateError);
+    return;
+  }
+
+  await logAutomationEvent(
+    workflowId,
+    contactId,
+    String(contact.user_id || ""),
+    "email_clicked",
+    "Tracked a human email click for the current automation message.",
+    {
+      node_id: nodeId || null,
+      tracked_message_id: trackedMessageId || null,
+      target_url: targetUrl || null,
+      is_ghost: isGhost,
+      user_agent: userAgent || null,
+      ip_address: ip || null,
+      ms_since_send: msSinceSend,
+      ms_since_open: msSinceOpen,
+    },
+    step
+  );
+
+  await touchProspectActivity(String(contact.prospect_id || ""), "automation_email_clicked", clickedAt);
+  await triggerAutomationRunner(workflowId, contactId);
+};
+
 serve(async (req) => {
   try {
     const url = new URL(req.url);
     const campaignId = url.searchParams.get('campaign_id');
     const recipientId = url.searchParams.get('recipient_id');
+    const workflowId = url.searchParams.get('workflow_id');
+    const contactId = url.searchParams.get('contact_id');
+    const nodeId = url.searchParams.get('node_id') || '';
+    const trackedMessageId = url.searchParams.get('message_id') || '';
     const encodedUrl = url.searchParams.get('url');
     const isGhost = url.searchParams.get('type') === 'ghost';
     const stepParam = url.searchParams.get('step');
@@ -408,6 +715,17 @@ serve(async (req) => {
       } else {
         console.error(`Recipient not found: ${recipientId}`);
       }
+    } else if (workflowId && contactId) {
+      await processAutomationClick(
+        workflowId,
+        contactId,
+        nodeId,
+        trackedMessageId,
+        targetUrl,
+        isGhost,
+        step,
+        req
+      );
     } else {
       console.error('Missing required parameters for click tracking');
     }

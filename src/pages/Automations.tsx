@@ -163,6 +163,14 @@ const triggerTypeLabel = (triggerType: AutomationWorkflow["trigger_type"]) => {
   return "Manual trigger";
 };
 
+const WEBHOOK_LEAD_BEHAVIOR_NOTES = [
+  "Only the contact in the webhook payload enters the workflow. Older contacts are not re-run unless they get a new webhook hit.",
+  "Contacts are deduped by email inside each workflow.",
+  "If the same email is already active, the workflow continues with refreshed data. Completed, failed, or paused contacts restart from the beginning.",
+  "Unsubscribed contacts stay excluded even if another webhook arrives.",
+  "Webhook leads are also synced into your contact database for later campaigns, pipeline use, and segmentation.",
+] as const;
+
 const generateWebhookSecret = () => {
   const randomValue =
     typeof crypto !== "undefined" && typeof crypto.randomUUID === "function"
@@ -370,9 +378,12 @@ const Automations = () => {
           event: webhookEventName || "contact_created",
           email: "prospect@example.com",
           name: "Alex Johnson",
+          phone: "+1 415 555 0182",
           data: {
             company: "Acme Inc",
             job_title: "Head of Growth",
+            country: "United States",
+            industry: "SaaS",
             plan: "trial",
           },
         },
@@ -685,7 +696,7 @@ const Automations = () => {
           title: "Saved",
           description:
             payload.compileErrors.length > 0
-              ? `Workflow saved with ${payload.compileErrors.length} compatibility warning(s).`
+              ? `Workflow saved with ${payload.compileErrors.length} legacy fallback warning(s).`
               : "Workflow updated.",
         });
       }
@@ -1877,6 +1888,17 @@ const Automations = () => {
                                   />
                                 </div>
 
+                                <div className="space-y-2 rounded-lg border border-cyan-200/70 bg-white/70 p-3">
+                                  <p className="text-xs font-semibold uppercase tracking-[0.12em] text-cyan-700">
+                                    Lead handling
+                                  </p>
+                                  <ul className="space-y-1 text-xs text-cyan-800/90">
+                                    {WEBHOOK_LEAD_BEHAVIOR_NOTES.map((note) => (
+                                      <li key={note}>{note}</li>
+                                    ))}
+                                  </ul>
+                                </div>
+
                                 <div className="space-y-2">
                                   <Label>Connection test</Label>
                                   <div className="flex flex-wrap items-center gap-2">
@@ -1929,7 +1951,10 @@ const Automations = () => {
                               <div className="rounded-xl border border-amber-200 bg-amber-50 p-3 text-xs text-amber-800">
                                 <p className="mb-1 flex items-center gap-1 font-semibold uppercase tracking-[0.12em]">
                                   <AlertTriangle className="h-3.5 w-3.5" />
-                                  Runner compatibility warnings
+                                  Legacy fallback warnings
+                                </p>
+                                <p className="mb-2 text-[11px] text-amber-700/90">
+                                  The live graph runner still uses the full workflow. These warnings only describe what would be lost in the older linear fallback.
                                 </p>
                                 <div className="space-y-1">
                                   {builderPayload.compileErrors
@@ -1960,6 +1985,7 @@ const Automations = () => {
                             secret: webhookSecret,
                             endpoint: webhookEndpoint,
                             samplePayload: webhookSamplePayload,
+                            behaviorNotes: [...WEBHOOK_LEAD_BEHAVIOR_NOTES],
                             testing: webhookTestState.status === "running",
                             testStatus:
                               webhookTestState.status === "running"

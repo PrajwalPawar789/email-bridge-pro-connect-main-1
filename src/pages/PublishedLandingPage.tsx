@@ -1,12 +1,15 @@
 import { useEffect, useState } from 'react';
 import { useParams } from 'react-router-dom';
 import { getPublishedLandingPage } from '@/lib/landingPagesPersistence';
-import { extractHtmlBodyContent, extractHtmlTitle } from '@/lib/htmlDocument';
+import { extractHtmlTitle } from '@/lib/htmlDocument';
+import LandingPageRenderer from '@/components/landing-pages/LandingPageRenderer';
+import type { LandingPageBlock } from '@/lib/landingPagesPersistence';
 
 interface PublishedPage {
   id: string;
   name: string;
   slug: string;
+  blocks: LandingPageBlock[];
   contentHtml: string;
 }
 
@@ -82,7 +85,7 @@ const PublishedLandingPage = () => {
     );
   }
 
-  return <div dangerouslySetInnerHTML={{ __html: extractHtmlBodyContent(page.contentHtml) }} />;
+  return <LandingPageRenderer page={page} />;
 };
 
 export default PublishedLandingPage;

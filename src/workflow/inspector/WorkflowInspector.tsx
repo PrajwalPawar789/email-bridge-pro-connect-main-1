@@ -40,6 +40,7 @@ interface WorkflowInspectorProps {
     secret: string;
     endpoint: string;
     samplePayload: string;
+    behaviorNotes: string[];
     testing: boolean;
     testStatus: "idle" | "success" | "error";
     testMessage: string;
@@ -316,6 +317,19 @@ const WorkflowInspector = ({
                           className="min-h-[100px] font-mono text-xs"
                         />
                       </div>
+
+                      {webhookSetup.behaviorNotes.length ? (
+                        <div className="space-y-2 rounded-md border border-cyan-200/70 bg-white/80 p-2.5">
+                          <p className="text-[11px] font-semibold uppercase tracking-[0.12em] text-cyan-700">
+                            Lead handling
+                          </p>
+                          <ul className="space-y-1 text-xs text-cyan-800/90">
+                            {webhookSetup.behaviorNotes.map((note) => (
+                              <li key={note}>{note}</li>
+                            ))}
+                          </ul>
+                        </div>
+                      ) : null}
 
                       <div className="flex flex-wrap items-center gap-2">
                         <Button

@@ -62,6 +62,7 @@ export interface WorkflowWebhookSetup {
   secret: string;
   endpoint: string;
   samplePayload: string;
+  behaviorNotes: string[];
   testing: boolean;
   testStatus: "idle" | "success" | "error";
   testMessage: string;
@@ -959,7 +960,7 @@ const WorkflowBuilder = ({
                   variant="outline"
                   className="border-amber-300 bg-amber-50 text-amber-700"
                 >
-                  {compile.errors.length} compatibility issue(s)
+                  {compile.errors.length} legacy fallback warning(s)
                 </Badge>
               ) : null}
             </div>

@@ -1,4 +1,5 @@
 import { supabase } from '@/integrations/supabase/client';
+import type { LandingPageBlock } from '@/lib/landingPagesPersistence';
 
 export type SiteDomainType = 'root' | 'subdomain';
 export type SiteSslStatus = 'pending' | 'active' | 'expired' | 'failed';
@@ -27,6 +28,7 @@ export interface ResolvedDomainPage {
   id: string;
   name: string;
   slug: string;
+  blocks: LandingPageBlock[];
   contentHtml: string;
 }
 
@@ -251,6 +253,7 @@ export const resolveSiteDomain = async (host: string): Promise<ResolvedSiteDomai
       id: String(data.page.id || ''),
       name: String(data.page.name || ''),
       slug: String(data.page.slug || ''),
+      blocks: Array.isArray(data.page.blocks) ? data.page.blocks : [],
       contentHtml: String(data.page.contentHtml || ''),
     },
   };

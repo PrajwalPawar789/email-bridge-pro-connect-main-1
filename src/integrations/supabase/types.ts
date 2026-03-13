@@ -726,12 +726,16 @@ export type Database = {
           id: string
           industry: string | null
           job_title: string | null
+          last_activity_at: string | null
+          last_activity_type: string | null
           name: string
           phone: string | null
           sender_email: string | null
           sender_name: string | null
           updated_at: string
           user_id: string
+          webhook_first_received_at: string | null
+          webhook_last_received_at: string | null
         }
         Insert: {
           company?: string | null
@@ -742,12 +746,16 @@ export type Database = {
           id?: string
           industry?: string | null
           job_title?: string | null
+          last_activity_at?: string | null
+          last_activity_type?: string | null
           name: string
           phone?: string | null
           sender_email?: string | null
           sender_name?: string | null
           updated_at?: string
           user_id: string
+          webhook_first_received_at?: string | null
+          webhook_last_received_at?: string | null
         }
         Update: {
           company?: string | null
@@ -758,12 +766,16 @@ export type Database = {
           id?: string
           industry?: string | null
           job_title?: string | null
+          last_activity_at?: string | null
+          last_activity_type?: string | null
           name?: string
           phone?: string | null
           sender_email?: string | null
           sender_name?: string | null
           updated_at?: string
           user_id?: string
+          webhook_first_received_at?: string | null
+          webhook_last_received_at?: string | null
         }
         Relationships: [
           {
