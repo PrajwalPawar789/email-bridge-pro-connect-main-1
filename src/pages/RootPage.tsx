@@ -1,9 +1,9 @@
 import { useEffect, useMemo, useState } from 'react';
 import LandingPage from './LandingPage';
 import { resolveSiteDomain, type ResolvedSiteDomain } from '@/lib/siteConnectorPersistence';
-import { extractHtmlTitle } from '@/lib/htmlDocument';
 import { normalizeSiteConnectorHost, shouldResolveSiteDomainHost } from '@/lib/siteConnectorHost';
 import LandingPageRenderer from '@/components/landing-pages/LandingPageRenderer';
+import { applyLandingPageMetadata } from '@/lib/landingPageMetadata';
 
 const RootPage = () => {
   const [loading, setLoading] = useState(true);
@@ -27,9 +27,8 @@ const RootPage = () => {
         const resolved = await resolveSiteDomain(host);
         if (!cancelled) {
           setResolvedDomain(resolved);
-          const resolvedTitle = resolved ? extractHtmlTitle(resolved.page.contentHtml) || resolved.page.name : '';
-          if (resolvedTitle) {
-            document.title = resolvedTitle;
+          if (resolved) {
+            applyLandingPageMetadata({ pageName: resolved.page.name, settings: resolved.page.settings });
           }
         }
       } catch {

@@ -1,8 +1,9 @@
 import { useLocation } from "react-router-dom";
 import { useEffect, useMemo, useState } from "react";
 import { resolveSiteDomain, type ResolvedSiteDomain } from "@/lib/siteConnectorPersistence";
-import { extractHtmlBodyContent, extractHtmlTitle } from "@/lib/htmlDocument";
 import { normalizeSiteConnectorHost, shouldResolveSiteDomainHost } from "@/lib/siteConnectorHost";
+import { applyLandingPageMetadata } from "@/lib/landingPageMetadata";
+import LandingPageRenderer from "@/components/landing-pages/LandingPageRenderer";
 
 const normalizeSlugPath = (pathname: string) =>
   pathname
@@ -39,9 +40,8 @@ const NotFound = () => {
         const resolved = await resolveSiteDomain(host);
         if (!cancelled) {
           setResolvedDomain(resolved);
-          const resolvedTitle = resolved ? extractHtmlTitle(resolved.page.contentHtml) || resolved.page.name : "";
-          if (resolvedTitle) {
-            document.title = resolvedTitle;
+          if (resolved) {
+            applyLandingPageMetadata({ pageName: resolved.page.name, settings: resolved.page.settings });
           }
         }
       } catch {
@@ -75,7 +75,7 @@ const NotFound = () => {
     const expectedSlug = normalizeSlugPath(resolvedDomain.page.slug || "");
 
     if (!requestedSlug || requestedSlug === expectedSlug || !expectedSlug) {
-      return <div dangerouslySetInnerHTML={{ __html: extractHtmlBodyContent(resolvedDomain.page.contentHtml) }} />;
+      return <LandingPageRenderer page={resolvedDomain.page} />;
     }
   }
 

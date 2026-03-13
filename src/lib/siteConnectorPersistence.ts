@@ -1,5 +1,7 @@
 import { supabase } from '@/integrations/supabase/client';
 import type { LandingPageBlock } from '@/lib/landingPagesPersistence';
+import type { LandingPageSettings } from '@/lib/landingPageSettings';
+import { normalizeLandingPageSettings } from '@/lib/landingPageSettings';
 
 export type SiteDomainType = 'root' | 'subdomain';
 export type SiteSslStatus = 'pending' | 'active' | 'expired' | 'failed';
@@ -29,6 +31,7 @@ export interface ResolvedDomainPage {
   name: string;
   slug: string;
   blocks: LandingPageBlock[];
+  settings: LandingPageSettings;
   contentHtml: string;
 }
 
@@ -113,8 +116,8 @@ const defaultDnsRecords = (domain: string, type: SiteDomainType) => {
 const loadLinkedPageNames = async (pageIds: string[]) => {
   if (pageIds.length === 0) return new Map<string, string>();
   const { data, error } = await (supabase as any)
-    .from('landing_pages')
-    .select('id, name')
+      .from('landing_pages')
+      .select('id, name')
     .in('id', pageIds);
   if (error) throw error;
   const map = new Map<string, string>();
@@ -254,6 +257,7 @@ export const resolveSiteDomain = async (host: string): Promise<ResolvedSiteDomai
       name: String(data.page.name || ''),
       slug: String(data.page.slug || ''),
       blocks: Array.isArray(data.page.blocks) ? data.page.blocks : [],
+      settings: normalizeLandingPageSettings(data.page.settings),
       contentHtml: String(data.page.contentHtml || ''),
     },
   };

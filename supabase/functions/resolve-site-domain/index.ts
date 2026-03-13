@@ -79,7 +79,7 @@ serve(async (request: Request) => {
 
     const { data: pageRow, error: pageError } = await admin
       .from("landing_pages")
-      .select("id, name, slug, content_html, blocks, published")
+      .select("id, name, slug, content_html, blocks, settings, published")
       .eq("id", domainRow.linked_page_id)
       .eq("published", true)
       .maybeSingle();
@@ -104,6 +104,7 @@ serve(async (request: Request) => {
         name: String(pageRow.name || ""),
         slug: String(pageRow.slug || ""),
         blocks: Array.isArray(pageRow.blocks) ? pageRow.blocks : [],
+        settings: pageRow.settings && typeof pageRow.settings === "object" ? pageRow.settings : {},
         contentHtml: String(pageRow.content_html || ""),
       },
     });

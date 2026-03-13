@@ -13,14 +13,26 @@ interface LandingPageLeadFormProps {
 
 type SubmitState = 'idle' | 'submitting' | 'success' | 'error';
 
+const TRACKING_SESSION_STORAGE_KEY = 'landing-page-session-id';
+
 const fieldClassName =
   'w-full rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm text-slate-900 shadow-sm outline-none transition focus:border-emerald-500 focus:ring-4 focus:ring-emerald-100';
+
+const getTrackingSessionId = () => {
+  if (typeof window === 'undefined') return '';
+  const existing = window.localStorage.getItem(TRACKING_SESSION_STORAGE_KEY);
+  if (existing) return existing;
+  const next = crypto.randomUUID();
+  window.localStorage.setItem(TRACKING_SESSION_STORAGE_KEY, next);
+  return next;
+};
 
 const getSubmissionContext = () => {
   if (typeof window === 'undefined') return {};
   const params = new URLSearchParams(window.location.search);
 
   return {
+    sessionId: getTrackingSessionId(),
     sourceUrl: window.location.href,
     referrer: document.referrer,
     host: window.location.host,
@@ -35,6 +47,41 @@ const getSubmissionContext = () => {
   };
 };
 
+const resolveFunctionErrorMessage = async (error: unknown, fallback?: string) => {
+  if (fallback) return fallback;
+
+  const response =
+    error && typeof error === 'object' && 'context' in error
+      ? (error as { context?: Response }).context
+      : undefined;
+
+  if (response && typeof response.clone === 'function') {
+    try {
+      const payload = await response.clone().json();
+      if (payload && typeof payload === 'object' && typeof (payload as { error?: unknown }).error === 'string') {
+        const message = String((payload as { error?: string }).error || '').trim();
+        if (message) return message;
+      }
+    } catch {
+      // Ignore JSON parse failures and fall back to text/message parsing below.
+    }
+
+    try {
+      const text = (await response.clone().text()).trim();
+      if (text) return text;
+    } catch {
+      // Ignore text parse failures and fall back to the error message below.
+    }
+  }
+
+  if (error && typeof error === 'object' && 'message' in error) {
+    const message = String((error as { message?: unknown }).message || '').trim();
+    if (message) return message;
+  }
+
+  return 'We could not send your details. Please try again.';
+};
+
 const LandingPageLeadForm = ({
   pageId,
   pageSlug,
@@ -45,6 +92,7 @@ const LandingPageLeadForm = ({
   const form = useMemo(() => normalizeLandingPageFormContent(content), [content]);
   const [values, setValues] = useState<Record<string, string>>({});
   const [website, setWebsite] = useState('');
+  const [hasConsent, setHasConsent] = useState(false);
   const [submitState, setSubmitState] = useState<SubmitState>('idle');
   const [errorMessage, setErrorMessage] = useState('');
 
@@ -56,9 +104,10 @@ const LandingPageLeadForm = ({
       }, {})
     );
     setWebsite('');
+    setHasConsent(false);
     setSubmitState('idle');
     setErrorMessage('');
-  }, [form.fields]);
+  }, [form]);
 
   const handleValueChange = (key: string, value: string) => {
     setValues((prev) => ({ ...prev, [key]: value }));
@@ -72,6 +121,12 @@ const LandingPageLeadForm = ({
     event.preventDefault();
 
     if (preview) return;
+
+    if (!String(form.targetListId || '').trim()) {
+      setSubmitState('error');
+      setErrorMessage('This landing page form is not connected to a destination list yet.');
+      return;
+    }
 
     const emailField =
       form.fields.find((field) => field.type === 'email') ||
@@ -92,6 +147,12 @@ const LandingPageLeadForm = ({
       return;
     }
 
+    if (form.requireConsent && !hasConsent) {
+      setSubmitState('error');
+      setErrorMessage('Consent is required before submitting this form.');
+      return;
+    }
+
     setSubmitState('submitting');
     setErrorMessage('');
 
@@ -108,7 +169,7 @@ const LandingPageLeadForm = ({
 
     if (error || data?.error) {
       setSubmitState('error');
-      setErrorMessage(error?.message || data?.error || 'We could not send your details. Please try again.');
+      setErrorMessage(await resolveFunctionErrorMessage(error, data?.error));
       return;
     }
 
@@ -120,6 +181,13 @@ const LandingPageLeadForm = ({
       }, {})
     );
     setWebsite('');
+    setHasConsent(false);
+
+    if (form.successRedirectUrl && typeof window !== 'undefined') {
+      window.setTimeout(() => {
+        window.location.assign(form.successRedirectUrl);
+      }, 900);
+    }
   };
 
   return (
@@ -202,11 +270,32 @@ const LandingPageLeadForm = ({
             <p className="text-xs leading-5 text-slate-500">{form.privacyNote}</p>
           ) : null}
 
+          {form.requireConsent ? (
+            <label className="flex items-start gap-3 rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-700">
+              <input
+                type="checkbox"
+                className="mt-1 h-4 w-4 rounded border-slate-300 text-emerald-600 focus:ring-emerald-500"
+                checked={hasConsent}
+                disabled={preview || submitState === 'submitting'}
+                onChange={(event) => {
+                  setHasConsent(event.target.checked);
+                  if (submitState !== 'submitting') {
+                    setSubmitState('idle');
+                    setErrorMessage('');
+                  }
+                }}
+              />
+              <span>{form.consentLabel}</span>
+            </label>
+          ) : null}
+
           {preview ? (
             <div className="rounded-2xl border border-dashed border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-800">
               {form.targetListId
                 ? `Leads will be added to ${form.targetListName || 'the selected contact list'} when this page is published.`
                 : 'Connect this form to a list before publishing so captured leads have a destination.'}
+              {form.successRedirectUrl ? ' Successful submissions will redirect visitors automatically.' : ''}
+              {form.successAssetUrl ? ' This form also delivers a file or resource after submission.' : ''}
             </div>
           ) : null}
 
@@ -214,9 +303,19 @@ const LandingPageLeadForm = ({
             <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
               <div className="min-h-6 text-sm" aria-live="polite">
                 {submitState === 'success' ? (
-                  <span className="inline-flex items-center gap-2 text-emerald-700">
+                  <span className="inline-flex flex-wrap items-center gap-2 text-emerald-700">
                     <CheckCircle2 className="h-4 w-4" />
                     {form.successMessage}
+                    {form.successAssetUrl ? (
+                      <a
+                        href={form.successAssetUrl}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="font-semibold underline"
+                      >
+                        Download your resource
+                      </a>
+                    ) : null}
                   </span>
                 ) : null}
                 {submitState === 'error' ? (

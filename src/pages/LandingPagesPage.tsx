@@ -8,6 +8,9 @@ import { CSS } from '@dnd-kit/utilities';
 import {
   ArrowLeft,
   BarChart3,
+  Boxes,
+  Clock3,
+  Copy,
   CreditCard,
   ExternalLink,
   FileText,
@@ -24,7 +27,9 @@ import {
   Smartphone,
   Sparkles,
   Star,
+  Table2,
   Tablet,
+  TrendingUp,
   Trash2,
   Type,
   Video,
@@ -41,9 +46,11 @@ import {
   DEFAULT_LANDING_PAGE_TEMPLATE_ID,
   LANDING_PAGE_TEMPLATES,
   buildLandingPageTemplateBlocks,
+  buildLandingPageTemplateSettings,
   createLandingPageBlock,
   getLandingPageTemplateById,
 } from '@/lib/landingPageTemplates';
+import { listLandingPageAnalyticsSummaries, type LandingPageAnalyticsSummary } from '@/lib/landingPageAnalytics';
 import {
   createLandingPageEmailList,
   listLandingPageEmailLists,
@@ -58,6 +65,7 @@ import {
   normalizeLandingPageFormContent,
 } from '@/lib/landingPageForms';
 import { useLandingPageStore, type LPBlock, type LPBlockType } from '@/stores/landingPageStore';
+import { LANDING_PAGE_THEME_PRESETS, updateLandingPageThemePreset } from '@/lib/landingPageSettings';
 
 const lpBlockTypes: { type: LPBlockType; label: string; icon: any }[] = [
   { type: 'navbar', label: 'Navbar', icon: Menu },
@@ -71,6 +79,10 @@ const lpBlockTypes: { type: LPBlockType; label: string; icon: any }[] = [
   { type: 'faq', label: 'FAQ', icon: HelpCircle },
   { type: 'form', label: 'Form', icon: Mail },
   { type: 'stats', label: 'Stats', icon: BarChart3 },
+  { type: 'logos', label: 'Logos', icon: Boxes },
+  { type: 'steps', label: 'Steps', icon: TrendingUp },
+  { type: 'comparison', label: 'Compare', icon: Table2 },
+  { type: 'countdown', label: 'Countdown', icon: Clock3 },
   { type: 'gallery', label: 'Gallery', icon: Image },
   { type: 'video', label: 'Video', icon: Video },
   { type: 'footer', label: 'Footer', icon: Layout },
@@ -104,6 +116,12 @@ const getPageLeadSummary = (leadCount: number, lastSubmittedAt?: string) => {
   return `${leadCount} lead${leadCount === 1 ? '' : 's'} - last ${formatDistanceToNow(new Date(lastSubmittedAt), { addSuffix: true })}`;
 };
 
+const getAnalyticsSummaryText = (analytics?: LandingPageAnalyticsSummary) => {
+  if (!analytics) return 'No visits tracked yet';
+  if (!analytics.views) return 'No visits tracked yet';
+  return `${analytics.views} views${analytics.ctaClicks ? ` · ${analytics.ctaClicks} CTA clicks` : ''}${analytics.leads ? ` · ${analytics.conversionRate}% conversion` : ''}`;
+};
+
 const getFirstFormPublishIssue = (blocks: LPBlock[]) => {
   for (const block of blocks) {
     if (block.type !== 'form') continue;
@@ -114,7 +132,7 @@ const getFirstFormPublishIssue = (blocks: LPBlock[]) => {
 };
 
 function SortableLPBlock({ block }: { block: LPBlock }) {
-  const { selectedBlockId, selectBlock, removeBlock } = useLandingPageStore();
+  const { selectedBlockId, selectBlock, removeBlock, duplicateBlock } = useLandingPageStore();
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id: block.id });
   const isSelected = selectedBlockId === block.id;
 
@@ -131,6 +149,16 @@ function SortableLPBlock({ block }: { block: LPBlock }) {
       <div className="absolute -left-10 top-4 z-10 flex flex-col gap-1 opacity-0 transition-opacity group-hover:opacity-100">
         <button {...attributes} {...listeners} className="rounded p-1 text-muted-foreground hover:bg-muted" title="Drag section">
           <GripVertical className="h-3 w-3" />
+        </button>
+        <button
+          onClick={(event) => {
+            event.stopPropagation();
+            duplicateBlock(block.id);
+          }}
+          className="rounded p-1 text-muted-foreground hover:bg-muted"
+          title="Duplicate section"
+        >
+          <Copy className="h-3 w-3" />
         </button>
         <button
           onClick={(event) => {
@@ -170,9 +198,19 @@ function LPBlockRenderer({ block }: { block: LPBlock }) {
     case 'hero':
       return (
         <div className="bg-gradient-to-b from-accent to-card px-8 py-20 text-center">
+          {block.content.badge ? <p className="mb-4 text-xs font-semibold uppercase tracking-[0.2em] text-primary">{block.content.badge}</p> : null}
           <h1 className="mb-4 text-4xl font-bold text-foreground">{block.content.headline}</h1>
           <p className="mx-auto mb-6 max-w-xl text-lg text-muted-foreground">{block.content.subheadline}</p>
           <span className="inline-block rounded-lg bg-primary px-8 py-3 font-medium text-primary-foreground">{block.content.ctaText}</span>
+          {Array.isArray(block.content.highlights) && block.content.highlights.length > 0 ? (
+            <div className="mt-6 flex flex-wrap justify-center gap-2">
+              {block.content.highlights.map((item: string) => (
+                <span key={item} className="rounded-full border border-border bg-card px-3 py-1 text-xs uppercase tracking-[0.16em] text-muted-foreground">
+                  {item}
+                </span>
+              ))}
+            </div>
+          ) : null}
         </div>
       );
     case 'features':
@@ -261,6 +299,66 @@ function LPBlockRenderer({ block }: { block: LPBlock }) {
           ))}
         </div>
       );
+    case 'logos':
+      return (
+        <div className="grid gap-3 px-8 py-10 md:grid-cols-4">
+          {(block.content.items || []).map((item: any, index: number) => (
+            <div key={`${item?.name || 'logo'}_${index}`} className="rounded-xl border border-border bg-card px-4 py-6 text-center text-sm font-semibold text-muted-foreground">
+              {item?.name || 'Logo'}
+            </div>
+          ))}
+        </div>
+      );
+    case 'steps':
+      return (
+        <div className="grid gap-4 px-8 py-12 md:grid-cols-3">
+          {(block.content.items || []).map((item: any, index: number) => (
+            <div key={`${item?.title || 'step'}_${index}`} className="rounded-xl border border-border bg-card p-5">
+              <div className="mb-3 flex h-10 w-10 items-center justify-center rounded-2xl bg-primary/10 text-sm font-semibold text-primary">
+                {index + 1}
+              </div>
+              <h3 className="font-semibold text-foreground">{item?.title}</h3>
+              <p className="mt-2 text-sm text-muted-foreground">{item?.desc}</p>
+            </div>
+          ))}
+        </div>
+      );
+    case 'comparison':
+      return (
+        <div className="overflow-x-auto px-8 py-12">
+          <table className="min-w-full overflow-hidden rounded-xl border border-border bg-card text-left text-sm">
+            <thead className="bg-muted/50 text-muted-foreground">
+              <tr>
+                <th className="px-4 py-3">Feature</th>
+                {(block.content.columns || []).map((column: any, index: number) => (
+                  <th key={`${column?.key || 'column'}_${index}`} className="px-4 py-3">{column?.label || 'Column'}</th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {(block.content.rows || []).map((row: any, index: number) => (
+                <tr key={`${row?.feature || 'row'}_${index}`} className="border-t border-border">
+                  <td className="px-4 py-3 font-medium text-foreground">{row?.feature}</td>
+                  {(block.content.columns || []).map((column: any, columnIndex: number) => (
+                    <td key={`${column?.key || 'cell'}_${columnIndex}`} className="px-4 py-3 text-muted-foreground">
+                      {row?.[String(column?.key || '')]}
+                    </td>
+                  ))}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      );
+    case 'countdown':
+      return (
+        <div className="px-8 py-12 text-center">
+          <div className="inline-flex flex-col items-center rounded-xl border border-border bg-card px-8 py-6">
+            <p className="text-xs font-semibold uppercase tracking-[0.24em] text-muted-foreground">{block.content.label || 'Countdown'}</p>
+            <p className="mt-3 text-2xl font-bold text-foreground">{block.content.endDate || 'Set an end date'}</p>
+          </div>
+        </div>
+      );
     case 'gallery':
       return (
         <div className="grid gap-3 px-8 py-10 md:grid-cols-3">
@@ -289,7 +387,9 @@ function Field({ label, hint, children }: { label: string; hint?: string; childr
 }
 
 function LandingPageSettingsPanel({
+  page,
   block,
+  analytics,
   sectionCount,
   hasFormBlock,
   leadCount,
@@ -297,9 +397,12 @@ function LandingPageSettingsPanel({
   emailLists,
   onClose,
   onUpdate,
+  onUpdatePageSettings,
   onCreateEmailList,
 }: {
+  page: { settings?: Record<string, any> } | null;
   block: LPBlock | null;
+  analytics?: LandingPageAnalyticsSummary | null;
   sectionCount: number;
   hasFormBlock: boolean;
   leadCount: number;
@@ -307,6 +410,7 @@ function LandingPageSettingsPanel({
   emailLists: LandingPageEmailListOption[];
   onClose: () => void;
   onUpdate: (id: string, updates: Partial<LPBlock>) => void;
+  onUpdatePageSettings: (nextSettings: any) => void;
   onCreateEmailList: (name: string, description?: string) => Promise<LandingPageEmailListOption>;
 }) {
   const [rawContent, setRawContent] = useState('{}');
@@ -327,12 +431,18 @@ function LandingPageSettingsPanel({
     setNewListDescription('');
   }, [block]);
 
+  const pageSettings = page?.settings;
+  const updateSettings = (patch: Record<string, any>) => {
+    if (!pageSettings) return;
+    onUpdatePageSettings({ ...pageSettings, ...patch });
+  };
+
   if (!block) {
     return (
       <div className="h-full w-96 shrink-0 overflow-y-auto border-l border-border bg-card">
         <div className="border-b border-border p-4">
           <h3 className="text-sm font-semibold text-foreground">Section Settings</h3>
-          <p className="mt-0.5 text-xs text-muted-foreground">Select a section to edit or inspect recent lead capture.</p>
+          <p className="mt-0.5 text-xs text-muted-foreground">Select a section to edit, or use this panel for page-level strategy and settings.</p>
         </div>
         <div className="space-y-5 p-4">
           <div className="rounded-xl border border-border bg-muted/30 p-4">
@@ -340,8 +450,256 @@ function LandingPageSettingsPanel({
             <div className="mt-3 space-y-2 text-sm text-foreground">
               <p>{sectionCount} section{sectionCount === 1 ? '' : 's'} on this page.</p>
               <p>{hasFormBlock ? `${leadCount} captured lead${leadCount === 1 ? '' : 's'}.` : 'No form block on this page yet.'}</p>
+              <p>{getAnalyticsSummaryText(analytics || undefined)}</p>
+              {analytics?.topSource ? <p>Top source: {analytics.topSource}</p> : null}
             </div>
           </div>
+
+          {pageSettings ? (
+            <>
+              <div className="space-y-3 rounded-xl border border-border bg-card p-4">
+                <div>
+                  <h4 className="text-sm font-semibold text-foreground">Theme & conversion UI</h4>
+                  <p className="text-xs text-muted-foreground">Inspired by modern builders: theme presets, announcement bars, and sticky CTA controls live here.</p>
+                </div>
+
+                <Field label="Theme Preset">
+                  <Select
+                    value={pageSettings.themePresetId}
+                    onValueChange={(value) => onUpdatePageSettings(updateLandingPageThemePreset(pageSettings, value))}
+                  >
+                    <SelectTrigger className="h-8 text-sm">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {LANDING_PAGE_THEME_PRESETS.map((preset) => (
+                        <SelectItem key={preset.id} value={preset.id}>
+                          {preset.name}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </Field>
+
+                <div className="grid gap-3 sm:grid-cols-2">
+                  <Field label="Accent Color">
+                    <Input
+                      value={pageSettings.theme.accent}
+                      onChange={(event) =>
+                        updateSettings({ theme: { ...pageSettings.theme, accent: event.target.value } })
+                      }
+                      className="h-8 text-sm"
+                    />
+                  </Field>
+                  <Field label="Accent Alt">
+                    <Input
+                      value={pageSettings.theme.accentAlt}
+                      onChange={(event) =>
+                        updateSettings({ theme: { ...pageSettings.theme, accentAlt: event.target.value } })
+                      }
+                      className="h-8 text-sm"
+                    />
+                  </Field>
+                  <Field label="Background">
+                    <Input
+                      value={pageSettings.theme.background}
+                      onChange={(event) =>
+                        updateSettings({ theme: { ...pageSettings.theme, background: event.target.value } })
+                      }
+                      className="h-8 text-sm"
+                    />
+                  </Field>
+                  <Field label="Surface">
+                    <Input
+                      value={pageSettings.theme.surface}
+                      onChange={(event) =>
+                        updateSettings({ theme: { ...pageSettings.theme, surface: event.target.value } })
+                      }
+                      className="h-8 text-sm"
+                    />
+                  </Field>
+                </div>
+
+                <label className="flex items-center gap-2 text-sm text-foreground">
+                  <input
+                    type="checkbox"
+                    checked={pageSettings.announcementBar.enabled}
+                    onChange={(event) =>
+                      updateSettings({
+                        announcementBar: {
+                          ...pageSettings.announcementBar,
+                          enabled: event.target.checked,
+                        },
+                      })
+                    }
+                  />
+                  Enable announcement bar
+                </label>
+                {pageSettings.announcementBar.enabled ? (
+                  <div className="grid gap-3 rounded-xl border border-border bg-muted/20 p-3">
+                    <Field label="Announcement Text">
+                      <Textarea
+                        value={pageSettings.announcementBar.text}
+                        onChange={(event) =>
+                          updateSettings({
+                            announcementBar: { ...pageSettings.announcementBar, text: event.target.value },
+                          })
+                        }
+                        rows={2}
+                        className="text-sm"
+                      />
+                    </Field>
+                    <div className="grid gap-3 sm:grid-cols-2">
+                      <Field label="Announcement CTA">
+                        <Input
+                          value={pageSettings.announcementBar.ctaText}
+                          onChange={(event) =>
+                            updateSettings({
+                              announcementBar: { ...pageSettings.announcementBar, ctaText: event.target.value },
+                            })
+                          }
+                          className="h-8 text-sm"
+                        />
+                      </Field>
+                      <Field label="Announcement URL">
+                        <Input
+                          value={pageSettings.announcementBar.ctaUrl}
+                          onChange={(event) =>
+                            updateSettings({
+                              announcementBar: { ...pageSettings.announcementBar, ctaUrl: event.target.value },
+                            })
+                          }
+                          className="h-8 text-sm"
+                        />
+                      </Field>
+                    </div>
+                  </div>
+                ) : null}
+
+                <label className="flex items-center gap-2 text-sm text-foreground">
+                  <input
+                    type="checkbox"
+                    checked={pageSettings.stickyCta.enabled}
+                    onChange={(event) =>
+                      updateSettings({
+                        stickyCta: {
+                          ...pageSettings.stickyCta,
+                          enabled: event.target.checked,
+                        },
+                      })
+                    }
+                  />
+                  Enable sticky CTA
+                </label>
+                {pageSettings.stickyCta.enabled ? (
+                  <div className="grid gap-3 rounded-xl border border-border bg-muted/20 p-3">
+                    <Field label="Sticky Label">
+                      <Input
+                        value={pageSettings.stickyCta.label}
+                        onChange={(event) =>
+                          updateSettings({
+                            stickyCta: { ...pageSettings.stickyCta, label: event.target.value },
+                          })
+                        }
+                        className="h-8 text-sm"
+                      />
+                    </Field>
+                    <div className="grid gap-3 sm:grid-cols-2">
+                      <Field label="Button Text">
+                        <Input
+                          value={pageSettings.stickyCta.buttonText}
+                          onChange={(event) =>
+                            updateSettings({
+                              stickyCta: { ...pageSettings.stickyCta, buttonText: event.target.value },
+                            })
+                          }
+                          className="h-8 text-sm"
+                        />
+                      </Field>
+                      <Field label="Button URL">
+                        <Input
+                          value={pageSettings.stickyCta.buttonUrl}
+                          onChange={(event) =>
+                            updateSettings({
+                              stickyCta: { ...pageSettings.stickyCta, buttonUrl: event.target.value },
+                            })
+                          }
+                          className="h-8 text-sm"
+                        />
+                      </Field>
+                    </div>
+                  </div>
+                ) : null}
+              </div>
+
+              <div className="space-y-3 rounded-xl border border-border bg-card p-4">
+                <div>
+                  <h4 className="text-sm font-semibold text-foreground">SEO & personalization</h4>
+                  <p className="text-xs text-muted-foreground">
+                    Use token syntax like <code>{'{{company|your team}}'}</code> in headlines, CTAs, or form placeholders.
+                  </p>
+                </div>
+                <Field label="SEO Title">
+                  <Input
+                    value={pageSettings.seo.title}
+                    onChange={(event) =>
+                      updateSettings({ seo: { ...pageSettings.seo, title: event.target.value } })
+                    }
+                    className="h-8 text-sm"
+                  />
+                </Field>
+                <Field label="SEO Description">
+                  <Textarea
+                    value={pageSettings.seo.description}
+                    onChange={(event) =>
+                      updateSettings({ seo: { ...pageSettings.seo, description: event.target.value } })
+                    }
+                    rows={3}
+                    className="text-sm"
+                  />
+                </Field>
+                <Field label="Keywords" hint="Comma separated keywords for meta data">
+                  <Textarea
+                    value={pageSettings.seo.keywords.join(', ')}
+                    onChange={(event) =>
+                      updateSettings({
+                        seo: { ...pageSettings.seo, keywords: splitByComma(event.target.value) },
+                      })
+                    }
+                    rows={2}
+                    className="text-sm"
+                  />
+                </Field>
+                <Field label="OG Image URL">
+                  <Input
+                    value={pageSettings.seo.ogImageUrl}
+                    onChange={(event) =>
+                      updateSettings({ seo: { ...pageSettings.seo, ogImageUrl: event.target.value } })
+                    }
+                    className="h-8 text-sm"
+                  />
+                </Field>
+                <Field label="Canonical URL">
+                  <Input
+                    value={pageSettings.seo.canonicalUrl}
+                    onChange={(event) =>
+                      updateSettings({ seo: { ...pageSettings.seo, canonicalUrl: event.target.value } })
+                    }
+                    className="h-8 text-sm"
+                  />
+                </Field>
+                <div className="rounded-xl border border-dashed border-border p-3 text-xs leading-5 text-muted-foreground">
+                  Useful tokens:
+                  <div className="mt-2 flex flex-wrap gap-2">
+                    <code>{'{{utm_source|newsletter}}'}</code>
+                    <code>{'{{company|your team}}'}</code>
+                    <code>{'{{first_name|there}}'}</code>
+                    <code>{'{{host}}'}</code>
+                  </div>
+                </div>
+              </div>
+            </>
+          ) : null}
 
           {hasFormBlock ? (
             <div className="space-y-3">
@@ -439,6 +797,9 @@ function LandingPageSettingsPanel({
       <div className="space-y-5 p-4">
         {block.type === 'hero' && (
           <>
+            <Field label="Badge / Eyebrow">
+              <Input value={String(block.content.badge || '')} onChange={(event) => updateContent({ badge: event.target.value })} className="h-8 text-sm" />
+            </Field>
             <Field label="Headline">
               <Input value={String(block.content.headline || '')} onChange={(event) => updateContent({ headline: event.target.value })} className="h-8 text-sm" />
             </Field>
@@ -451,6 +812,17 @@ function LandingPageSettingsPanel({
             <Field label="CTA URL">
               <Input value={String(block.content.ctaUrl || '')} onChange={(event) => updateContent({ ctaUrl: event.target.value })} className="h-8 text-sm" placeholder="https://..." />
             </Field>
+            <div className="grid gap-3 sm:grid-cols-2">
+              <Field label="Secondary CTA Text">
+                <Input value={String(block.content.secondaryCtaText || '')} onChange={(event) => updateContent({ secondaryCtaText: event.target.value })} className="h-8 text-sm" />
+              </Field>
+              <Field label="Secondary CTA URL">
+                <Input value={String(block.content.secondaryCtaUrl || '')} onChange={(event) => updateContent({ secondaryCtaUrl: event.target.value })} className="h-8 text-sm" />
+              </Field>
+            </div>
+            <Field label="Highlights" hint="Comma separated chips shown below the hero buttons.">
+              <Textarea value={Array.isArray(block.content.highlights) ? block.content.highlights.join(', ') : ''} onChange={(event) => updateContent({ highlights: splitByComma(event.target.value) })} rows={2} className="text-sm" />
+            </Field>
           </>
         )}
 
@@ -462,6 +834,14 @@ function LandingPageSettingsPanel({
             <Field label="Links" hint="Comma separated">
               <Textarea value={Array.isArray(block.content.links) ? block.content.links.join(', ') : ''} onChange={(event) => updateContent({ links: splitByComma(event.target.value) })} rows={2} className="text-sm" />
             </Field>
+            <div className="grid gap-3 sm:grid-cols-2">
+              <Field label="CTA Text">
+                <Input value={String(block.content.ctaText || '')} onChange={(event) => updateContent({ ctaText: event.target.value })} className="h-8 text-sm" />
+              </Field>
+              <Field label="CTA URL">
+                <Input value={String(block.content.ctaUrl || '')} onChange={(event) => updateContent({ ctaUrl: event.target.value })} className="h-8 text-sm" />
+              </Field>
+            </div>
           </>
         )}
 
@@ -475,6 +855,9 @@ function LandingPageSettingsPanel({
           <>
             <Field label="Headline">
               <Input value={String(block.content.headline || '')} onChange={(event) => updateContent({ headline: event.target.value })} className="h-8 text-sm" />
+            </Field>
+            <Field label="Body">
+              <Textarea value={String(block.content.body || '')} onChange={(event) => updateContent({ body: event.target.value })} rows={3} className="text-sm" />
             </Field>
             <Field label="Button Text">
               <Input value={String(block.content.buttonText || '')} onChange={(event) => updateContent({ buttonText: event.target.value })} className="h-8 text-sm" />
@@ -493,6 +876,137 @@ function LandingPageSettingsPanel({
             <Field label="Alt Text">
               <Input value={String(block.content.alt || '')} onChange={(event) => updateContent({ alt: event.target.value })} className="h-8 text-sm" />
             </Field>
+          </>
+        )}
+
+        {block.type === 'logos' && (
+          <>
+            <Field label="Section Label">
+              <Input value={String(block.content.title || '')} onChange={(event) => updateContent({ title: event.target.value })} className="h-8 text-sm" />
+            </Field>
+            <Field label="Logos" hint="One per line as Name|Image URL. Image URL is optional.">
+              <Textarea
+                value={Array.isArray(block.content.items) ? block.content.items.map((item: any) => `${item?.name || ''}|${item?.imageUrl || ''}`).join('\n') : ''}
+                onChange={(event) =>
+                  updateContent({
+                    items: event.target.value
+                      .split('\n')
+                      .map((line) => line.trim())
+                      .filter(Boolean)
+                      .map((line) => {
+                        const [name, imageUrl] = line.split('|');
+                        return { name: String(name || '').trim(), imageUrl: String(imageUrl || '').trim() };
+                      }),
+                  })
+                }
+                rows={5}
+                className="text-sm"
+              />
+            </Field>
+          </>
+        )}
+
+        {block.type === 'steps' && (
+          <>
+            <Field label="Title">
+              <Input value={String(block.content.title || '')} onChange={(event) => updateContent({ title: event.target.value })} className="h-8 text-sm" />
+            </Field>
+            <Field label="Description">
+              <Textarea value={String(block.content.description || '')} onChange={(event) => updateContent({ description: event.target.value })} rows={3} className="text-sm" />
+            </Field>
+            <Field label="Steps" hint="One per line as Title|Description">
+              <Textarea
+                value={Array.isArray(block.content.items) ? block.content.items.map((item: any) => `${item?.title || ''}|${item?.desc || ''}`).join('\n') : ''}
+                onChange={(event) =>
+                  updateContent({
+                    items: event.target.value
+                      .split('\n')
+                      .map((line) => line.trim())
+                      .filter(Boolean)
+                      .map((line) => {
+                        const [title, desc] = line.split('|');
+                        return { title: String(title || '').trim(), desc: String(desc || '').trim() };
+                      }),
+                  })
+                }
+                rows={5}
+                className="text-sm"
+              />
+            </Field>
+          </>
+        )}
+
+        {block.type === 'comparison' && (
+          <>
+            <Field label="Title">
+              <Input value={String(block.content.title || '')} onChange={(event) => updateContent({ title: event.target.value })} className="h-8 text-sm" />
+            </Field>
+            <Field label="Columns" hint="Comma separated labels. Keys are auto-generated from labels.">
+              <Textarea
+                value={Array.isArray(block.content.columns) ? block.content.columns.map((column: any) => column?.label || '').join(', ') : ''}
+                onChange={(event) => {
+                  const labels = splitByComma(event.target.value);
+                  updateContent({
+                    columns: labels.map((label) => ({
+                      label,
+                      key: label.toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, ''),
+                    })),
+                  });
+                }}
+                rows={2}
+                className="text-sm"
+              />
+            </Field>
+            <Field label="Rows" hint="One per line as Feature|Value 1|Value 2|Value 3">
+              <Textarea
+                value={Array.isArray(block.content.rows)
+                  ? block.content.rows
+                      .map((row: any) => {
+                        const columns = Array.isArray(block.content.columns) ? block.content.columns : [];
+                        return [row?.feature || '', ...columns.map((column: any) => row?.[String(column?.key || '')] || '')].join('|');
+                      })
+                      .join('\n')
+                  : ''}
+                onChange={(event) => {
+                  const columns = Array.isArray(block.content.columns) ? block.content.columns : [];
+                  updateContent({
+                    rows: event.target.value
+                      .split('\n')
+                      .map((line) => line.trim())
+                      .filter(Boolean)
+                      .map((line) => {
+                        const [feature, ...values] = line.split('|');
+                        const row: Record<string, string> = { feature: String(feature || '').trim() };
+                        columns.forEach((column: any, index: number) => {
+                          row[String(column?.key || `column_${index + 1}`)] = String(values[index] || '').trim();
+                        });
+                        return row;
+                      }),
+                  });
+                }}
+                rows={6}
+                className="font-mono text-xs"
+              />
+            </Field>
+          </>
+        )}
+
+        {block.type === 'countdown' && (
+          <>
+            <Field label="Label">
+              <Input value={String(block.content.label || '')} onChange={(event) => updateContent({ label: event.target.value })} className="h-8 text-sm" />
+            </Field>
+            <Field label="End Date" hint="ISO date or any browser-friendly date string.">
+              <Input value={String(block.content.endDate || '')} onChange={(event) => updateContent({ endDate: event.target.value })} className="h-8 text-sm" placeholder="2026-03-26T16:00:00.000Z" />
+            </Field>
+            <div className="grid gap-3 sm:grid-cols-2">
+              <Field label="Button Text">
+                <Input value={String(block.content.buttonText || '')} onChange={(event) => updateContent({ buttonText: event.target.value })} className="h-8 text-sm" />
+              </Field>
+              <Field label="Button URL">
+                <Input value={String(block.content.buttonUrl || '')} onChange={(event) => updateContent({ buttonUrl: event.target.value })} className="h-8 text-sm" />
+              </Field>
+            </div>
           </>
         )}
 
@@ -554,12 +1068,33 @@ function LandingPageSettingsPanel({
             <Field label="Success Message">
               <Textarea value={formContent.successMessage} onChange={(event) => updateContent({ successMessage: event.target.value })} rows={2} className="text-sm" />
             </Field>
+            <div className="grid gap-3 sm:grid-cols-2">
+              <Field label="Success Redirect URL" hint="Optional redirect after a successful submit.">
+                <Input value={formContent.successRedirectUrl} onChange={(event) => updateContent({ successRedirectUrl: event.target.value })} className="h-8 text-sm" />
+              </Field>
+              <Field label="Success Asset URL" hint="Optional file or resource link shown after submit.">
+                <Input value={formContent.successAssetUrl} onChange={(event) => updateContent({ successAssetUrl: event.target.value })} className="h-8 text-sm" />
+              </Field>
+            </div>
             <Field label="Anchor ID" hint="Use this to connect CTA buttons like #contact or #register.">
               <Input value={formContent.anchorId} onChange={(event) => updateContent({ anchorId: event.target.value })} className="h-8 text-sm" placeholder="contact" />
             </Field>
             <Field label="Privacy Note">
               <Textarea value={formContent.privacyNote} onChange={(event) => updateContent({ privacyNote: event.target.value })} rows={2} className="text-sm" />
             </Field>
+            <label className="flex items-center gap-2 text-sm text-foreground">
+              <input
+                type="checkbox"
+                checked={formContent.requireConsent}
+                onChange={(event) => updateContent({ requireConsent: event.target.checked })}
+              />
+              Require consent checkbox
+            </label>
+            {formContent.requireConsent ? (
+              <Field label="Consent Label">
+                <Textarea value={formContent.consentLabel} onChange={(event) => updateContent({ consentLabel: event.target.value })} rows={2} className="text-sm" />
+              </Field>
+            ) : null}
 
             <div className="space-y-3">
               <div className="flex items-center justify-between gap-2">
@@ -675,6 +1210,7 @@ export default function LandingPagesPage() {
   const [isAiDialogOpen, setIsAiDialogOpen] = useState(false);
   const [emailLists, setEmailLists] = useState<LandingPageEmailListOption[]>([]);
   const [leadStats, setLeadStats] = useState<Record<string, { total: number; lastSubmittedAt?: string }>>({});
+  const [analyticsByPage, setAnalyticsByPage] = useState<Record<string, LandingPageAnalyticsSummary>>({});
   const [recentLeads, setRecentLeads] = useState<LandingPageLeadSubmission[]>([]);
   const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 5 } }));
 
@@ -687,10 +1223,15 @@ export default function LandingPagesPage() {
 
     const loadLeadWorkspaceData = async () => {
       try {
-        const [lists, stats] = await Promise.all([listLandingPageEmailLists(), listLandingPageLeadStats()]);
+        const [lists, stats, analytics] = await Promise.all([
+          listLandingPageEmailLists(),
+          listLandingPageLeadStats(),
+          listLandingPageAnalyticsSummaries(),
+        ]);
         if (cancelled) return;
         setEmailLists(lists);
         setLeadStats(stats);
+        setAnalyticsByPage(analytics);
       } catch (error: any) {
         if (!cancelled) toast.error(error?.message || 'Unable to load landing page lead settings');
       }
@@ -736,6 +1277,7 @@ export default function LandingPagesPage() {
   }, [currentPage, selectedBlockId]);
 
   const currentPageLeadStat = currentPage?.id ? leadStats[currentPage.id] : null;
+  const currentPageAnalytics = currentPage?.id ? analyticsByPage[currentPage.id] : null;
   const hasFormBlock = Boolean(currentPage?.blocks.some((block) => block.type === 'form'));
 
   const openLivePage = (slug: string) => {
@@ -759,12 +1301,16 @@ export default function LandingPagesPage() {
 
     const generatedName = String(result?.name || currentPage?.name || 'AI Landing Page');
     const generatedSlug = slugifyValue(String(result?.slug || generatedName));
+    const generatedSettings = result?.settings && typeof result.settings === 'object'
+      ? { ...(currentPage?.settings || buildLandingPageTemplateSettings(LANDING_PAGE_TEMPLATES[0])), ...result.settings }
+      : currentPage?.settings;
 
     if (currentPage) {
       if (currentPage.blocks.length > 0 && !window.confirm('Replace current sections with the AI-generated draft?')) return;
       updatePageField('name', generatedName);
       updatePageField('slug', generatedSlug);
       updatePageField('blocks', blocks);
+      if (generatedSettings) updatePageField('settings', generatedSettings);
       updatePageField('published', false);
       selectBlock(null);
       return;
@@ -774,6 +1320,7 @@ export default function LandingPagesPage() {
       name: generatedName,
       slug: generatedSlug,
       blocks,
+      settings: generatedSettings || buildLandingPageTemplateSettings(LANDING_PAGE_TEMPLATES[0]),
       published: false,
       createdAt: new Date(),
     });
@@ -785,6 +1332,7 @@ export default function LandingPagesPage() {
     if (!template) return;
     if (currentPage.blocks.length > 0 && !window.confirm('Apply template and replace all existing sections on this page?')) return;
     updatePageField('blocks', buildLandingPageTemplateBlocks(template));
+    updatePageField('settings', buildLandingPageTemplateSettings(template));
     if (!String(currentPage.name || '').trim()) updatePageField('name', template.name);
     if (!String(currentPage.slug || '').trim()) updatePageField('slug', slugifyValue(template.name));
     updatePageField('published', false);
@@ -799,6 +1347,7 @@ export default function LandingPagesPage() {
       name: template.name,
       slug: slugifyValue(template.name),
       blocks: buildLandingPageTemplateBlocks(template),
+      settings: buildLandingPageTemplateSettings(template),
       published: false,
       createdAt: new Date(),
     });
@@ -872,6 +1421,7 @@ export default function LandingPagesPage() {
             {pages.map((page) => {
               const issue = getFirstFormPublishIssue(page.blocks);
               const stat = leadStats[page.id];
+              const analytics = analyticsByPage[page.id];
               const formCount = page.blocks.filter((block) => block.type === 'form').length;
 
               return (
@@ -884,9 +1434,10 @@ export default function LandingPagesPage() {
                         <span>{page.blocks.length} section{page.blocks.length === 1 ? '' : 's'}</span>
                         <span>{formCount} form{formCount === 1 ? '' : 's'}</span>
                         <span>{page.published ? 'Published' : 'Draft'}</span>
+                        {analytics?.views ? <span>{analytics.views} views</span> : null}
                       </div>
                       <p className="mt-3 text-sm text-foreground">{getPageLeadSummary(stat?.total || 0, stat?.lastSubmittedAt)}</p>
-                      <p className="mt-1 text-xs text-muted-foreground">{issue ? `Needs attention: ${issue.message}` : formCount > 0 ? 'Lead capture is configured.' : 'Add a form to capture leads.'}</p>
+                      <p className="mt-1 text-xs text-muted-foreground">{issue ? `Needs attention: ${issue.message}` : formCount > 0 ? `Analytics: ${getAnalyticsSummaryText(analytics)}` : 'Add a form to capture leads.'}</p>
                     </div>
                     <div className="flex items-center gap-1">
                       {page.published && page.slug ? (
@@ -949,7 +1500,7 @@ export default function LandingPagesPage() {
           </Select>
           <Button size="sm" variant="outline" onClick={applyTemplateToCurrentPage} disabled={isSaving}><Sparkles className="mr-1 h-4 w-4" /> Apply Template</Button>
           <Button size="sm" variant="outline" onClick={() => setIsAiDialogOpen(true)} disabled={isSaving}><Sparkles className="mr-1 h-4 w-4" /> AI Assist</Button>
-          <span className="hidden text-xs text-muted-foreground xl:inline">{getPageLeadSummary(currentPageLeadStat?.total || 0, currentPageLeadStat?.lastSubmittedAt)}</span>
+          <span className="hidden text-xs text-muted-foreground xl:inline">{getPageLeadSummary(currentPageLeadStat?.total || 0, currentPageLeadStat?.lastSubmittedAt)} · {getAnalyticsSummaryText(currentPageAnalytics || undefined)}</span>
         </div>
         <div className="flex items-center gap-2">
           <div className="flex items-center rounded-lg bg-muted p-0.5">
@@ -986,7 +1537,25 @@ export default function LandingPagesPage() {
         </div>
 
         <div className="flex-1 overflow-y-auto bg-canvas-bg p-6" onClick={() => selectBlock(null)}>
-          <div className={cn('mx-auto overflow-hidden rounded-xl border border-border bg-card shadow-sm transition-all', previewMode === 'mobile' ? 'max-w-sm' : previewMode === 'tablet' ? 'max-w-2xl' : 'max-w-5xl')} onClick={(event) => event.stopPropagation()}>
+          <div
+            className={cn('mx-auto overflow-hidden rounded-xl border border-border bg-card shadow-sm transition-all', previewMode === 'mobile' ? 'max-w-sm' : previewMode === 'tablet' ? 'max-w-2xl' : 'max-w-5xl')}
+            onClick={(event) => event.stopPropagation()}
+            style={{
+              backgroundColor: currentPage.settings?.theme?.background,
+              color: currentPage.settings?.theme?.text,
+            }}
+          >
+            {currentPage.settings?.announcementBar?.enabled ? (
+              <div
+                className="px-4 py-3 text-center text-xs font-semibold uppercase tracking-[0.18em]"
+                style={{
+                  background: `linear-gradient(90deg, ${currentPage.settings.theme.accent}, ${currentPage.settings.theme.accentAlt})`,
+                  color: currentPage.settings.theme.accentContrast,
+                }}
+              >
+                {currentPage.settings.announcementBar.text}
+              </div>
+            ) : null}
             {currentPage.blocks.length === 0 ? (
               <div className="flex h-64 flex-col items-center justify-center px-6 text-center text-muted-foreground">
                 <Layout className="mb-3 h-8 w-8" />
@@ -1000,11 +1569,23 @@ export default function LandingPagesPage() {
                 </SortableContext>
               </DndContext>
             )}
+            {currentPage.settings?.stickyCta?.enabled ? (
+              <div className="px-4 pb-4">
+                <div className="ml-auto flex w-fit items-center gap-3 rounded-full border px-4 py-3 text-xs shadow-sm" style={{ borderColor: currentPage.settings.theme.border, backgroundColor: currentPage.settings.theme.surface }}>
+                  <span>{currentPage.settings.stickyCta.label}</span>
+                  <span className="rounded-full px-3 py-1 font-semibold" style={{ backgroundColor: currentPage.settings.theme.accent, color: currentPage.settings.theme.accentContrast }}>
+                    {currentPage.settings.stickyCta.buttonText}
+                  </span>
+                </div>
+              </div>
+            ) : null}
           </div>
         </div>
 
         <LandingPageSettingsPanel
+          page={currentPage}
           block={selectedBlock}
+          analytics={currentPageAnalytics}
           sectionCount={currentPage.blocks.length}
           hasFormBlock={hasFormBlock}
           leadCount={currentPageLeadStat?.total || 0}
@@ -1012,6 +1593,7 @@ export default function LandingPagesPage() {
           emailLists={emailLists}
           onClose={() => selectBlock(null)}
           onUpdate={updateBlock}
+          onUpdatePageSettings={(nextSettings) => updatePageField('settings', nextSettings)}
           onCreateEmailList={handleCreateEmailList}
         />
       </div>

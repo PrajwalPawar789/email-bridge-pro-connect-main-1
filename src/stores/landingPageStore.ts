@@ -8,6 +8,8 @@ import {
   type LandingPageBlockType,
   type LandingPageRecord,
 } from '@/lib/landingPagesPersistence';
+import { getLandingPageFormPublishError } from '@/lib/landingPageForms';
+import { normalizeLandingPageSettings } from '@/lib/landingPageSettings';
 
 export type LPBlockType = LandingPageBlockType;
 export type LPBlock = LandingPageBlock;
@@ -26,6 +28,7 @@ interface LandingPageState {
   addBlock: (block: LPBlock) => void;
   removeBlock: (id: string) => void;
   updateBlock: (id: string, updates: Partial<LPBlock>) => void;
+  duplicateBlock: (id: string) => void;
   reorderBlocks: (blocks: LPBlock[]) => void;
   selectBlock: (id: string | null) => void;
   setPreviewMode: (mode: 'desktop' | 'tablet' | 'mobile') => void;
@@ -35,15 +38,23 @@ interface LandingPageState {
   createNewPage: (seed?: Partial<LandingPage>) => void;
 }
 
-const defaultPage = (seed?: Partial<LandingPage>): LandingPage => ({
-  id: crypto.randomUUID(),
-  name: '',
-  slug: '',
-  blocks: [],
-  published: false,
-  createdAt: new Date(),
-  ...seed,
-});
+const defaultPage = (seed?: Partial<LandingPage>): LandingPage => {
+  const page = {
+    id: crypto.randomUUID(),
+    name: '',
+    slug: '',
+    blocks: [],
+    settings: normalizeLandingPageSettings(undefined),
+    published: false,
+    createdAt: new Date(),
+    ...seed,
+  } as LandingPage;
+
+  return {
+    ...page,
+    settings: normalizeLandingPageSettings(page.settings),
+  };
+};
 
 export const useLandingPageStore = create<LandingPageState>((set, get) => ({
   pages: [],
@@ -105,6 +116,29 @@ export const useLandingPageStore = create<LandingPageState>((set, get) => ({
       };
     }),
 
+  duplicateBlock: (id) =>
+    set((s) => {
+      if (!s.currentPage) return s;
+      const index = s.currentPage.blocks.findIndex((block) => block.id === id);
+      if (index < 0) return s;
+      const source = s.currentPage.blocks[index];
+      const nextBlock = {
+        ...source,
+        id: crypto.randomUUID(),
+        content: source.content && typeof source.content === 'object' ? JSON.parse(JSON.stringify(source.content)) : {},
+        styles: source.styles && typeof source.styles === 'object' ? JSON.parse(JSON.stringify(source.styles)) : {},
+      };
+      const nextBlocks = [...s.currentPage.blocks];
+      nextBlocks.splice(index + 1, 0, nextBlock);
+      return {
+        currentPage: {
+          ...s.currentPage,
+          blocks: nextBlocks,
+        },
+        selectedBlockId: nextBlock.id,
+      };
+    }),
+
   reorderBlocks: (blocks) =>
     set((s) => {
       if (!s.currentPage) return s;
@@ -123,6 +157,20 @@ export const useLandingPageStore = create<LandingPageState>((set, get) => ({
   savePage: async () => {
     const currentPage = get().currentPage;
     if (!currentPage || get().isSaving) return;
+
+    if (currentPage.published) {
+      const invalidFormBlock = currentPage.blocks.find((block) => {
+        if (block.type !== 'form') return false;
+        return Boolean(getLandingPageFormPublishError(block.content));
+      });
+
+      if (invalidFormBlock) {
+        const publishError = getLandingPageFormPublishError(invalidFormBlock.content);
+        set({ selectedBlockId: invalidFormBlock.id });
+        toast.error(publishError);
+        return;
+      }
+    }
 
     set({ isSaving: true });
     try {
