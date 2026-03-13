@@ -30,19 +30,25 @@ Recommended payload:
   "event": "contact_created",
   "email": "prospect@example.com",
   "name": "Alex Johnson",
+  "phone": "+1 415 555 0182",
   "data": {
     "company": "Acme Inc",
-    "job_title": "Head of Growth"
+    "job_title": "Head of Growth",
+    "country": "United States",
+    "industry": "SaaS"
   }
 }
 ```
 
 Behavior:
 
+- Each webhook call handles one contact identified by the payload email. It does not bulk-enroll old contacts.
 - Upserts the contact in `automation_contacts` by `(workflow_id, email)`.
+- Creates or refreshes a matching lead in `prospects` for the workflow owner.
 - Stores incoming fields in contact `state`.
 - Appends event names to `state.custom_events`.
-- Triggers `automation-runner` immediately for near-real-time execution.
+- If the contact is already active, the workflow continues with refreshed state. If the contact was completed, failed, or paused, the workflow restarts from step 0. Unsubscribed contacts remain excluded.
+- Triggers `automation-runner` immediately for that contact so webhook execution stays event-scoped instead of sweeping unrelated due contacts.
 
 ## Outgoing webhook node
 

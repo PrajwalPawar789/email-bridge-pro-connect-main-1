@@ -142,7 +142,145 @@ const mergeEventName = (state: Record<string, unknown>, eventName: string) => {
   };
 };
 
-const triggerRunner = async (workflowId: string) => {
+const combineNameParts = (...values: unknown[]) => {
+  const parts = values
+    .map((value) => String(value || "").trim())
+    .filter(Boolean);
+  return parts.join(" ").trim();
+};
+
+const inferProspectName = (email: string) => {
+  const localPart = String(email || "").split("@")[0] || "";
+  const normalized = localPart.replace(/[\.\-_]+/g, " ").replace(/\s+/g, " ").trim();
+  if (!normalized) return "Webhook Lead";
+  return normalized
+    .split(" ")
+    .filter(Boolean)
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+    .join(" ");
+};
+
+const pickProspectValue = (
+  payload: Record<string, unknown>,
+  payloadContact: Record<string, unknown>,
+  contactData: Record<string, unknown>,
+  keys: string[]
+) => {
+  for (const key of keys) {
+    const value = pickString(payload[key], payloadContact[key], contactData[key]);
+    if (value) return value;
+  }
+  return "";
+};
+
+const syncWebhookProspect = async (
+  userId: string,
+  email: string,
+  fullName: string,
+  payload: Record<string, unknown>,
+  payloadContact: Record<string, unknown>,
+  contactData: Record<string, unknown>
+) => {
+  if (!userId || !email) return null;
+  const nowIso = new Date().toISOString();
+
+  const derivedName = pickString(
+    fullName,
+    combineNameParts(
+      payload.first_name,
+      payload.last_name
+    ),
+    combineNameParts(
+      payloadContact.first_name,
+      payloadContact.last_name
+    ),
+    combineNameParts(
+      contactData.first_name,
+      contactData.last_name
+    ),
+    inferProspectName(email)
+  );
+
+  const nextFields = {
+    name: derivedName || inferProspectName(email),
+    email,
+    phone: pickProspectValue(payload, payloadContact, contactData, ["phone", "phone_number", "mobile"]),
+    company: pickProspectValue(payload, payloadContact, contactData, ["company", "company_name"]),
+    job_title: pickProspectValue(payload, payloadContact, contactData, ["job_title", "title", "role"]),
+    country: pickProspectValue(payload, payloadContact, contactData, ["country"]),
+    industry: pickProspectValue(payload, payloadContact, contactData, ["industry"]),
+  };
+
+  const { data: prospectRows, error: lookupError } = await admin
+    .from("prospects")
+    .select(
+      "id, name, email, phone, company, job_title, country, industry, webhook_first_received_at"
+    )
+    .eq("user_id", userId)
+    .ilike("email", email)
+    .order("updated_at", { ascending: false })
+    .limit(1);
+
+  if (lookupError) {
+    throw new Error(lookupError.message);
+  }
+
+  const existingProspect = Array.isArray(prospectRows) ? prospectRows[0] ?? null : null;
+
+  if (existingProspect?.id) {
+    const { data: updatedProspect, error: updateError } = await admin
+      .from("prospects")
+      .update({
+        name: nextFields.name || existingProspect.name || inferProspectName(email),
+        email,
+        phone: nextFields.phone || existingProspect.phone || null,
+        company: nextFields.company || existingProspect.company || null,
+        job_title: nextFields.job_title || existingProspect.job_title || null,
+        country: nextFields.country || existingProspect.country || null,
+        industry: nextFields.industry || existingProspect.industry || null,
+        webhook_first_received_at: existingProspect.webhook_first_received_at || nowIso,
+        webhook_last_received_at: nowIso,
+        last_activity_at: nowIso,
+        last_activity_type: "webhook_received",
+      })
+      .eq("id", existingProspect.id)
+      .select("id")
+      .single();
+
+    if (updateError) {
+      throw new Error(updateError.message);
+    }
+
+    return String(updatedProspect?.id || existingProspect.id);
+  }
+
+  const { data: insertedProspect, error: insertError } = await admin
+    .from("prospects")
+    .insert({
+      user_id: userId,
+      name: nextFields.name || inferProspectName(email),
+      email,
+      phone: nextFields.phone || null,
+      company: nextFields.company || null,
+      job_title: nextFields.job_title || null,
+      country: nextFields.country || null,
+      industry: nextFields.industry || null,
+      webhook_first_received_at: nowIso,
+      webhook_last_received_at: nowIso,
+      last_activity_at: nowIso,
+      last_activity_type: "webhook_received",
+    })
+    .select("id")
+    .single();
+
+  if (insertError) {
+    throw new Error(insertError.message);
+  }
+
+  return String(insertedProspect?.id || "");
+};
+
+const triggerRunner = async (workflowId: string, contactId?: string) => {
   try {
     const response = await fetch(`${SUPABASE_URL}/functions/v1/automation-runner`, {
       method: "POST",
@@ -153,6 +291,7 @@ const triggerRunner = async (workflowId: string) => {
       body: JSON.stringify({
         action: "run_now",
         workflowId,
+        contactId: contactId || undefined,
         batchSize: 40,
       }),
     });
@@ -304,14 +443,29 @@ serve(async (req: Request) => {
       ...payloadContact,
       email,
       full_name: fullName || null,
+      lead_source: "webhook",
       webhook_last_payload_at: new Date().toISOString(),
       webhook_last_event: eventName || null,
     };
     incomingState = mergeEventName(incomingState, eventName);
 
+    let prospectId: string | null = null;
+    try {
+      prospectId = await syncWebhookProspect(
+        String(workflow.user_id || ""),
+        email,
+        fullName,
+        payload,
+        payloadContact,
+        contactData
+      );
+    } catch (error) {
+      console.error("Failed to sync webhook prospect:", getErrorMessage(error));
+    }
+
     const { data: existingContact, error: existingContactError } = await admin
       .from("automation_contacts")
-      .select("id, status, current_step, state")
+      .select("id, prospect_id, status, current_step, state")
       .eq("workflow_id", workflow.id)
       .eq("email", email)
       .maybeSingle();
@@ -350,6 +504,7 @@ serve(async (req: Request) => {
       const { data: updated, error: updateError } = await admin
         .from("automation_contacts")
         .update({
+          prospect_id: prospectId || existingContact.prospect_id || null,
           full_name: fullName || existingState.full_name || null,
           status: "active",
           current_step: nextStep,
@@ -370,6 +525,7 @@ serve(async (req: Request) => {
         .insert({
           workflow_id: workflow.id,
           user_id: workflow.user_id,
+          prospect_id: prospectId || null,
           email,
           full_name: fullName || null,
           status: "active",
@@ -397,12 +553,13 @@ serve(async (req: Request) => {
       },
     });
 
-    const runner = await triggerRunner(String(workflow.id));
+    const runner = await triggerRunner(String(workflow.id), contactId);
 
     return jsonResponse({
       success: true,
       workflowId: workflow.id,
       contactId: contactId || null,
+      prospectId: prospectId || existingContact?.prospect_id || null,
       email,
       event: eventName || null,
       runnerTriggered: runner.ok,

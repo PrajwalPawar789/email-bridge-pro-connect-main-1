@@ -1,4 +1,8 @@
 import { type LandingPageBlock, type LandingPageBlockType } from '@/lib/landingPagesPersistence';
+import {
+  DEFAULT_LANDING_PAGE_FORM_CONTENT,
+  createLandingPageFormField,
+} from '@/lib/landingPageForms';
 
 export interface LandingPageTemplateDefinition {
   id: string;
@@ -41,7 +45,7 @@ export const DEFAULT_LANDING_BLOCK_CONTENT: Record<LandingPageBlockType, Record<
     ],
   },
   faq: { title: 'FAQ', items: [{ q: 'How does it work?', a: 'It just works!' }] },
-  form: { title: 'Contact Us', fields: ['Name', 'Email', 'Message'] },
+  form: { ...DEFAULT_LANDING_PAGE_FORM_CONTENT },
   footer: { brand: 'YourBrand', links: ['Privacy', 'Terms', 'Contact'] },
   gallery: { images: [] },
   stats: {
@@ -208,7 +212,54 @@ export const LANDING_PAGE_TEMPLATES: LandingPageTemplateDefinition[] = [
       },
       {
         type: 'form',
-        content: { title: 'Tell us about your goals', fields: ['Name', 'Work Email', 'Company', 'Target ACV'] },
+        content: {
+          ...DEFAULT_LANDING_PAGE_FORM_CONTENT,
+          title: 'Tell us about your goals',
+          description: 'Share your team context and we will come back with a tailored proposal.',
+          buttonText: 'Request proposal',
+          successMessage: 'Thanks. We will review your goals and get back to you shortly.',
+          anchorId: 'contact',
+          fields: [
+            createLandingPageFormField({
+              id: 'name',
+              key: 'name',
+              label: 'Full name',
+              type: 'text',
+              placeholder: 'Jordan Lee',
+              required: true,
+            }),
+            createLandingPageFormField({
+              id: 'email',
+              key: 'email',
+              label: 'Work email',
+              type: 'email',
+              placeholder: 'jordan@company.com',
+              required: true,
+            }),
+            createLandingPageFormField({
+              id: 'company',
+              key: 'company',
+              label: 'Company',
+              type: 'text',
+              placeholder: 'Northwind',
+              required: true,
+            }),
+            createLandingPageFormField({
+              id: 'job_title',
+              key: 'job_title',
+              label: 'Role',
+              type: 'text',
+              placeholder: 'Head of Growth',
+            }),
+            createLandingPageFormField({
+              id: 'message',
+              key: 'message',
+              label: 'What do you need help with?',
+              type: 'textarea',
+              placeholder: 'Describe your goals, current stack, or timing.',
+            }),
+          ],
+        },
       },
       {
         type: 'footer',
@@ -269,7 +320,39 @@ export const LANDING_PAGE_TEMPLATES: LandingPageTemplateDefinition[] = [
       },
       {
         type: 'form',
-        content: { title: 'Save your spot', fields: ['Name', 'Work Email', 'Company'] },
+        content: {
+          ...DEFAULT_LANDING_PAGE_FORM_CONTENT,
+          title: 'Save your spot',
+          description: 'Register once and we will send the calendar invite and replay details.',
+          buttonText: 'Reserve my seat',
+          successMessage: 'You are in. Check your inbox for confirmation details.',
+          anchorId: 'register',
+          fields: [
+            createLandingPageFormField({
+              id: 'name',
+              key: 'name',
+              label: 'Full name',
+              type: 'text',
+              placeholder: 'Jordan Lee',
+              required: true,
+            }),
+            createLandingPageFormField({
+              id: 'email',
+              key: 'email',
+              label: 'Work email',
+              type: 'email',
+              placeholder: 'jordan@company.com',
+              required: true,
+            }),
+            createLandingPageFormField({
+              id: 'company',
+              key: 'company',
+              label: 'Company',
+              type: 'text',
+              placeholder: 'Northwind',
+            }),
+          ],
+        },
       },
       {
         type: 'footer',
@@ -311,7 +394,39 @@ export const LANDING_PAGE_TEMPLATES: LandingPageTemplateDefinition[] = [
       },
       {
         type: 'form',
-        content: { title: 'Get instant access', fields: ['First Name', 'Work Email'] },
+        content: {
+          ...DEFAULT_LANDING_PAGE_FORM_CONTENT,
+          title: 'Get instant access',
+          description: 'Enter your details and we will send the resource right away.',
+          buttonText: 'Send me the guide',
+          successMessage: 'Thanks. The resource is on its way.',
+          anchorId: 'download',
+          fields: [
+            createLandingPageFormField({
+              id: 'name',
+              key: 'name',
+              label: 'First name',
+              type: 'text',
+              placeholder: 'Jordan',
+              required: true,
+            }),
+            createLandingPageFormField({
+              id: 'email',
+              key: 'email',
+              label: 'Work email',
+              type: 'email',
+              placeholder: 'jordan@company.com',
+              required: true,
+            }),
+            createLandingPageFormField({
+              id: 'company',
+              key: 'company',
+              label: 'Company',
+              type: 'text',
+              placeholder: 'Northwind',
+            }),
+          ],
+        },
       },
       {
         type: 'testimonial',

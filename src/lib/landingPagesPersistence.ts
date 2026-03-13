@@ -1,5 +1,6 @@
 import { supabase } from '@/integrations/supabase/client';
 import { buildLandingEmbeddingText, indexAiBuilderObject } from '@/lib/aiBuilder';
+import { normalizeLandingPageFormContent } from '@/lib/landingPageForms';
 
 export type LandingPageBlockType =
   | 'hero'
@@ -182,9 +183,23 @@ const renderBlockHtml = (block: LandingPageBlock) => {
         .join('')}</section>`;
     }
     case 'form':
-      return `<section${wrapper} style="${inlineStyles};padding:48px 24px;"><h2 style="margin:0 0 16px 0;">${escapeHtml(
-        String(block.content.title || 'Contact us')
-      )}</h2><form><input placeholder="Name" style="display:block;width:100%;max-width:420px;margin:8px 0;padding:10px;" /><input placeholder="Email" style="display:block;width:100%;max-width:420px;margin:8px 0;padding:10px;" /><textarea placeholder="Message" style="display:block;width:100%;max-width:420px;margin:8px 0;padding:10px;min-height:120px;"></textarea><button type="button" style="background:#0f766e;color:#fff;border:none;padding:10px 16px;border-radius:8px;">Submit</button></form></section>`;
+    {
+      const form = normalizeLandingPageFormContent(block.content);
+      const fieldHtml = form.fields
+        .map((field) => {
+          if (field.type === 'textarea') {
+            return `<textarea placeholder="${escapeHtml(field.placeholder || field.label)}" style="display:block;width:100%;max-width:420px;margin:8px 0;padding:10px;min-height:120px;"></textarea>`;
+          }
+          return `<input placeholder="${escapeHtml(field.placeholder || field.label)}" style="display:block;width:100%;max-width:420px;margin:8px 0;padding:10px;" />`;
+        })
+        .join('');
+      const anchor = form.anchorId ? ` id="${escapeHtml(form.anchorId)}"` : '';
+      return `<section${anchor}${wrapper} style="${inlineStyles};padding:48px 24px;"><h2 style="margin:0 0 12px 0;">${escapeHtml(
+        form.title || 'Contact us'
+      )}</h2><p style="max-width:560px;color:#475569;">${escapeHtml(form.description || '')}</p><form>${fieldHtml}<button type="button" style="background:#0f766e;color:#fff;border:none;padding:10px 16px;border-radius:8px;">${escapeHtml(
+        form.buttonText || 'Submit'
+      )}</button></form></section>`;
+    }
     case 'stats': {
       const items = Array.isArray(block.content.items) ? block.content.items : [];
       return `<section${wrapper} style="${inlineStyles};padding:32px 24px;display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:12px;">${items
@@ -346,7 +361,7 @@ export const getPublishedLandingPage = async (slug: string) => {
 
   const { data, error } = await (supabase as any)
     .from('landing_pages')
-    .select('id, name, slug, content_html, published')
+    .select('id, name, slug, content_html, blocks, published')
     .eq('slug', normalized)
     .eq('published', true)
     .limit(1)
@@ -358,6 +373,7 @@ export const getPublishedLandingPage = async (slug: string) => {
     id: String(data.id),
     name: String(data.name || ''),
     slug: String(data.slug || ''),
+    blocks: normalizeBlocks(data.blocks),
     contentHtml: String(data.content_html || ''),
   };
 };

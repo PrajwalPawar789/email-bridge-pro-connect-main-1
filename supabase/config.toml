@@ -21,6 +21,9 @@ verify_jwt = false
 [functions.book-demo]
 verify_jwt = false
 
+[functions.landing-page-submit]
+verify_jwt = false
+
 [functions.automation-runner]
 verify_jwt = false
 
