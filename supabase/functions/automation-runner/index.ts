@@ -27,7 +27,7 @@ const CREDIT_RETRY_MINUTES = 60;
 const WEBHOOK_RETRY_MINUTES = 10;
 const WEBHOOK_DEFAULT_TIMEOUT_MS = 12000;
 const WEBHOOK_MAX_BODY_CHARS = 2000;
-const ENGAGEMENT_CONDITION_RECHECK_MINUTES = 15;
+const ENGAGEMENT_CONDITION_RECHECK_MINUTES = 0.5;
 const TRACKING_LINK_REGEX =
   /(href\s*=\s*["'])((?:https?:\/\/|www\.)[^\s"']+)(["'])|((?:https?:\/\/|www\.)[^\s<>"']+)/gi;
 
@@ -270,6 +270,7 @@ const getWaitMinutes = (config: Record<string, unknown>) => {
   const duration = Number.isFinite(durationRaw) && durationRaw > 0 ? durationRaw : WAIT_DEFAULT_MINUTES;
   const unit = String(config.unit || "minutes").toLowerCase();
 
+  if (unit === "seconds") return duration / 60;
   if (unit === "days") return duration * 24 * 60;
   if (unit === "hours") return duration * 60;
   return duration;
@@ -1001,6 +1002,27 @@ const normalizeGraphConditionConfig = (rawConfig: unknown) => {
   };
 };
 
+const normalizeGraphSendEmailConfig = (rawConfig: unknown) => {
+  const config = safeJsonObject(rawConfig);
+  return {
+    ...config,
+    sender_config_id: String(config.sender_config_id || config.senderConfigId || "").trim(),
+    template_id: String(config.template_id || config.templateId || "").trim(),
+    thread_with_previous:
+      config.thread_with_previous !== undefined
+        ? config.thread_with_previous
+        : config.threadWithPrevious !== undefined
+          ? config.threadWithPrevious
+          : true,
+    is_html:
+      config.is_html !== undefined
+        ? config.is_html
+        : config.isHtml !== undefined
+          ? config.isHtml
+          : undefined,
+  };
+};
+
 const pickGraphConditionBranch = async (
   workflow: Record<string, unknown>,
   contact: Record<string, unknown>,
@@ -1040,7 +1062,7 @@ const sendEmailForStep = async (
     completeAfterSend?: boolean;
   } = {}
 ) => {
-  const config = safeJsonObject(step.config);
+  const config = normalizeGraphSendEmailConfig(step.config);
   const state = stripConditionWaitState(safeJsonObject(contact.state));
   const nodeId = options.nodeId || String(step.id || "");
   const stepLabel = String(step.name || "Email");
@@ -1657,7 +1679,12 @@ const normalizeWorkflowGraph = (workflow: Record<string, unknown>) => {
         id: String(row.id || `node_${index + 1}`),
         kind,
         title: String(row.title || kind),
-        config: kind === "condition" ? normalizeGraphConditionConfig(config) : config,
+        config:
+          kind === "condition"
+            ? normalizeGraphConditionConfig(config)
+            : kind === "send_email"
+              ? normalizeGraphSendEmailConfig(config)
+              : config,
       };
     })
     .filter((node) => node.id.length > 0);

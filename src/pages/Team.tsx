@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
-import { Activity, Clock3, Loader2, Plus, ShieldCheck, Users, Wallet } from "lucide-react";
+import { Activity, Clock3, BarChart3, FileText, Loader2, Plus, ShieldCheck, Users, Wallet } from "lucide-react";
 import DashboardLayout from "@/components/Layout/DashboardLayout";
 import MemberEditorDialog from "@/components/team/MemberEditorDialog";
 import ApprovalReviewDialog from "@/components/team/ApprovalReviewDialog";
@@ -413,40 +413,42 @@ const Team = () => {
     <DashboardLayout activeTab="team" onTabChange={handleTabChange} user={user} onLogout={handleLogout}>
       <div className="space-y-6">
         <section className="rounded-[28px] border border-[var(--shell-border)] bg-[var(--shell-surface-strong)] p-6 shadow-[0_18px_42px_rgba(15,23,42,0.08)]">
-          <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+          <div className="flex flex-col gap-6">
             <div className="space-y-3">
               <div className="flex flex-wrap items-center gap-2">
                 <Badge className={getRoleBadgeClass(workspace.role)}>{roleLabel(workspace.role)}</Badge>
                 <Badge className={getMemberStatusBadgeClass(workspace.status)}>{workspace.status}</Badge>
-                <Badge variant="outline">{workspace.workspaceName}</Badge>
+                <Badge variant="outline" className="hidden sm:inline-block">{workspace.workspaceName}</Badge>
               </div>
               <div>
-                <h1 className="text-3xl font-semibold text-[var(--shell-ink)]" style={{ fontFamily: "var(--shell-font-display)" }}>
+                <h1 className="text-2xl sm:text-3xl font-semibold text-[var(--shell-ink)]" style={{ fontFamily: "var(--shell-font-display)" }}>
                   Team Command Center
                 </h1>
                 <p className="mt-1 max-w-2xl text-sm text-[var(--shell-muted)]">
-                  Manage hierarchy, allocations, approvals, and scoped performance across your workspace.
+                  Manage hierarchy, allocations, approvals, and performance across your workspace.
                 </p>
               </div>
             </div>
 
-            <div className="flex flex-wrap items-center gap-3">
-              <Select value={days} onValueChange={setDays}>
-                <SelectTrigger className="w-[120px] bg-white">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="7">Last 7 days</SelectItem>
-                  <SelectItem value="30">Last 30 days</SelectItem>
-                  <SelectItem value="90">Last 90 days</SelectItem>
-                </SelectContent>
-              </Select>
-              <Button variant="outline" onClick={() => void loadData()} disabled={loadingData}>
-                {loadingData ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Clock3 className="mr-2 h-4 w-4" />}
-                Refresh
-              </Button>
+            <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+              <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
+                <Select value={days} onValueChange={setDays}>
+                  <SelectTrigger className="w-full sm:w-[140px] bg-white">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="7">Last 7 days</SelectItem>
+                    <SelectItem value="30">Last 30 days</SelectItem>
+                    <SelectItem value="90">Last 90 days</SelectItem>
+                  </SelectContent>
+                </Select>
+                <Button variant="outline" onClick={() => void loadData()} disabled={loadingData} className="w-full sm:w-auto">
+                  {loadingData ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Clock3 className="mr-2 h-4 w-4" />}
+                  Refresh
+                </Button>
+              </div>
               {canManageMembers ? (
-                <Button onClick={openInviteDialog}>
+                <Button onClick={openInviteDialog} className="w-full sm:w-auto">
                   <Plus className="mr-2 h-4 w-4" />
                   Invite member
                 </Button>
@@ -474,101 +476,169 @@ const Team = () => {
 
         <Tabs value={activeTab} onValueChange={(value) => setSearchParams({ tab: value })} className="space-y-4">
           <TabsList className="flex h-auto flex-wrap justify-start gap-2 bg-transparent p-0">
-            <TabsTrigger value="overview">Overview</TabsTrigger>
-            <TabsTrigger value="members">Members</TabsTrigger>
-            {teamApprovalsEnabled ? <TabsTrigger value="approvals">Approvals</TabsTrigger> : null}
-            <TabsTrigger value="spending">Spending</TabsTrigger>
-            {auditLogsEnabled ? <TabsTrigger value="audit">Audit</TabsTrigger> : null}
+            <TabsTrigger value="overview" className="flex items-center gap-2">
+              <Activity className="h-4 w-4" />
+              <span className="hidden sm:inline">Overview</span>
+            </TabsTrigger>
+            <TabsTrigger value="members" className="flex items-center gap-2">
+              <Users className="h-4 w-4" />
+              <span className="hidden sm:inline">Members</span>
+            </TabsTrigger>
+            {teamApprovalsEnabled ? (
+              <TabsTrigger value="approvals" className="flex items-center gap-2">
+                <ShieldCheck className="h-4 w-4" />
+                <span className="hidden sm:inline">Approvals</span>
+              </TabsTrigger>
+            ) : null}
+            <TabsTrigger value="spending" className="flex items-center gap-2">
+              <BarChart3 className="h-4 w-4" />
+              <span className="hidden sm:inline">Spending</span>
+            </TabsTrigger>
+            {auditLogsEnabled ? (
+              <TabsTrigger value="audit" className="flex items-center gap-2">
+                <FileText className="h-4 w-4" />
+                <span className="hidden sm:inline">Audit</span>
+              </TabsTrigger>
+            ) : null}
           </TabsList>
 
           <TabsContent value="overview" className="space-y-4">
-            <div className="grid gap-4 xl:grid-cols-[1.1fr_0.9fr]">
-              <Card>
-                <CardHeader>
-                  <CardTitle>Member Utilization</CardTitle>
-                </CardHeader>
-                <CardContent className="space-y-3">
-                  <div className="overflow-x-auto">
-                    <Table>
-                      <TableHeader>
-                        <TableRow>
-                          <TableHead>Member</TableHead>
-                          <TableHead>Role</TableHead>
-                          <TableHead>Credits</TableHead>
-                          <TableHead>Campaigns</TableHead>
-                          <TableHead>Senders</TableHead>
-                          <TableHead>Daily sends</TableHead>
-                        </TableRow>
-                      </TableHeader>
-                      <TableBody>
-                        {members.slice(0, 8).map((member) => (
-                          <TableRow key={member.user_id}>
-                            <TableCell>
-                              <div>
-                                <p className="font-medium text-slate-900">{member.full_name || member.email || member.user_id}</p>
-                                <p className="text-xs text-slate-500">{member.email}</p>
-                              </div>
-                            </TableCell>
-                            <TableCell>
-                              <Badge className={getRoleBadgeClass(member.role)}>{roleLabel(member.role)}</Badge>
-                            </TableCell>
-                            <TableCell>{member.credits_used.toLocaleString()} / {member.credits_allocated?.toLocaleString() || "Unlimited"}</TableCell>
-                            <TableCell>{member.active_campaigns} / {member.max_active_campaigns ?? "Unlimited"}</TableCell>
-                            <TableCell>{member.active_senders} / {member.max_sender_accounts ?? "Unlimited"}</TableCell>
-                            <TableCell>{member.sends_today} / {member.daily_send_limit ?? "Unlimited"}</TableCell>
-                          </TableRow>
-                        ))}
-                      </TableBody>
-                    </Table>
-                  </div>
+            {/* Alerts Section - High Priority */}
+            {highUtilizationMembers.length > 0 && (
+              <div className="rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
+                <p className="font-medium">⚠️ Action needed</p>
+                <p>{highUtilizationMembers.length} member(s) at {">"}80% credit utilization. <span className="underline cursor-pointer">View allocation →</span></p>
+              </div>
+            )}
 
-                  {highUtilizationMembers.length > 0 ? (
-                    <div className="rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
-                      {highUtilizationMembers.length} member(s) are above 80% credit utilization and may need a reallocation soon.
-                    </div>
-                  ) : null}
-                </CardContent>
-              </Card>
+            {teamApprovalsEnabled && approvals.filter(a => a.status === "pending_approval").length > 0 && (
+              <div className="rounded-2xl border border-blue-200 bg-blue-50 px-4 py-3 text-sm text-blue-800">
+                <p className="font-medium">✓ Approvals pending</p>
+                <p>{approvals.filter(a => a.status === "pending_approval").length} item(s) waiting for review. <span className="underline cursor-pointer">Review now →</span></p>
+              </div>
+            )}
 
-              <div className="space-y-4">
-                {teamApprovalsEnabled ? (
+            <div className="grid gap-4 lg:grid-cols-3">
+              {/* Member Utilization - Simplified */}
+              <div className="lg:col-span-2">
                 <Card>
                   <CardHeader>
-                    <CardTitle>Approval Queue</CardTitle>
+                    <CardTitle className="flex items-center justify-between">
+                      <span>Team Overview</span>
+                      <Button variant="ghost" size="sm" onClick={() => setSearchParams({ tab: "members" })}>View all →</Button>
+                    </CardTitle>
                   </CardHeader>
-                  <CardContent className="space-y-3">
-                    {approvals.slice(0, 5).map((request) => (
-                      <div key={request.id} className="rounded-2xl border border-slate-200 bg-slate-50 p-3">
-                        <div className="flex items-center justify-between gap-3">
-                          <div>
-                            <p className="font-medium text-slate-900">{request.entity_name || request.entity_type}</p>
-                            <p className="text-xs text-slate-500">
-                              {request.requested_by_name || request.requested_by_email || "Member"} • {new Date(request.created_at).toLocaleString()}
-                            </p>
+                  <CardContent className="space-y-4">
+                    {members.slice(0, 5).map((member) => {
+                      const creditUtilization = member.credits_allocated ? (member.credits_used / member.credits_allocated) * 100 : 0;
+                      const campaignUtilization = member.max_active_campaigns ? (member.active_campaigns / member.max_active_campaigns) * 100 : 0;
+                      const isHighUtilization = creditUtilization >= 80;
+
+                      return (
+                        <div key={member.user_id} className="space-y-2 pb-4 border-b last:border-b-0">
+                          <div className="flex items-start justify-between gap-3">
+                            <div className="flex-1 min-w-0">
+                              <div className="flex items-center gap-2 mb-1">
+                                <p className="font-medium text-slate-900 truncate">{member.full_name || member.email}</p>
+                                <Badge className={`${getRoleBadgeClass(member.role)} text-xs`} variant="outline">{roleLabel(member.role)}</Badge>
+                              </div>
+                              <p className="text-xs text-slate-500">{member.email}</p>
+                            </div>
+                            {canEditMember(member) && (
+                              <Button variant="outline" size="sm" onClick={() => openEditDialog(member)}>Edit</Button>
+                            )}
                           </div>
-                          <Badge className={getApprovalBadgeClass(request.status)}>{request.status.replace(/_/g, " ")}</Badge>
+
+                          {/* Utilization Bars */}
+                          <div className="space-y-2">
+                            {member.credits_allocated && (
+                              <div>
+                                <div className="flex justify-between text-xs mb-1">
+                                  <span className="text-slate-600">Credits</span>
+                                  <span className={isHighUtilization ? "text-amber-600 font-medium" : "text-slate-600"}>
+                                    {Math.round(creditUtilization)}%
+                                  </span>
+                                </div>
+                                <div className="w-full bg-slate-200 rounded-full h-2">
+                                  <div
+                                    className={isHighUtilization ? "bg-amber-500" : "bg-emerald-500"}
+                                    style={{ width: `${Math.min(creditUtilization, 100)}%` }}
+                                  />
+                                </div>
+                              </div>
+                            )}
+
+                            {member.max_active_campaigns && (
+                              <div>
+                                <div className="flex justify-between text-xs mb-1">
+                                  <span className="text-slate-600">Campaigns</span>
+                                  <span className="text-slate-600">{member.active_campaigns} / {member.max_active_campaigns}</span>
+                                </div>
+                                <div className="w-full bg-slate-200 rounded-full h-2">
+                                  <div
+                                    className="bg-blue-500"
+                                    style={{ width: `${Math.min(campaignUtilization, 100)}%` }}
+                                  />
+                                </div>
+                              </div>
+                            )}
+                          </div>
                         </div>
-                      </div>
-                    ))}
-                    {approvals.length === 0 ? <p className="text-sm text-slate-500">No approvals in scope.</p> : null}
+                      );
+                    })}
                   </CardContent>
                 </Card>
-                ) : null}
+              </div>
+
+              {/* Right Sidebar - Approvals & Activity */}
+              <div className="space-y-4">
+                {teamApprovalsEnabled && (
+                  <Card>
+                    <CardHeader>
+                      <CardTitle className="text-base">Pending Approvals</CardTitle>
+                    </CardHeader>
+                    <CardContent className="space-y-2">
+                      {approvals.slice(0, 4).map((request) => (
+                        <div
+                          key={request.id}
+                          onClick={() => void openApprovalDialog(request)}
+                          className="rounded-lg border border-slate-200 hover:border-slate-300 hover:bg-slate-50 p-3 cursor-pointer transition-colors"
+                        >
+                          <div className="flex items-start justify-between gap-2 mb-1">
+                            <p className="font-medium text-sm text-slate-900 truncate flex-1">{request.entity_name || request.entity_type}</p>
+                            <Badge className={`${getApprovalBadgeClass(request.status)} text-xs shrink-0`}>
+                              {request.status === "pending_approval" ? "Pending" : request.status.replace(/_/g, " ")}
+                            </Badge>
+                          </div>
+                          <p className="text-xs text-slate-500">{request.requested_by_name || request.requested_by_email}</p>
+                        </div>
+                      ))}
+                      {approvals.length === 0 && (
+                        <p className="text-sm text-slate-500 text-center py-4">No approvals in scope</p>
+                      )}
+                      {approvals.length > 4 && (
+                        <Button variant="ghost" size="sm" className="w-full mt-2" onClick={() => setSearchParams({ tab: "approvals" })}>
+                          View all ({approvals.length})
+                        </Button>
+                      )}
+                    </CardContent>
+                  </Card>
+                )}
 
                 <Card>
                   <CardHeader>
-                    <CardTitle>Recent Activity</CardTitle>
+                    <CardTitle className="text-base">Recent Activity</CardTitle>
                   </CardHeader>
-                  <CardContent className="space-y-3">
-                    {(dashboard?.recentActivity || []).slice(0, 6).map((activity) => (
-                      <div key={String(activity.id)} className="rounded-2xl border border-slate-200 bg-white p-3">
-                        <p className="text-sm font-medium text-slate-900">{String(activity.actionType || "activity").replace(/_/g, " ")}</p>
-                        <p className="text-xs text-slate-500">
-                          {String(activity.actorName || activity.actorEmail || "System")} • {new Date(String(activity.createdAt)).toLocaleString()}
-                        </p>
+                  <CardContent className="space-y-2">
+                    {(dashboard?.recentActivity || []).slice(0, 4).map((activity) => (
+                      <div key={String(activity.id)} className="text-sm pb-2 border-b last:border-b-0">
+                        <p className="font-medium text-slate-900 text-xs">{String(activity.actionType || "activity").replace(/_/g, " ")}</p>
+                        <p className="text-xs text-slate-500">{String(activity.actorName || activity.actorEmail || "System")}</p>
                       </div>
                     ))}
-                    {!dashboard?.recentActivity?.length ? <p className="text-sm text-slate-500">No recent audit events.</p> : null}
+                    {!dashboard?.recentActivity?.length && (
+                      <p className="text-sm text-slate-500 text-center py-4">No recent activity</p>
+                    )}
                   </CardContent>
                 </Card>
               </div>
@@ -576,140 +646,266 @@ const Team = () => {
           </TabsContent>
 
           <TabsContent value="members" className="space-y-4">
-            <Card>
-              <CardHeader className="flex flex-row items-center justify-between">
-                <div>
-                  <CardTitle>Workspace Members</CardTitle>
-                  <p className="mt-1 text-sm text-slate-500">Hierarchy, allocations, and policy state for your scope.</p>
-                </div>
-                {canManageMembers ? (
-                  <Button onClick={openInviteDialog}>
-                    <Plus className="mr-2 h-4 w-4" />
-                    Invite member
-                  </Button>
-                ) : null}
-              </CardHeader>
-              <CardContent className="overflow-x-auto">
-                <Table>
-                  <TableHeader>
-                    <TableRow>
-                      <TableHead>Member</TableHead>
-                      <TableHead>Role</TableHead>
-                      <TableHead>Parent</TableHead>
-                      <TableHead>Status</TableHead>
-                      <TableHead>Credits</TableHead>
-                      <TableHead>Campaigns</TableHead>
-                      <TableHead>Senders</TableHead>
-                      <TableHead>Daily sends</TableHead>
-                      <TableHead>Actions</TableHead>
-                    </TableRow>
-                  </TableHeader>
-                  <TableBody>
-                    {members.map((member) => (
-                      <TableRow key={member.user_id}>
-                        <TableCell>
-                          <div>
-                            <p className="font-medium text-slate-900">{member.full_name || member.email || member.user_id}</p>
-                            <p className="text-xs text-slate-500">{member.email}</p>
-                          </div>
-                        </TableCell>
-                        <TableCell>
-                          <Badge className={getRoleBadgeClass(member.role)}>{roleLabel(member.role)}</Badge>
-                        </TableCell>
-                        <TableCell className="text-sm text-slate-600">{member.parent_name || member.parent_email || "Workspace owner"}</TableCell>
-                        <TableCell>
-                          <Badge className={getMemberStatusBadgeClass(member.status)}>{member.status}</Badge>
-                        </TableCell>
-                        <TableCell>{member.credits_remaining.toLocaleString()} remaining</TableCell>
-                        <TableCell>{member.active_campaigns} / {member.max_active_campaigns ?? "Unlimited"}</TableCell>
-                        <TableCell>{member.active_senders} / {member.max_sender_accounts ?? "Unlimited"}</TableCell>
-                        <TableCell>{member.sends_today} / {member.daily_send_limit ?? "Unlimited"}</TableCell>
-                        <TableCell>
-                          {canEditMember(member) ? (
-                            <Button variant="outline" size="sm" onClick={() => openEditDialog(member)}>
-                              Edit
-                            </Button>
-                          ) : (
-                            <span className="text-xs text-slate-400">Read only</span>
-                          )}
-                        </TableCell>
+            <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+              <div>
+                <h3 className="font-medium text-slate-900">Workspace Members</h3>
+                <p className="text-sm text-slate-500 mt-1">Hierarchy, allocations, and policy state for your scope.</p>
+              </div>
+              {canManageMembers ? (
+                <Button onClick={openInviteDialog} className="shrink-0">
+                  <Plus className="mr-2 h-4 w-4" />
+                  Invite member
+                </Button>
+              ) : null}
+            </div>
+
+            {/* Desktop Table View - Hidden on mobile */}
+            <div className="hidden lg:block">
+              <Card>
+                <CardContent className="overflow-x-auto pt-6">
+                  <Table>
+                    <TableHeader>
+                      <TableRow>
+                        <TableHead>Member</TableHead>
+                        <TableHead>Role</TableHead>
+                        <TableHead>Parent</TableHead>
+                        <TableHead>Status</TableHead>
+                        <TableHead>Credits</TableHead>
+                        <TableHead>Campaigns</TableHead>
+                        <TableHead>Senders</TableHead>
+                        <TableHead>Daily sends</TableHead>
+                        <TableHead>Actions</TableHead>
                       </TableRow>
-                    ))}
-                  </TableBody>
-                </Table>
-              </CardContent>
-            </Card>
+                    </TableHeader>
+                    <TableBody>
+                      {members.map((member) => (
+                        <TableRow key={member.user_id}>
+                          <TableCell>
+                            <div>
+                              <p className="font-medium text-slate-900">{member.full_name || member.email || member.user_id}</p>
+                              <p className="text-xs text-slate-500">{member.email}</p>
+                            </div>
+                          </TableCell>
+                          <TableCell>
+                            <Badge className={getRoleBadgeClass(member.role)}>{roleLabel(member.role)}</Badge>
+                          </TableCell>
+                          <TableCell className="text-sm text-slate-600">{member.parent_name || member.parent_email || "Workspace owner"}</TableCell>
+                          <TableCell>
+                            <Badge className={getMemberStatusBadgeClass(member.status)}>{member.status}</Badge>
+                          </TableCell>
+                          <TableCell>{member.credits_remaining.toLocaleString()} remaining</TableCell>
+                          <TableCell>{member.active_campaigns} / {member.max_active_campaigns ?? "Unlimited"}</TableCell>
+                          <TableCell>{member.active_senders} / {member.max_sender_accounts ?? "Unlimited"}</TableCell>
+                          <TableCell>{member.sends_today} / {member.daily_send_limit ?? "Unlimited"}</TableCell>
+                          <TableCell>
+                            {canEditMember(member) ? (
+                              <Button variant="outline" size="sm" onClick={() => openEditDialog(member)}>
+                                Edit
+                              </Button>
+                            ) : (
+                              <span className="text-xs text-slate-400">Read only</span>
+                            )}
+                          </TableCell>
+                        </TableRow>
+                      ))}
+                    </TableBody>
+                  </Table>
+                </CardContent>
+              </Card>
+            </div>
+
+            {/* Mobile Card View - Visible on mobile only */}
+            <div className="space-y-3 lg:hidden">
+              {members.map((member) => {
+                const creditUtilization = member.credits_allocated ? (member.credits_used / member.credits_allocated) * 100 : 0;
+                const campaignUtilization = member.max_active_campaigns ? (member.active_campaigns / member.max_active_campaigns) * 100 : 0;
+                const isHighUtilization = creditUtilization >= 80;
+
+                return (
+                  <Card key={member.user_id}>
+                    <CardContent className="pt-6">
+                      <div className="space-y-4">
+                        {/* Member Info */}
+                        <div className="flex items-start justify-between gap-3">
+                          <div className="flex-1 min-w-0">
+                            <p className="font-medium text-slate-900 truncate">{member.full_name || member.email}</p>
+                            <p className="text-xs text-slate-500">{member.email}</p>
+                            <div className="flex items-center gap-2 mt-2">
+                              <Badge className={getRoleBadgeClass(member.role)} variant="outline">{roleLabel(member.role)}</Badge>
+                              <Badge className={getMemberStatusBadgeClass(member.status)} variant="outline">{member.status}</Badge>
+                            </div>
+                          </div>
+                          {canEditMember(member) && (
+                            <Button variant="outline" size="sm" onClick={() => openEditDialog(member)}>Edit</Button>
+                          )}
+                        </div>
+
+                        {/* Hierarchy */}
+                        <div className="text-sm">
+                          <p className="text-slate-500">Reports to</p>
+                          <p className="font-medium text-slate-900">{member.parent_name || member.parent_email || "Workspace owner"}</p>
+                        </div>
+
+                        {/* Utilization Visualizations */}
+                        <div className="space-y-3 pt-2 border-t">
+                          {member.credits_allocated && (
+                            <div>
+                              <div className="flex justify-between items-center mb-2">
+                                <span className="text-sm font-medium text-slate-700">Credits</span>
+                                <span className={`text-sm font-medium ${isHighUtilization ? "text-amber-600" : "text-slate-600"}`}>
+                                  {member.credits_used.toLocaleString()} / {member.credits_allocated.toLocaleString()}
+                                </span>
+                              </div>
+                              <div className="w-full bg-slate-200 rounded-full h-2">
+                                <div
+                                  className={isHighUtilization ? "bg-amber-500" : "bg-emerald-500"}
+                                  style={{ width: `${Math.min(creditUtilization, 100)}%` }}
+                                />
+                              </div>
+                              <p className="text-xs text-slate-500 mt-1">{Math.round(creditUtilization)}% utilized</p>
+                            </div>
+                          )}
+
+                          {member.max_active_campaigns && (
+                            <div>
+                              <div className="flex justify-between items-center mb-2">
+                                <span className="text-sm font-medium text-slate-700">Campaigns</span>
+                                <span className="text-sm font-medium text-slate-600">{member.active_campaigns} / {member.max_active_campaigns}</span>
+                              </div>
+                              <div className="w-full bg-slate-200 rounded-full h-2">
+                                <div
+                                  className="bg-blue-500"
+                                  style={{ width: `${Math.min(campaignUtilization, 100)}%` }}
+                                />
+                              </div>
+                            </div>
+                          )}
+
+                          {member.max_sender_accounts && (
+                            <div>
+                              <div className="flex justify-between items-center mb-2">
+                                <span className="text-sm font-medium text-slate-700">Senders</span>
+                                <span className="text-sm font-medium text-slate-600">{member.active_senders} / {member.max_sender_accounts}</span>
+                              </div>
+                              <div className="w-full bg-slate-200 rounded-full h-2">
+                                <div
+                                  className="bg-purple-500"
+                                  style={{ width: `${Math.min((member.active_senders / member.max_sender_accounts) * 100, 100)}%` }}
+                                />
+                              </div>
+                            </div>
+                          )}
+
+                          {member.daily_send_limit && (
+                            <div>
+                              <div className="flex justify-between items-center mb-2">
+                                <span className="text-sm font-medium text-slate-700">Daily sends</span>
+                                <span className="text-sm font-medium text-slate-600">{member.sends_today} / {member.daily_send_limit}</span>
+                              </div>
+                              <div className="w-full bg-slate-200 rounded-full h-2">
+                                <div
+                                  className="bg-pink-500"
+                                  style={{ width: `${Math.min((member.sends_today / member.daily_send_limit) * 100, 100)}%` }}
+                                />
+                              </div>
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                    </CardContent>
+                  </Card>
+                );
+              })}
+            </div>
           </TabsContent>
 
           {teamApprovalsEnabled ? (
           <TabsContent value="approvals" className="space-y-4">
-            <Card>
-              <CardHeader className="flex flex-row items-center justify-between">
-                <div>
-                  <CardTitle>Approval Inbox</CardTitle>
-                  <p className="mt-1 text-sm text-slate-500">Review pending launches, sender activations, and workflow activations.</p>
-                </div>
-                <Select value={approvalFilter} onValueChange={setApprovalFilter}>
-                  <SelectTrigger className="w-[180px] bg-white">
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="all">All statuses</SelectItem>
-                    <SelectItem value="pending_approval">Pending approval</SelectItem>
-                    <SelectItem value="changes_requested">Changes requested</SelectItem>
-                    <SelectItem value="approved">Approved</SelectItem>
-                    <SelectItem value="rejected">Rejected</SelectItem>
-                  </SelectContent>
-                </Select>
-              </CardHeader>
-              <CardContent className="overflow-x-auto">
-                <Table>
-                  <TableHeader>
-                    <TableRow>
-                      <TableHead>Entity</TableHead>
-                      <TableHead>Requested by</TableHead>
-                      <TableHead>Reviewer</TableHead>
-                      <TableHead>Status</TableHead>
-                      <TableHead>Submitted</TableHead>
-                      <TableHead>Actions</TableHead>
-                    </TableRow>
-                  </TableHeader>
-                  <TableBody>
-                    {approvals.map((request) => (
-                      <TableRow key={request.id}>
-                        <TableCell>
-                          <div>
-                            <p className="font-medium text-slate-900">{request.entity_name || request.entity_type}</p>
-                            <p className="text-xs text-slate-500">{request.entity_type.replace(/_/g, " ")}</p>
+            {/* Filter Section */}
+            <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+              <div>
+                <h3 className="font-medium text-slate-900">Approval Inbox</h3>
+                <p className="text-sm text-slate-500 mt-1">Review pending launches, sender activations, and workflow activations.</p>
+              </div>
+              <Select value={approvalFilter} onValueChange={setApprovalFilter}>
+                <SelectTrigger className="w-full sm:w-[200px] bg-white">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">All statuses</SelectItem>
+                  <SelectItem value="pending_approval">⏳ Pending approval</SelectItem>
+                  <SelectItem value="changes_requested">📝 Changes requested</SelectItem>
+                  <SelectItem value="approved">✓ Approved</SelectItem>
+                  <SelectItem value="rejected">✗ Rejected</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+
+            {/* Approval Items - Card Layout */}
+            <div className="space-y-3">
+              {approvals.length > 0 ? (
+                approvals.map((request) => (
+                  <Card
+                    key={request.id}
+                    className="cursor-pointer hover:shadow-md transition-shadow"
+                    onClick={() => void openApprovalDialog(request)}
+                  >
+                    <CardContent className="pt-6">
+                      <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
+                        <div className="flex-1 min-w-0">
+                          <div className="flex items-center gap-2 mb-1">
+                            <p className="font-medium text-slate-900 truncate">{request.entity_name || request.entity_type}</p>
+                            <Badge className={`${getApprovalBadgeClass(request.status)} shrink-0`}>
+                              {request.status === "pending_approval" ? "⏳ Pending" : request.status === "changes_requested" ? "📝 Changes" : request.status.replace(/_/g, " ")}
+                            </Badge>
                           </div>
-                        </TableCell>
-                        <TableCell>{request.requested_by_name || request.requested_by_email || "Member"}</TableCell>
-                        <TableCell>{request.reviewer_name || request.reviewer_email || "Unassigned"}</TableCell>
-                        <TableCell>
-                          <Badge className={getApprovalBadgeClass(request.status)}>{request.status.replace(/_/g, " ")}</Badge>
-                        </TableCell>
-                        <TableCell>{new Date(request.created_at).toLocaleString()}</TableCell>
-                        <TableCell>
-                          {canReviewApprovals ? (
-                            <Button variant="outline" size="sm" onClick={() => void openApprovalDialog(request)}>
-                              Review
-                            </Button>
-                          ) : (
-                            <span className="text-xs text-slate-400">Read only</span>
-                          )}
-                        </TableCell>
-                      </TableRow>
-                    ))}
-                  </TableBody>
-                </Table>
-                {approvals.length === 0 ? <p className="pt-4 text-sm text-slate-500">No approval requests match the current filter.</p> : null}
-              </CardContent>
-            </Card>
+                          <p className="text-sm text-slate-600 mb-2">{request.entity_type.replace(/_/g, " ")}</p>
+                          <div className="flex flex-col gap-1 text-xs text-slate-500">
+                            <p><span className="font-medium">Requested by:</span> {request.requested_by_name || request.requested_by_email || "Member"}</p>
+                            <p><span className="font-medium">Submitted:</span> {new Date(request.created_at).toLocaleDateString()}</p>
+                          </div>
+                        </div>
+                        {canReviewApprovals && request.status === "pending_approval" && (
+                          <Button
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              void openApprovalDialog(request);
+                            }}
+                            className="shrink-0"
+                          >
+                            Review Now
+                          </Button>
+                        )}
+                        {canReviewApprovals && request.status !== "pending_approval" && (
+                          <Button
+                            variant="outline"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              void openApprovalDialog(request);
+                            }}
+                            className="shrink-0"
+                          >
+                            View Details
+                          </Button>
+                        )}
+                      </div>
+                    </CardContent>
+                  </Card>
+                ))
+              ) : (
+                <Card>
+                  <CardContent className="pt-6 text-center">
+                    <p className="text-slate-500">No approval requests match the current filter.</p>
+                    <p className="text-sm text-slate-400 mt-1">Great job! Everything is up to date.</p>
+                  </CardContent>
+                </Card>
+              )}
+            </div>
           </TabsContent>
           ) : null}
 
           <TabsContent value="spending" className="space-y-4">
-            <div className="grid gap-4 md:grid-cols-3">
+            <div className="grid gap-4 sm:grid-cols-3">
               <Card>
                 <CardHeader className="pb-2">
                   <CardTitle className="text-sm text-slate-500">Scoped credits used</CardTitle>
@@ -742,19 +938,24 @@ const Team = () => {
                     <TableRow>
                       <TableHead>Manager</TableHead>
                       <TableHead>Role</TableHead>
-                      <TableHead>Credits used</TableHead>
-                      <TableHead>Sends</TableHead>
+                      <TableHead className="text-right">Credits used</TableHead>
+                      <TableHead className="text-right">Sends</TableHead>
                     </TableRow>
                   </TableHeader>
                   <TableBody>
                     {(spendingRollup?.byManager || []).map((row) => (
                       <TableRow key={row.userId}>
-                        <TableCell>{row.name || row.email || row.userId}</TableCell>
                         <TableCell>
-                          <Badge className={getRoleBadgeClass(row.role)}>{roleLabel(row.role)}</Badge>
+                          <div className="max-w-[200px]">
+                            <p className="font-medium text-slate-900 truncate">{row.name || row.email || row.userId}</p>
+                            <p className="text-xs text-slate-500 truncate">{row.email || ""}</p>
+                          </div>
                         </TableCell>
-                        <TableCell>{Number(row.creditsUsed || 0).toLocaleString()}</TableCell>
-                        <TableCell>{Number(row.sends || 0).toLocaleString()}</TableCell>
+                        <TableCell>
+                          <Badge className={getRoleBadgeClass(row.role)} variant="outline">{roleLabel(row.role)}</Badge>
+                        </TableCell>
+                        <TableCell className="text-right">{Number(row.creditsUsed || 0).toLocaleString()}</TableCell>
+                        <TableCell className="text-right">{Number(row.sends || 0).toLocaleString()}</TableCell>
                       </TableRow>
                     ))}
                   </TableBody>
@@ -772,19 +973,24 @@ const Team = () => {
                     <TableRow>
                       <TableHead>User</TableHead>
                       <TableHead>Role</TableHead>
-                      <TableHead>Credits used</TableHead>
-                      <TableHead>Sends</TableHead>
+                      <TableHead className="text-right">Credits used</TableHead>
+                      <TableHead className="text-right">Sends</TableHead>
                     </TableRow>
                   </TableHeader>
                   <TableBody>
                     {(spendingRollup?.byUser || []).map((row) => (
                       <TableRow key={row.userId}>
-                        <TableCell>{row.name || row.email || row.userId}</TableCell>
                         <TableCell>
-                          <Badge className={getRoleBadgeClass(row.role)}>{roleLabel(row.role)}</Badge>
+                          <div className="max-w-[200px]">
+                            <p className="font-medium text-slate-900 truncate">{row.name || row.email || row.userId}</p>
+                            <p className="text-xs text-slate-500 truncate">{row.email || ""}</p>
+                          </div>
                         </TableCell>
-                        <TableCell>{Number(row.creditsUsed || 0).toLocaleString()}</TableCell>
-                        <TableCell>{Number(row.sends || 0).toLocaleString()}</TableCell>
+                        <TableCell>
+                          <Badge className={getRoleBadgeClass(row.role)} variant="outline">{roleLabel(row.role)}</Badge>
+                        </TableCell>
+                        <TableCell className="text-right">{Number(row.creditsUsed || 0).toLocaleString()}</TableCell>
+                        <TableCell className="text-right">{Number(row.sends || 0).toLocaleString()}</TableCell>
                       </TableRow>
                     ))}
                   </TableBody>
@@ -795,34 +1001,73 @@ const Team = () => {
 
           {auditLogsEnabled ? (
           <TabsContent value="audit" className="space-y-4">
-            <Card>
-              <CardHeader>
-                <CardTitle>Audit History</CardTitle>
-              </CardHeader>
-              <CardContent className="overflow-x-auto">
-                <Table>
-                  <TableHeader>
-                    <TableRow>
-                      <TableHead>Action</TableHead>
-                      <TableHead>Target</TableHead>
-                      <TableHead>Actor</TableHead>
-                      <TableHead>Timestamp</TableHead>
-                    </TableRow>
-                  </TableHeader>
-                  <TableBody>
-                    {auditEvents.map((event) => (
-                      <TableRow key={event.id}>
-                        <TableCell className="font-medium text-slate-900">{event.action_type.replace(/_/g, " ")}</TableCell>
-                        <TableCell>{event.target_type} • {event.target_id}</TableCell>
-                        <TableCell>{event.actor_name || event.actor_email || "System"}</TableCell>
-                        <TableCell>{new Date(event.created_at).toLocaleString()}</TableCell>
+            {/* Desktop Table View */}
+            <div className="hidden lg:block">
+              <Card>
+                <CardHeader>
+                  <CardTitle>Audit History</CardTitle>
+                </CardHeader>
+                <CardContent className="overflow-x-auto">
+                  <Table>
+                    <TableHeader>
+                      <TableRow>
+                        <TableHead>Action</TableHead>
+                        <TableHead>Target</TableHead>
+                        <TableHead>Actor</TableHead>
+                        <TableHead>Timestamp</TableHead>
                       </TableRow>
-                    ))}
-                  </TableBody>
-                </Table>
-                {auditEvents.length === 0 ? <p className="pt-4 text-sm text-slate-500">No audit events available for your scope.</p> : null}
-              </CardContent>
-            </Card>
+                    </TableHeader>
+                    <TableBody>
+                      {auditEvents.map((event) => (
+                        <TableRow key={event.id}>
+                          <TableCell className="font-medium text-slate-900">{event.action_type.replace(/_/g, " ")}</TableCell>
+                          <TableCell className="text-sm">{event.target_type} • {event.target_id}</TableCell>
+                          <TableCell>{event.actor_name || event.actor_email || "System"}</TableCell>
+                          <TableCell className="text-sm text-slate-600">{new Date(event.created_at).toLocaleString()}</TableCell>
+                        </TableRow>
+                      ))}
+                    </TableBody>
+                  </Table>
+                  {auditEvents.length === 0 ? <p className="pt-4 text-sm text-slate-500">No audit events available for your scope.</p> : null}
+                </CardContent>
+              </Card>
+            </div>
+
+            {/* Mobile Card View */}
+            <div className="space-y-3 lg:hidden">
+              {auditEvents.length > 0 ? (
+                auditEvents.map((event) => (
+                  <Card key={event.id}>
+                    <CardContent className="pt-6">
+                      <div className="space-y-3">
+                        <div>
+                          <p className="text-xs text-slate-500">Action</p>
+                          <p className="font-medium text-slate-900">{event.action_type.replace(/_/g, " ")}</p>
+                        </div>
+                        <div>
+                          <p className="text-xs text-slate-500">Target</p>
+                          <p className="text-sm text-slate-900">{event.target_type}</p>
+                          <p className="text-xs text-slate-500 break-all">{event.target_id}</p>
+                        </div>
+                        <div>
+                          <p className="text-xs text-slate-500">Actor</p>
+                          <p className="text-sm text-slate-900">{event.actor_name || event.actor_email || "System"}</p>
+                        </div>
+                        <div className="pt-2 border-t">
+                          <p className="text-xs text-slate-500">{new Date(event.created_at).toLocaleString()}</p>
+                        </div>
+                      </div>
+                    </CardContent>
+                  </Card>
+                ))
+              ) : (
+                <Card>
+                  <CardContent className="pt-6 text-center">
+                    <p className="text-sm text-slate-500">No audit events available for your scope.</p>
+                  </CardContent>
+                </Card>
+              )}
+            </div>
           </TabsContent>
           ) : null}
         </Tabs>

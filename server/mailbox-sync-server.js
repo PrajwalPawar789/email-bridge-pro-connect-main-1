@@ -39,6 +39,9 @@ const DEFAULT_AUTO_SYNC_MAILBOXES = 'false';
 const DEFAULT_AUTO_SYNC_INTERVAL_MINUTES = '10';
 const DEFAULT_AUTO_SYNC_LIMIT = '50';
 const DEFAULT_AUTO_SYNC_CONFIG_ID = '';
+const DEFAULT_AUTOMATION_RUNNER_HEARTBEAT = 'true';
+const DEFAULT_AUTOMATION_RUNNER_INTERVAL_SECONDS = '30';
+const DEFAULT_AUTOMATION_RUNNER_MAX_WORKFLOWS = '40';
 
 const PORT = Number(process.env.PORT || process.env.MAILBOX_SERVER_PORT || DEFAULT_MAILBOX_PORT);
 const normalizeOrigin = (origin) => String(origin || '').trim().replace(/\/+$/, '');
@@ -450,6 +453,21 @@ const AUTO_SYNC_LIMIT = (() => {
   return Math.max(1, Math.min(500, safe));
 })();
 const AUTO_SYNC_CONFIG_ID = (process.env.MAILBOX_AUTO_SYNC_CONFIG_ID || DEFAULT_AUTO_SYNC_CONFIG_ID || '').trim();
+const AUTOMATION_RUNNER_HEARTBEAT = parseBoolean(
+  process.env.AUTOMATION_RUNNER_HEARTBEAT || DEFAULT_AUTOMATION_RUNNER_HEARTBEAT
+);
+const AUTOMATION_RUNNER_INTERVAL_SECONDS = (() => {
+  const parsed = Number(
+    process.env.AUTOMATION_RUNNER_INTERVAL_SECONDS || DEFAULT_AUTOMATION_RUNNER_INTERVAL_SECONDS
+  );
+  const safe = Number.isFinite(parsed) ? parsed : Number(DEFAULT_AUTOMATION_RUNNER_INTERVAL_SECONDS);
+  return Math.max(15, Math.min(3600, safe));
+})();
+const AUTOMATION_RUNNER_MAX_WORKFLOWS = (() => {
+  const parsed = Number(process.env.AUTOMATION_RUNNER_MAX_WORKFLOWS || DEFAULT_AUTOMATION_RUNNER_MAX_WORKFLOWS);
+  const safe = Number.isFinite(parsed) ? parsed : Number(DEFAULT_AUTOMATION_RUNNER_MAX_WORKFLOWS);
+  return Math.max(1, Math.min(200, safe));
+})();
 
 const buildCheckOverrides = (body) => {
   const nested = body?.overrides && typeof body.overrides === 'object' ? body.overrides : {};
@@ -1366,6 +1384,8 @@ let autoCheckInFlight = false;
 let autoCheckTimer = null;
 let autoSyncInFlight = false;
 let autoSyncTimer = null;
+let automationRunnerInFlight = false;
+let automationRunnerTimer = null;
 
 const runMailboxSync = async ({ configId, limit, source = 'manual' } = {}) => {
   if (!supabaseAdmin) {
@@ -1437,6 +1457,37 @@ const runMailboxSync = async ({ configId, limit, source = 'manual' } = {}) => {
     },
     source,
   };
+};
+
+const triggerAutomationRunnerHeartbeat = async () => {
+  if (!hasSupabaseUrl || !hasServiceRoleKey) {
+    throw new Error('SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY are required for automation heartbeat.');
+  }
+
+  const response = await fetch(`${SUPABASE_URL.replace(/\/+$/, '')}/functions/v1/automation-runner`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${SUPABASE_SERVICE_ROLE_KEY}`,
+    },
+    body: JSON.stringify({
+      action: 'tick',
+      maxWorkflows: AUTOMATION_RUNNER_MAX_WORKFLOWS,
+    }),
+  });
+
+  let payload = {};
+  try {
+    payload = await response.json();
+  } catch {
+    payload = {};
+  }
+
+  if (!response.ok) {
+    throw new Error(payload?.error || `automation-runner returned ${response.status}`);
+  }
+
+  return payload;
 };
 
 const startAutoReplyChecks = () => {
@@ -1533,6 +1584,55 @@ const startAutoMailboxSync = () => {
   autoSyncTimer = setInterval(run, intervalMs);
   if (typeof autoSyncTimer?.unref === 'function') {
     autoSyncTimer.unref();
+  }
+};
+
+const startAutomationRunnerHeartbeat = () => {
+  if (!AUTOMATION_RUNNER_HEARTBEAT) return;
+  if (!hasSupabaseUrl || !hasServiceRoleKey) {
+    console.warn('[mailbox] Automation runner heartbeat disabled: SUPABASE_URL and service role key are required.');
+    return;
+  }
+
+  const intervalMs = AUTOMATION_RUNNER_INTERVAL_SECONDS * 1000;
+
+  const run = async () => {
+    if (automationRunnerInFlight) {
+      console.log('[mailbox] Automation runner heartbeat skipped (previous run still in progress).');
+      return;
+    }
+
+    automationRunnerInFlight = true;
+    const startedAt = Date.now();
+    try {
+      const payload = await triggerAutomationRunnerHeartbeat();
+      const totals = payload?.totals || {};
+      const processed = Number(totals.processed || 0);
+      const sent = Number(totals.sent || 0);
+      const waiting = Number(totals.waiting || 0);
+      const completed = Number(totals.completed || 0);
+      const failed = Number(totals.failed || 0);
+      const durationMs = Date.now() - startedAt;
+
+      if (processed > 0 || sent > 0 || waiting > 0 || completed > 0 || failed > 0) {
+        console.log(
+          `[mailbox] Automation heartbeat processed=${processed} sent=${sent} waiting=${waiting} completed=${completed} failed=${failed} in ${durationMs}ms.`
+        );
+      }
+    } catch (error) {
+      console.error('[mailbox] Automation runner heartbeat failed:', error?.message || error);
+    } finally {
+      automationRunnerInFlight = false;
+    }
+  };
+
+  console.log(
+    `[mailbox] Automation runner heartbeat enabled. Interval: ${AUTOMATION_RUNNER_INTERVAL_SECONDS}s, maxWorkflows: ${AUTOMATION_RUNNER_MAX_WORKFLOWS}.`
+  );
+  run();
+  automationRunnerTimer = setInterval(run, intervalMs);
+  if (typeof automationRunnerTimer?.unref === 'function') {
+    automationRunnerTimer.unref();
   }
 };
 
@@ -2145,6 +2245,7 @@ app.post('/check-email-replies', async (req, res) => {
 app.listen(PORT, () => {
   console.log(`Mailbox sync server listening on port ${PORT}`);
   console.log('Allowed origins:', ALLOWED_ORIGINS.join(', ') || '*');
+  startAutomationRunnerHeartbeat();
   startAutoMailboxSync();
   startAutoReplyChecks();
 });

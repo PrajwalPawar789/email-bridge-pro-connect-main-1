@@ -28,7 +28,7 @@ export interface SendEmailNodeConfig {
 
 export interface WaitNodeConfig {
   duration: number;
-  unit: "minutes" | "hours" | "days";
+  unit: "seconds" | "minutes" | "hours" | "days";
   timeWindowStart?: string;
   timeWindowEnd?: string;
   randomized: boolean;

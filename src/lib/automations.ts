@@ -3,7 +3,7 @@ import { supabase } from "@/integrations/supabase/client";
 export type AutomationWorkflowStatus = "draft" | "live" | "paused" | "archived";
 export type AutomationTriggerType = "list_joined" | "manual" | "custom_event";
 export type AutomationStepType = "send_email" | "wait" | "condition" | "stop";
-export type WaitUnit = "minutes" | "hours" | "days";
+export type WaitUnit = "seconds" | "minutes" | "hours" | "days";
 export type ConditionRule =
   | "has_replied"
   | "email_domain_contains"
