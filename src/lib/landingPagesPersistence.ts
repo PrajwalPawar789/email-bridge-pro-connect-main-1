@@ -1,6 +1,7 @@
 import { supabase } from '@/integrations/supabase/client';
 import { buildLandingEmbeddingText, indexAiBuilderObject } from '@/lib/aiBuilder';
 import { normalizeLandingPageFormContent } from '@/lib/landingPageForms';
+import { normalizeLandingPageSettings, type LandingPageSettings } from '@/lib/landingPageSettings';
 
 export type LandingPageBlockType =
   | 'hero'
@@ -16,7 +17,11 @@ export type LandingPageBlockType =
   | 'navbar'
   | 'gallery'
   | 'stats'
-  | 'video';
+  | 'video'
+  | 'logos'
+  | 'steps'
+  | 'comparison'
+  | 'countdown';
 
 export interface LandingPageBlock {
   id: string;
@@ -30,6 +35,7 @@ export interface LandingPageRecord {
   name: string;
   slug: string;
   blocks: LandingPageBlock[];
+  settings: LandingPageSettings;
   published: boolean;
   domain?: string;
   createdAt: Date;
@@ -71,11 +77,15 @@ const normalizeBlockType = (value: string): LandingPageBlockType => {
     'faq',
     'form',
     'footer',
-    'navbar',
-    'gallery',
-    'stats',
-    'video',
-  ];
+      'navbar',
+      'gallery',
+      'stats',
+      'video',
+      'logos',
+      'steps',
+      'comparison',
+      'countdown',
+    ];
   return known.includes(value as LandingPageBlockType) ? (value as LandingPageBlockType) : 'text';
 };
 
@@ -100,8 +110,9 @@ const renderFeatureItems = (items: any[]) =>
     .join('');
 
 const renderBlockHtml = (block: LandingPageBlock) => {
-  const inlineStyles = stylesToInline(block.styles);
-  const wrapper = inlineStyles ? ` style="${inlineStyles}"` : '';
+  const inlineStylesRaw = stylesToInline(block.styles);
+  const inlineStyles = inlineStylesRaw ? `${inlineStylesRaw};` : '';
+  const wrapper = '';
 
   switch (block.type) {
     case 'navbar': {
@@ -224,6 +235,64 @@ const renderBlockHtml = (block: LandingPageBlock) => {
         url
       )}" style="color:#0f766e;text-decoration:underline;">${escapeHtml(String(block.content.title || 'Watch video'))}</a></section>`;
     }
+    case 'logos': {
+      const items = Array.isArray(block.content.items) ? block.content.items : [];
+      return `<section${wrapper} style="${inlineStyles};padding:28px 24px;"><div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(120px,1fr));gap:12px;align-items:center;">${items
+        .map((item: any) => {
+          const src = String(item?.imageUrl || '').trim();
+          const label = escapeHtml(String(item?.name || 'Logo'));
+          return src
+            ? `<div style="padding:16px;border:1px solid #e2e8f0;border-radius:14px;text-align:center;background:#fff;"><img src="${escapeHtml(
+                src
+              )}" alt="${label}" style="max-height:32px;max-width:100%;object-fit:contain;" /></div>`
+            : `<div style="padding:16px;border:1px solid #e2e8f0;border-radius:14px;text-align:center;background:#fff;color:#475569;font-weight:600;">${label}</div>`;
+        })
+        .join('')}</div></section>`;
+    }
+    case 'steps': {
+      const items = Array.isArray(block.content.items) ? block.content.items : [];
+      return `<section${wrapper} style="${inlineStyles};padding:48px 24px;"><h2 style="margin:0 0 20px 0;text-align:center;">${escapeHtml(
+        String(block.content.title || 'How it works')
+      )}</h2><div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:16px;">${items
+        .map(
+          (item: any, index: number) =>
+            `<article style="border:1px solid #e2e8f0;border-radius:16px;padding:18px;background:#fff;"><div style="font-size:12px;letter-spacing:0.2em;text-transform:uppercase;color:#64748b;">Step ${index + 1}</div><h3 style="margin:10px 0 8px 0;">${escapeHtml(
+              String(item?.title || '')
+            )}</h3><p style="margin:0;color:#475569;">${escapeHtml(String(item?.desc || ''))}</p></article>`
+        )
+        .join('')}</div></section>`;
+    }
+    case 'comparison': {
+      const columns = Array.isArray(block.content.columns) ? block.content.columns : [];
+      const rows = Array.isArray(block.content.rows) ? block.content.rows : [];
+      return `<section${wrapper} style="${inlineStyles};padding:48px 24px;"><h2 style="margin:0 0 20px 0;text-align:center;">${escapeHtml(
+        String(block.content.title || 'Compare options')
+      )}</h2><div style="overflow:auto;"><table style="width:100%;border-collapse:separate;border-spacing:0;border:1px solid #e2e8f0;border-radius:16px;overflow:hidden;background:#fff;"><thead><tr><th style="text-align:left;padding:14px;border-bottom:1px solid #e2e8f0;">Feature</th>${columns
+        .map((column: any) => `<th style="text-align:left;padding:14px;border-bottom:1px solid #e2e8f0;">${escapeHtml(String(column?.label || 'Column'))}</th>`)
+        .join('')}</tr></thead><tbody>${rows
+        .map((row: any) => `<tr><td style="padding:14px;border-bottom:1px solid #e2e8f0;color:#0f172a;font-weight:600;">${escapeHtml(
+          String(row?.feature || '')
+        )}</td>${columns
+          .map((column: any) => {
+            const key = String(column?.key || '').trim();
+            return `<td style="padding:14px;border-bottom:1px solid #e2e8f0;color:#475569;">${escapeHtml(String(row?.[key] || ''))}</td>`;
+          })
+          .join('')}</tr>`)
+        .join('')}</tbody></table></div></section>`;
+    }
+    case 'countdown': {
+      const label = String(block.content.label || 'Offer ends soon');
+      const endDate = String(block.content.endDate || '').trim();
+      const buttonText = String(block.content.buttonText || '').trim();
+      const buttonUrl = String(block.content.buttonUrl || '#').trim();
+      return `<section${wrapper} style="${inlineStyles};padding:40px 24px;text-align:center;"><div style="display:inline-block;border:1px solid #e2e8f0;border-radius:18px;padding:24px;background:#fff;"><p style="margin:0 0 8px 0;font-size:13px;letter-spacing:0.2em;text-transform:uppercase;color:#64748b;">${escapeHtml(
+        label
+      )}</p><p style="margin:0;font-size:28px;font-weight:700;color:#0f172a;">${escapeHtml(
+        endDate || 'Set a launch date'
+      )}</p>${buttonText ? `<a href="${escapeHtml(buttonUrl)}" style="display:inline-block;margin-top:16px;background:#0f766e;color:#fff;text-decoration:none;padding:12px 18px;border-radius:999px;">${escapeHtml(
+            buttonText
+          )}</a>` : ''}</div></section>`;
+    }
     case 'footer': {
       const links = Array.isArray(block.content.links) ? block.content.links : [];
       return `<footer${wrapper} style="${inlineStyles};padding:24px;border-top:1px solid #e2e8f0;color:#64748b;display:flex;justify-content:space-between;align-items:center;"><span>${escapeHtml(
@@ -238,10 +307,15 @@ const renderBlockHtml = (block: LandingPageBlock) => {
 };
 
 export const renderLandingPageHtml = (page: LandingPageRecord) => {
+  const settings = normalizeLandingPageSettings(page.settings);
+  const metaTitle = escapeHtml(settings.seo.title || page.name || 'Landing page');
+  const metaDescription = escapeHtml(settings.seo.description || '');
   const body = page.blocks.map(renderBlockHtml).join('');
-  return `<!doctype html><html><head><meta charset="utf-8" /><meta name="viewport" content="width=device-width,initial-scale=1" /><title>${escapeHtml(
-    page.name || 'Landing page'
-  )}</title></head><body style="margin:0;background:#ffffff;color:#0f172a;font-family:Arial,Helvetica,sans-serif;">${body}</body></html>`;
+  return `<!doctype html><html><head><meta charset="utf-8" /><meta name="viewport" content="width=device-width,initial-scale=1" /><title>${metaTitle}</title>${metaDescription ? `<meta name="description" content="${metaDescription}" />` : ''}${settings.seo.ogImageUrl ? `<meta property="og:image" content="${escapeHtml(settings.seo.ogImageUrl)}" />` : ''}</head><body style="margin:0;background:${escapeHtml(
+    settings.theme.background
+  )};color:${escapeHtml(settings.theme.text)};font-family:${escapeHtml(
+    settings.theme.bodyFont
+  )};">${body}</body></html>`;
 };
 
 const toLandingPageRecord = (row: any): LandingPageRecord => ({
@@ -249,6 +323,7 @@ const toLandingPageRecord = (row: any): LandingPageRecord => ({
   name: String(row.name || ''),
   slug: String(row.slug || ''),
   blocks: normalizeBlocks(row.blocks),
+  settings: normalizeLandingPageSettings(row.settings),
   published: Boolean(row.published),
   domain: row.domain ? String(row.domain) : undefined,
   createdAt: row?.created_at ? new Date(row.created_at) : new Date(),
@@ -293,7 +368,7 @@ export const listLandingPages = async (): Promise<LandingPageRecord[]> => {
   const user = await getAuthenticatedUser();
   const { data, error } = await (supabase as any)
     .from('landing_pages')
-    .select('id, name, slug, blocks, published, domain, created_at, updated_at')
+    .select('id, name, slug, blocks, settings, published, domain, created_at, updated_at')
     .eq('user_id', user.id)
     .order('updated_at', { ascending: false });
 
@@ -309,6 +384,7 @@ export const saveLandingPage = async (page: LandingPageRecord): Promise<LandingP
     name: (page.name || '').trim() || 'Untitled page',
     slug: slugify(page.slug || page.name || ''),
     blocks: normalizeBlocks(page.blocks),
+    settings: normalizeLandingPageSettings(page.settings),
     published: Boolean(page.published),
     domain: page.domain?.trim() || undefined,
   };
@@ -325,6 +401,7 @@ export const saveLandingPage = async (page: LandingPageRecord): Promise<LandingP
         name: normalizedPage.name,
         slug: normalizedPage.slug,
         blocks: normalizedPage.blocks,
+        settings: normalizedPage.settings,
         published: normalizedPage.published,
         domain: normalizedPage.domain || null,
         content_html: contentHtml,
@@ -332,7 +409,7 @@ export const saveLandingPage = async (page: LandingPageRecord): Promise<LandingP
       },
       { onConflict: 'id' }
     )
-    .select('id, name, slug, blocks, published, domain, created_at, updated_at')
+    .select('id, name, slug, blocks, settings, published, domain, created_at, updated_at')
     .single();
 
   if (error) throw error;
@@ -361,7 +438,7 @@ export const getPublishedLandingPage = async (slug: string) => {
 
   const { data, error } = await (supabase as any)
     .from('landing_pages')
-    .select('id, name, slug, content_html, blocks, published')
+    .select('id, name, slug, content_html, blocks, settings, published')
     .eq('slug', normalized)
     .eq('published', true)
     .limit(1)
@@ -374,6 +451,7 @@ export const getPublishedLandingPage = async (slug: string) => {
     name: String(data.name || ''),
     slug: String(data.slug || ''),
     blocks: normalizeBlocks(data.blocks),
+    settings: normalizeLandingPageSettings(data.settings),
     contentHtml: String(data.content_html || ''),
   };
 };

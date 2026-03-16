@@ -696,7 +696,7 @@ const Automations = () => {
           title: "Saved",
           description:
             payload.compileErrors.length > 0
-              ? `Workflow saved with ${payload.compileErrors.length} legacy fallback warning(s).`
+              ? `Workflow saved with ${payload.compileErrors.length} legacy compatibility note(s).`
               : "Workflow updated.",
         });
       }
@@ -1951,10 +1951,10 @@ const Automations = () => {
                               <div className="rounded-xl border border-amber-200 bg-amber-50 p-3 text-xs text-amber-800">
                                 <p className="mb-1 flex items-center gap-1 font-semibold uppercase tracking-[0.12em]">
                                   <AlertTriangle className="h-3.5 w-3.5" />
-                                  Legacy fallback warnings
+                                  Legacy compatibility notes
                                 </p>
                                 <p className="mb-2 text-[11px] text-amber-700/90">
-                                  The live graph runner still uses the full workflow. These warnings only describe what would be lost in the older linear fallback.
+                                  The live graph runner still uses the full workflow. These notes only describe what the older linear fallback cannot represent.
                                 </p>
                                 <div className="space-y-1">
                                   {builderPayload.compileErrors

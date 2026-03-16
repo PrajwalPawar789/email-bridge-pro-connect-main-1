@@ -3,11 +3,16 @@ import {
   DEFAULT_LANDING_PAGE_FORM_CONTENT,
   createLandingPageFormField,
 } from '@/lib/landingPageForms';
+import {
+  buildLandingPageSettingsFromPreset,
+  type LandingPageSettings,
+} from '@/lib/landingPageSettings';
 
 export interface LandingPageTemplateDefinition {
   id: string;
   name: string;
   description: string;
+  settings?: Partial<LandingPageSettings> & { themePresetId?: string };
   blocks: Array<{
     type: LandingPageBlockType;
     content?: Record<string, any>;
@@ -56,6 +61,36 @@ export const DEFAULT_LANDING_BLOCK_CONTENT: Record<LandingPageBlockType, Record<
     ],
   },
   video: { url: '', title: 'Watch Demo' },
+  logos: {
+    title: 'Trusted by teams moving pipeline faster',
+    items: [{ name: 'Northwind' }, { name: 'Atlas' }, { name: 'Harbor' }, { name: 'Crescent' }],
+  },
+  steps: {
+    title: 'How it works',
+    items: [
+      { title: 'Capture intent', desc: 'Turn traffic into enriched leads with one form.' },
+      { title: 'Qualify automatically', desc: 'Route high-intent submissions into the right list and workflow.' },
+      { title: 'Convert faster', desc: 'Move context into your sales process without manual copy/paste.' },
+    ],
+  },
+  comparison: {
+    title: 'Why teams switch',
+    columns: [
+      { key: 'legacy', label: 'Legacy stack' },
+      { key: 'modern', label: 'This flow' },
+    ],
+    rows: [
+      { feature: 'Page launch speed', legacy: 'Days', modern: 'Minutes' },
+      { feature: 'Lead routing', legacy: 'Manual', modern: 'Automatic' },
+      { feature: 'Optimization', legacy: 'Guesswork', modern: 'Built-in analytics' },
+    ],
+  },
+  countdown: {
+    label: 'Launch window',
+    endDate: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString(),
+    buttonText: 'Claim access',
+    buttonUrl: '#contact',
+  },
 };
 
 const createBlockFromDefinition = (
@@ -74,23 +109,64 @@ export const createLandingPageBlock = (
   overrides?: { content?: Record<string, any>; styles?: Record<string, any> }
 ) => createBlockFromDefinition(type, overrides?.content, overrides?.styles);
 
+export const buildLandingPageTemplateSettings = (template: LandingPageTemplateDefinition) =>
+  buildLandingPageSettingsFromPreset(template.settings?.themePresetId || 'signal', template.settings);
+
 export const LANDING_PAGE_TEMPLATES: LandingPageTemplateDefinition[] = [
   {
     id: 'saas-launch',
     name: 'SaaS Launch',
     description: 'Product-focused page with value props, pricing, and FAQ.',
+    settings: {
+      themePresetId: 'signal',
+      announcementBar: {
+        enabled: true,
+        text: 'Q2 launch special: onboarding credits for the first 25 teams.',
+        ctaText: 'See plans',
+        ctaUrl: '#pricing',
+      },
+      stickyCta: {
+        enabled: true,
+        label: 'Want your outbound stack in one workspace?',
+        buttonText: 'Start free trial',
+        buttonUrl: '/auth',
+      },
+      seo: {
+        title: 'FlowPilot | Convert outbound traffic into pipeline',
+        description: 'Launch conversion-focused landing pages with analytics, smart forms, and campaign-ready follow-up.',
+        keywords: ['landing page builder', 'outbound conversion', 'lead capture'],
+        ogImageUrl: '',
+        canonicalUrl: '',
+      },
+    },
     blocks: [
       {
         type: 'navbar',
-        content: { brand: 'FlowPilot', links: ['Product', 'Customers', 'Pricing', 'Login'] },
+        content: {
+          brand: 'FlowPilot',
+          links: ['Product', 'Customers', 'Pricing', 'FAQ'],
+          ctaText: 'Start trial',
+          ctaUrl: '/auth',
+        },
       },
       {
         type: 'hero',
         content: {
+          badge: 'Conversion OS for modern GTM teams',
           headline: 'Run smarter outbound in one workspace',
           subheadline: 'Automate campaigns, enrich leads, and ship more pipeline without hiring more reps.',
           ctaText: 'Start Free Trial',
           ctaUrl: '/auth',
+          secondaryCtaText: 'Book demo',
+          secondaryCtaUrl: '#contact',
+          highlights: ['Smart routing', 'Query-param personalization', 'Built-in analytics'],
+        },
+      },
+      {
+        type: 'logos',
+        content: {
+          title: 'Trusted by revenue teams scaling with precision',
+          items: [{ name: 'Northwind' }, { name: 'Atlas' }, { name: 'Harbor' }, { name: 'Apollo Ridge' }],
         },
       },
       {
@@ -107,10 +183,37 @@ export const LANDING_PAGE_TEMPLATES: LandingPageTemplateDefinition[] = [
         type: 'features',
         content: {
           title: 'Everything your team needs',
+          description: 'Build pages, capture intent, and route the next action from one system.',
           items: [
-            { title: 'Smart Sequences', desc: 'Branching flows based on opens, replies, and events.' },
-            { title: 'Inbox Co-Pilot', desc: 'AI drafting and suggested follow-ups inside one inbox.' },
-            { title: 'Team Governance', desc: 'Shared templates, approvals, and workspace controls.' },
+            { title: 'Smart Sequences', desc: 'Branching flows based on opens, replies, and events.', bullets: ['Event triggers', 'Reply-aware paths', 'Audience routing'] },
+            { title: 'Inbox Co-Pilot', desc: 'AI drafting and suggested follow-ups inside one inbox.', bullets: ['Draft assistance', 'Context threads', 'Quality checks'] },
+            { title: 'Team Governance', desc: 'Shared templates, approvals, and workspace controls.', bullets: ['Approval rules', 'Workspace limits', 'Audit history'] },
+          ],
+        },
+      },
+      {
+        type: 'steps',
+        content: {
+          title: 'From click to qualified lead in three moves',
+          items: [
+            { title: 'Launch a page', desc: 'Choose a template, apply your brand theme, and publish in minutes.' },
+            { title: 'Capture and qualify', desc: 'Collect context-rich submissions with consent, redirects, and asset delivery.' },
+            { title: 'Trigger follow-up', desc: 'Push the lead to the right list and activate the next campaign or workflow.' },
+          ],
+        },
+      },
+      {
+        type: 'comparison',
+        content: {
+          title: 'Why teams switch from generic builders',
+          columns: [
+            { key: 'generic', label: 'Generic page builder' },
+            { key: 'flowpilot', label: 'FlowPilot' },
+          ],
+          rows: [
+            { feature: 'Lead destination', generic: 'Manual export', flowpilot: 'List + prospect sync' },
+            { feature: 'Personalization', generic: 'Static copy', flowpilot: 'Query-driven copy' },
+            { feature: 'Optimization', generic: 'Vanity metrics', flowpilot: 'Views, clicks, conversions' },
           ],
         },
       },
@@ -119,9 +222,9 @@ export const LANDING_PAGE_TEMPLATES: LandingPageTemplateDefinition[] = [
         content: {
           title: 'Simple pricing',
           plans: [
-            { name: 'Starter', price: '$49/mo', features: ['2 seats', '5k contacts', 'Basic automation'] },
-            { name: 'Growth', price: '$129/mo', features: ['10 seats', '25k contacts', 'AI workflows'] },
-            { name: 'Scale', price: 'Custom', features: ['Unlimited seats', 'SLA support', 'SSO + audit logs'] },
+            { name: 'Starter', price: '$49/mo', features: ['2 seats', '5k contacts', 'Basic automation'], ctaText: 'Start starter', ctaUrl: '/auth' },
+            { name: 'Growth', price: '$129/mo', features: ['10 seats', '25k contacts', 'AI workflows'], ctaText: 'Choose growth', ctaUrl: '/auth', featured: true },
+            { name: 'Scale', price: 'Custom', features: ['Unlimited seats', 'SLA support', 'SSO + audit logs'], ctaText: 'Talk to sales', ctaUrl: '#contact' },
           ],
         },
       },
@@ -150,11 +253,30 @@ export const LANDING_PAGE_TEMPLATES: LandingPageTemplateDefinition[] = [
       },
       {
         type: 'cta',
-        content: { headline: 'Ready to see it in action?', buttonText: 'Book Demo', buttonUrl: '/dashboard' },
+        content: { headline: 'Ready to see it in action?', body: 'Spin up a branded landing page and route the next lead automatically.', buttonText: 'Book Demo', buttonUrl: '#contact' },
+      },
+      {
+        type: 'form',
+        content: {
+          ...DEFAULT_LANDING_PAGE_FORM_CONTENT,
+          title: 'Request a tailored walkthrough',
+          description: 'Share your team size, stack, and goals so we can map the best setup.',
+          buttonText: 'Request walkthrough',
+          successMessage: 'Thanks. We are reviewing your request now.',
+          anchorId: 'contact',
+          requireConsent: true,
+          consentLabel: 'I agree to receive follow-up emails about my request.',
+          fields: [
+            createLandingPageFormField({ id: 'name', key: 'name', label: 'Full name', type: 'text', placeholder: 'Jordan Lee', required: true }),
+            createLandingPageFormField({ id: 'email', key: 'email', label: 'Work email', type: 'email', placeholder: 'jordan@company.com', required: true }),
+            createLandingPageFormField({ id: 'company', key: 'company', label: 'Company', type: 'text', placeholder: '{{company|Northwind}}' }),
+            createLandingPageFormField({ id: 'job_title', key: 'job_title', label: 'Role', type: 'text', placeholder: 'Head of Growth' }),
+          ],
+        },
       },
       {
         type: 'footer',
-        content: { brand: 'FlowPilot', links: ['Privacy', 'Terms', 'Status'] },
+        content: { brand: 'FlowPilot', tagline: 'The conversion system for modern outbound teams.', links: ['Privacy', 'Terms', 'Status'] },
       },
     ],
   },
@@ -162,18 +284,38 @@ export const LANDING_PAGE_TEMPLATES: LandingPageTemplateDefinition[] = [
     id: 'agency-services',
     name: 'Agency Services',
     description: 'Consulting-style page with outcomes, proof, and lead form.',
+    settings: {
+      themePresetId: 'ember',
+      stickyCta: {
+        enabled: true,
+        label: 'Need a pipeline audit?',
+        buttonText: 'Request proposal',
+        buttonUrl: '#contact',
+      },
+      seo: {
+        title: 'BrightForge | Outbound systems for B2B teams',
+        description: 'Strategy, systems, and execution for outbound teams that need repeatable pipeline.',
+        keywords: ['outbound consulting', 'pipeline systems', 'revenue operations'],
+        ogImageUrl: '',
+        canonicalUrl: '',
+      },
+    },
     blocks: [
       {
         type: 'navbar',
-        content: { brand: 'BrightForge', links: ['Services', 'Case Studies', 'Process', 'Contact'] },
+        content: { brand: 'BrightForge', links: ['Services', 'Proof', 'Process', 'Contact'], ctaText: 'Request proposal', ctaUrl: '#contact' },
       },
       {
         type: 'hero',
         content: {
+          badge: 'Fractional RevOps + outbound execution',
           headline: 'We build outbound engines that scale',
           subheadline: 'Strategy, systems, and execution for B2B teams that need predictable pipeline.',
           ctaText: 'Get Proposal',
           ctaUrl: '#contact',
+          secondaryCtaText: 'See process',
+          secondaryCtaUrl: '#process',
+          highlights: ['ICP refinement', 'Sequence operations', 'Weekly reporting'],
         },
       },
       {
@@ -184,6 +326,13 @@ export const LANDING_PAGE_TEMPLATES: LandingPageTemplateDefinition[] = [
         },
       },
       {
+        type: 'logos',
+        content: {
+          title: 'Teams we have supported',
+          items: [{ name: 'SignalOps' }, { name: 'Northline' }, { name: 'Aperture' }, { name: 'Blue Canvas' }],
+        },
+      },
+      {
         type: 'features',
         content: {
           title: 'What we deliver',
@@ -191,6 +340,18 @@ export const LANDING_PAGE_TEMPLATES: LandingPageTemplateDefinition[] = [
             { title: 'Market Positioning', desc: 'Tight messaging for each segment and persona.' },
             { title: 'Campaign Ops', desc: 'Multichannel sequencing with clean data and QA.' },
             { title: 'Sales Enablement', desc: 'Playbooks your team can own long-term.' },
+          ],
+        },
+      },
+      {
+        type: 'steps',
+        content: {
+          title: 'Our process',
+          description: 'We operate like an embedded growth team with weekly execution accountability.',
+          items: [
+            { title: 'Audit the current motion', desc: 'Messaging, data quality, sender setup, and conversion bottlenecks.' },
+            { title: 'Build the operating system', desc: 'Templates, workflows, reporting, and CRM handoff rules.' },
+            { title: 'Scale with weekly feedback', desc: 'Conversion reviews, offer testing, and pipeline reporting.' },
           ],
         },
       },
@@ -219,6 +380,8 @@ export const LANDING_PAGE_TEMPLATES: LandingPageTemplateDefinition[] = [
           buttonText: 'Request proposal',
           successMessage: 'Thanks. We will review your goals and get back to you shortly.',
           anchorId: 'contact',
+          requireConsent: true,
+          consentLabel: 'I consent to BrightForge contacting me about this proposal request.',
           fields: [
             createLandingPageFormField({
               id: 'name',
@@ -263,7 +426,7 @@ export const LANDING_PAGE_TEMPLATES: LandingPageTemplateDefinition[] = [
       },
       {
         type: 'footer',
-        content: { brand: 'BrightForge', links: ['LinkedIn', 'Privacy', 'Terms'] },
+        content: { brand: 'BrightForge', tagline: 'Strategy, systems, and execution for modern revenue teams.', links: ['LinkedIn', 'Privacy', 'Terms'] },
       },
     ],
   },
@@ -271,14 +434,41 @@ export const LANDING_PAGE_TEMPLATES: LandingPageTemplateDefinition[] = [
     id: 'event-webinar',
     name: 'Webinar Registration',
     description: 'Event signup page with video teaser, schedule, and FAQs.',
+    settings: {
+      themePresetId: 'midnight',
+      announcementBar: {
+        enabled: true,
+        text: 'Seats are limited for the live workshop on March 26.',
+        ctaText: 'Reserve now',
+        ctaUrl: '#register',
+      },
+      seo: {
+        title: 'Outbound Playbook Live | Register for the webinar',
+        description: 'Join a tactical live session on AI prompts, outbound systems, and conversion tuning.',
+        keywords: ['webinar landing page', 'register event', 'outbound playbook'],
+        ogImageUrl: '',
+        canonicalUrl: '',
+      },
+    },
     blocks: [
       {
         type: 'hero',
         content: {
+          badge: 'Live session for B2B growth leaders',
           headline: 'Join the 2026 Outbound Playbook Live',
           subheadline: 'A tactical 60-minute session on sequences, AI prompts, and conversion tuning.',
           ctaText: 'Reserve My Seat',
           ctaUrl: '#register',
+          highlights: ['March 26', '60 minutes', 'Replay included'],
+        },
+      },
+      {
+        type: 'countdown',
+        content: {
+          label: 'Registration closes soon',
+          endDate: '2026-03-26T16:00:00.000Z',
+          buttonText: 'Reserve my seat',
+          buttonUrl: '#register',
         },
       },
       {
@@ -309,6 +499,17 @@ export const LANDING_PAGE_TEMPLATES: LandingPageTemplateDefinition[] = [
         },
       },
       {
+        type: 'steps',
+        content: {
+          title: 'What you will leave with',
+          items: [
+            { title: 'A clean messaging framework', desc: 'Translate positioning into landing-page and outbound copy that converts.' },
+            { title: 'A practical automation map', desc: 'See how the best teams route leads and trigger follow-up in real time.' },
+            { title: 'An optimization checklist', desc: 'Know what to measure after launch and what to change next.' },
+          ],
+        },
+      },
+      {
         type: 'faq',
         content: {
           title: 'Before you register',
@@ -327,6 +528,10 @@ export const LANDING_PAGE_TEMPLATES: LandingPageTemplateDefinition[] = [
           buttonText: 'Reserve my seat',
           successMessage: 'You are in. Check your inbox for confirmation details.',
           anchorId: 'register',
+          successRedirectUrl: '',
+          successAssetUrl: '/platform/workflow-automation-map.svg',
+          requireConsent: true,
+          consentLabel: 'I agree to receive event reminders and related follow-up.',
           fields: [
             createLandingPageFormField({
               id: 'name',
@@ -356,7 +561,7 @@ export const LANDING_PAGE_TEMPLATES: LandingPageTemplateDefinition[] = [
       },
       {
         type: 'footer',
-        content: { brand: 'Outbound Summit', links: ['Contact', 'Terms', 'Privacy'] },
+        content: { brand: 'Outbound Summit', tagline: 'Tactical workshops for revenue teams that execute fast.', links: ['Contact', 'Terms', 'Privacy'] },
       },
     ],
   },
@@ -364,14 +569,25 @@ export const LANDING_PAGE_TEMPLATES: LandingPageTemplateDefinition[] = [
     id: 'lead-magnet',
     name: 'Lead Magnet',
     description: 'Simple opt-in page for ebook, checklist, or downloadable asset.',
+    settings: {
+      themePresetId: 'grove',
+      stickyCta: {
+        enabled: true,
+        label: 'Want the playbook in your inbox?',
+        buttonText: 'Get the guide',
+        buttonUrl: '#download',
+      },
+    },
     blocks: [
       {
         type: 'hero',
         content: {
+          badge: 'Operator-approved resource',
           headline: 'Download the GTM Playbook',
           subheadline: '50 pages of frameworks, scripts, and KPI targets used by top-performing teams.',
           ctaText: 'Get the Playbook',
           ctaUrl: '#download',
+          highlights: ['50 pages', 'Benchmarks included', 'Instant delivery'],
         },
       },
       {
@@ -393,6 +609,21 @@ export const LANDING_PAGE_TEMPLATES: LandingPageTemplateDefinition[] = [
         },
       },
       {
+        type: 'comparison',
+        content: {
+          title: 'What this guide helps you fix',
+          columns: [
+            { key: 'before', label: 'Before' },
+            { key: 'after', label: 'After' },
+          ],
+          rows: [
+            { feature: 'Messaging', before: 'Generic claims', after: 'Audience-specific positioning' },
+            { feature: 'Reporting', before: 'Disconnected spreadsheets', after: 'Clear weekly operating metrics' },
+            { feature: 'Execution', before: 'Manual handoffs', after: 'Repeatable campaign process' },
+          ],
+        },
+      },
+      {
         type: 'form',
         content: {
           ...DEFAULT_LANDING_PAGE_FORM_CONTENT,
@@ -401,6 +632,9 @@ export const LANDING_PAGE_TEMPLATES: LandingPageTemplateDefinition[] = [
           buttonText: 'Send me the guide',
           successMessage: 'Thanks. The resource is on its way.',
           anchorId: 'download',
+          successAssetUrl: '/templates/email-accounts-sample.xlsx',
+          requireConsent: true,
+          consentLabel: 'I agree to receive the guide and occasional related updates.',
           fields: [
             createLandingPageFormField({
               id: 'name',
@@ -442,7 +676,7 @@ export const LANDING_PAGE_TEMPLATES: LandingPageTemplateDefinition[] = [
       },
       {
         type: 'footer',
-        content: { brand: 'GTM Labs', links: ['Privacy', 'Support'] },
+        content: { brand: 'GTM Labs', tagline: 'Resources and systems for better outbound execution.', links: ['Privacy', 'Support'] },
       },
     ],
   },

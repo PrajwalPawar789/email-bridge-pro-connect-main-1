@@ -33,6 +33,9 @@ verify_jwt = false
 [functions.resolve-site-domain]
 verify_jwt = false
 
+[functions.resolve-site-page]
+verify_jwt = false
+
 [functions.verify-site-domain]
 verify_jwt = false
 

@@ -2,6 +2,14 @@
   "$schema": "https://openapi.vercel.sh/vercel.json",
   "rewrites": [
     {
+      "source": "/api/resolve-site-page",
+      "destination": "https://smwjzloqamtvemljedkv.supabase.co/functions/v1/resolve-site-page"
+    },
+    {
+      "source": "/api/resolve-site-domain",
+      "destination": "https://smwjzloqamtvemljedkv.supabase.co/functions/v1/resolve-site-domain"
+    },
+    {
       "source": "/(.*)",
       "destination": "/"
     }

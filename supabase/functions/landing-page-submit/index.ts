@@ -390,6 +390,30 @@ serve(async (request) => {
       return jsonResponse({ error: submissionError.message }, 400);
     }
 
+    const { error: eventError } = await admin
+      .from("landing_page_events")
+      .insert({
+        user_id: String(pageRow.user_id || ""),
+        landing_page_id: String(pageRow.id || ""),
+        event_type: "form_submit",
+        session_id: truncate(context.sessionId, 160) || null,
+        block_id: formId || null,
+        label: pickString(content.title, "Lead form") || null,
+        source_url: sourceUrl || null,
+        referrer: referrer || null,
+        utm_source: truncate(context.utmSource, 255) || null,
+        utm_medium: truncate(context.utmMedium, 255) || null,
+        utm_campaign: truncate(context.utmCampaign, 255) || null,
+        utm_term: truncate(context.utmTerm, 255) || null,
+        utm_content: truncate(context.utmContent, 255) || null,
+        metadata,
+        payload: values,
+      });
+
+    if (eventError) {
+      console.warn("landing-page-submit analytics insert skipped:", eventError.message);
+    }
+
     return jsonResponse({
       success: true,
       pageId: String(pageRow.id || ""),

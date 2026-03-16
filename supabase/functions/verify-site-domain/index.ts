@@ -1,5 +1,6 @@
 import { serve } from "https://deno.land/std@0.190.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+import { parse } from "npm:tldts@7.0.16";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -137,24 +138,25 @@ const normalizeTxtValue = (value: string) =>
     .replace(/"\s*"/g, "")
     .toLowerCase();
 
-const inferZoneRoot = (domain: string) => {
-  const labels = normalizeHostname(domain).split(".").filter(Boolean);
-  if (labels.length <= 2) return normalizeHostname(domain);
-  return labels.slice(-2).join(".");
-};
+const getDomainParts = (domain: string) => {
+  const normalizedDomain = normalizeHostname(domain);
+  const parsed = parse(normalizedDomain, {
+    allowPrivateDomains: true,
+    extractHostname: true,
+  });
 
-const inferSubdomainHostLabel = (domain: string) => {
-  const labels = normalizeHostname(domain).split(".").filter(Boolean);
-  if (labels.length <= 2) return "";
-  return labels.slice(0, -2).join(".");
+  return {
+    normalizedDomain,
+    zoneRoot: normalizeHostname(parsed.domain || normalizedDomain),
+    hostLabel: normalizeHostname(parsed.subdomain || ""),
+  };
 };
 
 const resolveDnsRecordHost = (domain: string, recordName: string) => {
-  const normalizedDomain = normalizeHostname(domain);
+  const { normalizedDomain, zoneRoot } = getDomainParts(domain);
   const normalizedName = normalizeHostname(recordName);
   if (!normalizedName || normalizedName === "@") return normalizedDomain;
 
-  const zoneRoot = inferZoneRoot(normalizedDomain);
   if (normalizedName === zoneRoot || normalizedName.endsWith(`.${zoneRoot}`)) {
     return normalizedName;
   }
@@ -316,7 +318,7 @@ const buildVercelDnsRecords = (
   domainConfig: VercelDomainConfig | null
 ): SiteDnsRecord[] => {
   const records: SiteDnsRecord[] = [];
-  const hostLabel = inferSubdomainHostLabel(domain);
+  const { hostLabel } = getDomainParts(domain);
   const preferredIpv4 = getPreferredIpv4(domainConfig);
   const preferredCname = getPreferredCname(domainConfig);
 

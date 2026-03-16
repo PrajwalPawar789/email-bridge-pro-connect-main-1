@@ -1,15 +1,17 @@
 import { useEffect, useState } from 'react';
 import { useParams } from 'react-router-dom';
 import { getPublishedLandingPage } from '@/lib/landingPagesPersistence';
-import { extractHtmlTitle } from '@/lib/htmlDocument';
 import LandingPageRenderer from '@/components/landing-pages/LandingPageRenderer';
 import type { LandingPageBlock } from '@/lib/landingPagesPersistence';
+import type { LandingPageSettings } from '@/lib/landingPageSettings';
+import { applyLandingPageMetadata } from '@/lib/landingPageMetadata';
 
 interface PublishedPage {
   id: string;
   name: string;
   slug: string;
   blocks: LandingPageBlock[];
+  settings: LandingPageSettings;
   contentHtml: string;
 }
 
@@ -29,9 +31,8 @@ const PublishedLandingPage = () => {
         const published = await getPublishedLandingPage(slug);
         if (!cancelled) {
           setPage(published);
-          const resolvedTitle = published ? extractHtmlTitle(published.contentHtml) || published.name : '';
-          if (resolvedTitle) {
-            document.title = resolvedTitle;
+          if (published) {
+            applyLandingPageMetadata({ pageName: published.name, settings: published.settings });
           }
         }
       } catch (loadError: any) {

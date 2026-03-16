@@ -15,7 +15,11 @@ export interface LandingPageFormContent {
   description: string;
   buttonText: string;
   successMessage: string;
+  successRedirectUrl: string;
+  successAssetUrl: string;
   privacyNote: string;
+  requireConsent: boolean;
+  consentLabel: string;
   anchorId: string;
   targetListId: string;
   targetListName: string;
@@ -100,7 +104,11 @@ export const DEFAULT_LANDING_PAGE_FORM_CONTENT: LandingPageFormContent = {
   description: 'Tell us a bit about what you need and we will follow up shortly.',
   buttonText: 'Submit',
   successMessage: 'Thanks. Your details were received.',
+  successRedirectUrl: '',
+  successAssetUrl: '',
   privacyNote: 'We only use this information to follow up about your request.',
+  requireConsent: false,
+  consentLabel: 'I agree to receive follow-up communication about this request.',
   anchorId: 'contact',
   targetListId: '',
   targetListName: '',
@@ -153,7 +161,11 @@ export const normalizeLandingPageFormContent = (value: unknown): LandingPageForm
     description: String(raw.description || raw.subtitle || DEFAULT_LANDING_PAGE_FORM_CONTENT.description),
     buttonText: String(raw.buttonText || raw.ctaText || DEFAULT_LANDING_PAGE_FORM_CONTENT.buttonText),
     successMessage: String(raw.successMessage || DEFAULT_LANDING_PAGE_FORM_CONTENT.successMessage),
+    successRedirectUrl: String(raw.successRedirectUrl || ''),
+    successAssetUrl: String(raw.successAssetUrl || ''),
     privacyNote: String(raw.privacyNote || DEFAULT_LANDING_PAGE_FORM_CONTENT.privacyNote),
+    requireConsent: Boolean(raw.requireConsent),
+    consentLabel: String(raw.consentLabel || DEFAULT_LANDING_PAGE_FORM_CONTENT.consentLabel),
     anchorId: String(raw.anchorId || DEFAULT_LANDING_PAGE_FORM_CONTENT.anchorId),
     targetListId: String(raw.targetListId || ''),
     targetListName: String(raw.targetListName || ''),

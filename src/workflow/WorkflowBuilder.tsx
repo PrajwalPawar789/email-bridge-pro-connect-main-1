@@ -960,7 +960,7 @@ const WorkflowBuilder = ({
                   variant="outline"
                   className="border-amber-300 bg-amber-50 text-amber-700"
                 >
-                  {compile.errors.length} legacy fallback warning(s)
+                  {compile.errors.length} legacy compatibility note(s)
                 </Badge>
               ) : null}
             </div>

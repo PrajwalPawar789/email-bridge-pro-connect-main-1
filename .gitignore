@@ -37,3 +37,5 @@ tmp_test_write.txt
 claude-chat-canvas-main/
 onrender/
 onboarding/
+
+.vercel
