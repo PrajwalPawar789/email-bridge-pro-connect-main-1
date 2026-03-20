@@ -2,6 +2,7 @@
 import { serve } from "https://deno.land/std@0.190.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { createTransport } from "npm:nodemailer@6.9.7";
+import { looksLikeHtml, normalizePlainTextEmailBody } from "../../../shared/email-content.js";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -60,7 +61,6 @@ const escapeHtml = (value: string) =>
     .replace(/"/g, "&quot;")
     .replace(/'/g, "&#39;");
 
-const looksLikeHtml = (value: string) => /<\s*[a-z][\w-]*(\s[^>]*)?>/i.test(value);
 const EMAIL_BUILDER_STATE_REGEX = /<!--\s*VINTRO_EMAIL_BUILDER_STATE:([\s\S]*?)-->/;
 
 const fromBase64 = (value: string) => {
@@ -1086,7 +1086,8 @@ const sendEmailForStep = async (
   const personalizedSubject = personalize(subjectRaw, contact, state, sender);
   const personalizedBody = personalize(sourceTextBody, contact, state, sender);
   const personalizedHtmlBody = personalize(sourceHtmlBody, contact, state, sender);
-  const htmlBody = isHtml ? personalizedHtmlBody : formatPlainTextToHtml(personalizedBody);
+  const plainTextBody = isHtml ? personalizedBody : normalizePlainTextEmailBody(personalizedBody);
+  const htmlBody = isHtml ? personalizedHtmlBody : formatPlainTextToHtml(plainTextBody);
 
   const creditReferenceId = `automation:${workflow.id}:${contact.id}:step:${nodeId || stepIndex}:${Date.now()}`;
   const sendQuotaReferenceId = `automation:${workflow.id}:${contact.id}:step:${nodeId || stepIndex}:send-quota`;
@@ -1247,7 +1248,7 @@ const sendEmailForStep = async (
       to: String(contact.email || ""),
       subject: personalizedSubject,
       html: finalHtmlBody,
-      text: personalizedBody,
+      text: plainTextBody,
       messageId: generatedMessageId,
       headers,
     });
@@ -1306,7 +1307,7 @@ const sendEmailForStep = async (
       to_emails: [String(contact.email || "")],
       cc_emails: [],
       subject: personalizedSubject,
-      body: isHtml ? htmlBody : personalizedBody,
+      body: isHtml ? htmlBody : plainTextBody,
       date: sentAt,
       folder: "Sent",
       read: true,

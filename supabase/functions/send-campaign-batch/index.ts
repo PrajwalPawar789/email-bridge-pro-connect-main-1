@@ -2,6 +2,7 @@
 import { serve } from "https://deno.land/std@0.190.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { createTransport } from "npm:nodemailer@6.9.7";
+import { looksLikeHtml, normalizePlainTextEmailBody } from "../../../shared/email-content.js";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -244,7 +245,6 @@ const escapeHtml = (value: string) =>
     .replace(/"/g, '&quot;')
     .replace(/'/g, '&#39;');
 
-const looksLikeHtml = (value: string) => /<\s*[a-z][\w-]*(\s[^>]*)?>/i.test(value);
 const EMAIL_BUILDER_STATE_REGEX = /<!--\s*VINTRO_EMAIL_BUILDER_STATE:([\s\S]*?)-->/;
 
 const hasMarkdownFormatting = (value: string) =>
@@ -610,8 +610,15 @@ const sendEmail = async (
   const subjectToSend = contentOverride?.subject ?? campaign.subject;
   const bodyToSend = contentOverride?.body ?? campaign.body;
   const trackingPreferences = extractTrackingPreferences(bodyToSend);
+  const resolvedSenderEmail = String(config.username || '').trim();
+  const resolvedSenderName = String((config.sender_name || '').trim() || campaign.name || '').trim();
+  const personalizationData: PersonalizationData = {
+    ...extraData,
+    sender_email: resolvedSenderEmail,
+    sender_name: resolvedSenderName,
+  };
 
-  const personalizedSubject = personalizeContent(subjectToSend, recipient, extraData, true);
+  const personalizedSubject = personalizeContent(subjectToSend, recipient, personalizationData, true);
   console.log(`Personalized subject: ${personalizedSubject}`);
 
   const sourceTextContent = stripEmailBuilderState(
@@ -621,10 +628,10 @@ const sendEmail = async (
     trackingPreferences.builderHtml || trackingPreferences.cleanContent
   );
   const personalizedContent = stripEmailBuilderState(
-    personalizeContent(sourceTextContent, recipient, extraData)
+    personalizeContent(sourceTextContent, recipient, personalizationData)
   );
   const personalizedHtmlContent = stripEmailBuilderState(
-    personalizeContent(sourceHtmlContent, recipient, extraData)
+    personalizeContent(sourceHtmlContent, recipient, personalizationData)
   );
   console.log(`Personalizing content for recipient: ${recipient.id} (${recipient.email})`);
 
@@ -634,9 +641,12 @@ const sendEmail = async (
   if (!trackingPreferences.builderHtml && hasMarkdownFormatting(trackingPreferences.cleanContent)) {
     isHtmlContent = false;
   }
+  const plainTextContent = isHtmlContent
+    ? personalizedContent
+    : normalizePlainTextEmailBody(personalizedContent);
   const formattedContent = isHtmlContent
     ? personalizedHtmlContent
-    : formatPlainTextToHtml(personalizedContent);
+    : formatPlainTextToHtml(plainTextContent);
 
   const { content: contentWithClickTracking, trackingUrls } = addTrackingToLinks(formattedContent, campaign.id, recipient.id, step, {
     clickTrackingMode: trackingPreferences.clickTrackingMode,
@@ -676,8 +686,8 @@ const sendEmail = async (
 
   const messageId = generateUniqueId();
   const currentDate = new Date().toUTCString();
-  const senderEmail = config.username;
-  const senderName = (config.sender_name || '').trim() || campaign.name;
+  const senderEmail = resolvedSenderEmail;
+  const senderName = resolvedSenderName;
   const senderDomain = senderEmail.includes('@') ? senderEmail.split('@')[1] : 'example.com';
 
   console.log(`Sending email with improved anti-spam configuration to: ${recipient.email}`);
@@ -687,7 +697,7 @@ const sendEmail = async (
     to: recipient.email,
     subject: personalizedSubject,
     html: finalContent,
-    text: personalizedContent,
+    text: plainTextContent,
     messageId: `<${messageId}@${senderDomain}>`,
     headers: {
       'Date': currentDate,
