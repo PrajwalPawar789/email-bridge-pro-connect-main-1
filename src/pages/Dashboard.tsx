@@ -165,6 +165,7 @@ const Dashboard = () => {
       onTabChange={handleTabChange} 
       user={user} 
       onLogout={handleLogout}
+      contentClassName={normalizedActiveTab === 'segments' ? 'max-w-[1520px]' : undefined}
     >
       {mountedTabs.map((tabKey) => (
         <section key={tabKey} hidden={tabKey !== normalizedActiveTab}>
