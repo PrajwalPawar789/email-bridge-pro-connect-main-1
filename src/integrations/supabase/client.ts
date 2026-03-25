@@ -4,7 +4,7 @@ import type { Database } from './types';
 
 const RAW_SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL;
 const SUPABASE_PUBLISHABLE_KEY = import.meta.env.VITE_SUPABASE_ANON_KEY;
-const USE_DEV_PROXY = import.meta.env.DEV && import.meta.env.VITE_SUPABASE_DEV_PROXY !== 'false';
+const USE_DEV_PROXY = import.meta.env.DEV && import.meta.env.VITE_SUPABASE_DEV_PROXY === 'true';
 
 const SUPABASE_URL = USE_DEV_PROXY
   ? import.meta.env.VITE_SUPABASE_DEV_PROXY_URL ||

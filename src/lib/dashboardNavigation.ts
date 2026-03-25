@@ -26,6 +26,11 @@ export const handleDashboardTabNavigation = (navigate: NavigateFunction, tab: st
     return;
   }
 
+  if (tab === 'find') {
+    navigate('/find');
+    return;
+  }
+
   if (tab === 'referrals') {
     navigate('/referrals');
     return;

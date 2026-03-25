@@ -53,7 +53,7 @@ const createSupabaseProxy = (supabaseUrl: string, dnsServersRaw?: string) => {
 export default defineConfig(({ mode }) => {
   const env = loadEnv(mode, process.cwd(), "");
 
-  const useSupabaseDevProxy = mode === "development" && env.VITE_SUPABASE_DEV_PROXY !== "false";
+  const useSupabaseDevProxy = mode === "development" && env.VITE_SUPABASE_DEV_PROXY === "true";
   const proxy =
     useSupabaseDevProxy && env.VITE_SUPABASE_URL
       ? createSupabaseProxy(env.VITE_SUPABASE_URL, env.VITE_SUPABASE_DNS_SERVERS)

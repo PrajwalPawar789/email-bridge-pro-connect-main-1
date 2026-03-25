@@ -153,6 +153,7 @@ const Header = ({ user, onLogout, activeTab }: HeaderProps) => {
     inbox: 'Inbox',
     automations: 'Automations',
     contacts: 'Contacts',
+    find: 'Find',
     pipeline: 'Pipeline',
     referrals: 'Referrals',
     segments: 'Segments',
