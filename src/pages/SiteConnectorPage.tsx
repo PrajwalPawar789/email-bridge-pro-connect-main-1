@@ -7,20 +7,9 @@ import { Label } from '@/components/ui/label';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Globe, Plus, Shield, CheckCircle2, AlertCircle, Clock, Trash2, RefreshCw, Link2, ExternalLink, Copy } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
+import { getSiteConnectorDnsRecordDisplayName, normalizeAndValidateSiteDomain } from '@/lib/siteConnectorDomain';
 import { cn } from '@/lib/utils';
 import { toast } from 'sonner';
-
-const inferSubdomainHostLabel = (domain: string) => {
-  const labels = domain.trim().toLowerCase().split('.').filter(Boolean);
-  if (labels.length <= 2) return '';
-  return labels.slice(0, -2).join('.');
-};
-
-const inferZoneRoot = (domain: string) => {
-  const labels = domain.trim().toLowerCase().split('.').filter(Boolean);
-  if (labels.length <= 2) return domain.trim().toLowerCase();
-  return labels.slice(-2).join('.');
-};
 
 export default function SiteConnectorPage() {
   const {
@@ -59,10 +48,36 @@ export default function SiteConnectorPage() {
     () => [...pages].sort((a, b) => a.name.localeCompare(b.name)),
     [pages]
   );
+  const publishedPages = useMemo(
+    () => linkablePages.filter((page) => page.published),
+    [linkablePages]
+  );
 
   const pageById = useMemo(() => {
     return new Map(linkablePages.map((page) => [page.id, page]));
   }, [linkablePages]);
+
+  const domainValidation = useMemo(() => {
+    const value = newDomain.trim();
+    if (!value) {
+      return {
+        error: '',
+        details: null as ReturnType<typeof normalizeAndValidateSiteDomain> | null,
+      };
+    }
+
+    try {
+      return {
+        error: '',
+        details: normalizeAndValidateSiteDomain(value, domainType),
+      };
+    } catch (error) {
+      return {
+        error: error instanceof Error ? error.message : 'Enter a valid domain.',
+        details: null,
+      };
+    }
+  }, [domainType, newDomain]);
 
   const getOrigin = () => {
     if (typeof window === 'undefined') return '';
@@ -70,10 +85,11 @@ export default function SiteConnectorPage() {
   };
 
   const handleAdd = async () => {
-    const value = newDomain.trim();
-    if (!value) return;
+    if (!newDomain.trim()) return;
+
     try {
-      await addDomain(value, domainType);
+      const { normalizedDomain } = normalizeAndValidateSiteDomain(newDomain, domainType);
+      await addDomain(normalizedDomain, domainType);
       setNewDomain('');
       setShowAdd(false);
     } catch {
@@ -99,41 +115,51 @@ export default function SiteConnectorPage() {
     }
   };
 
-  const getDisplayRecordName = (
-    domainName: string,
-    domainType: 'root' | 'subdomain',
-    record: { type: string; name: string }
-  ) => {
-    const normalizedType = record.type.toUpperCase();
-    const normalizedDomain = domainName.trim().toLowerCase();
-    const normalizedName = record.name.trim().toLowerCase();
-    const zoneRoot = inferZoneRoot(normalizedDomain);
-
-    if (normalizedName === '@') {
-      if (domainType !== 'subdomain') return '@';
-      const hostLabel = inferSubdomainHostLabel(normalizedDomain);
-      return hostLabel || '@';
+  const renderUrlRow = (
+    label: string,
+    value: string,
+    options?: {
+      emphasize?: boolean;
+      canOpen?: boolean;
     }
-
-    if (normalizedName === normalizedDomain) {
-      if (domainType !== 'subdomain') return '@';
-      const hostLabel = inferSubdomainHostLabel(normalizedDomain);
-      return hostLabel;
-    }
-
-    if (normalizedName.endsWith(`.${zoneRoot}`)) {
-      return normalizedName.slice(0, -(zoneRoot.length + 1));
-    }
-
-    if (domainType === 'subdomain' && normalizedType === 'TXT' && normalizedName === '_verify') {
-      const hostLabel = inferSubdomainHostLabel(normalizedDomain);
-      if (hostLabel) {
-        return `_verify.${hostLabel}`;
-      }
-    }
-
-    return record.name.trim();
-  };
+  ) => (
+    <div className="flex items-center justify-between gap-2 text-xs">
+      <span className="text-muted-foreground">{label}</span>
+      <div className="flex items-center gap-1">
+        <a
+          href={value}
+          target="_blank"
+          rel="noreferrer"
+          className={cn(
+            'font-mono hover:underline break-all',
+            options?.emphasize ? 'text-primary' : 'text-muted-foreground'
+          )}
+        >
+          {value}
+        </a>
+        <Button
+          type="button"
+          variant="ghost"
+          size="icon"
+          className="h-7 w-7"
+          onClick={() => void copyToClipboard(value)}
+        >
+          <Copy className="w-3.5 h-3.5" />
+        </Button>
+        {options?.canOpen ? (
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon"
+            className="h-7 w-7"
+            onClick={() => window.open(value, '_blank', 'noopener,noreferrer')}
+          >
+            <ExternalLink className="w-3.5 h-3.5" />
+          </Button>
+        ) : null}
+      </div>
+    </div>
+  );
 
   if (isLoading) {
     return (
@@ -148,7 +174,9 @@ export default function SiteConnectorPage() {
       <div className="flex items-center justify-between mb-6">
         <div>
           <h1 className="text-2xl font-bold text-foreground">Site Connector</h1>
-          <p className="text-sm text-muted-foreground mt-1">Connect custom domains, manage DNS and SSL</p>
+          <p className="text-sm text-muted-foreground mt-1">
+            Connect custom domains, verify DNS and SSL, and choose which published page serves at root.
+          </p>
         </div>
         <Button onClick={() => setShowAdd(true)} disabled={isSaving}>
           <Plus className="w-4 h-4 mr-1" /> Add Domain
@@ -194,9 +222,42 @@ export default function SiteConnectorPage() {
                     className="mt-1"
                     disabled={isSaving}
                   />
+                  {domainValidation.error ? (
+                    <p className="mt-2 text-xs text-destructive">{domainValidation.error}</p>
+                  ) : domainValidation.details ? (
+                    <div className="mt-2 rounded-lg border border-border bg-muted/40 p-3 text-xs text-muted-foreground space-y-1">
+                      <div className="flex items-center justify-between gap-2">
+                        <span>Normalized host</span>
+                        <span className="font-mono text-foreground break-all">
+                          {domainValidation.details.normalizedDomain}
+                        </span>
+                      </div>
+                      <div className="flex items-center justify-between gap-2">
+                        <span>Zone root</span>
+                        <span className="font-mono text-foreground break-all">
+                          {domainValidation.details.zoneRoot}
+                        </span>
+                      </div>
+                      <div className="flex items-center justify-between gap-2">
+                        <span>DNS host label</span>
+                        <span className="font-mono text-foreground break-all">
+                          {domainType === 'subdomain'
+                            ? domainValidation.details.hostLabel || '@'
+                            : '@'}
+                        </span>
+                      </div>
+                    </div>
+                  ) : null}
                 </div>
+                <p className="text-xs text-muted-foreground">
+                  The selected root page only controls <span className="font-mono">/</span>. Every published landing
+                  page remains available at <span className="font-mono">/&lt;slug&gt;</span> on the connected domain.
+                </p>
                 <div className="flex gap-2">
-                  <Button onClick={() => void handleAdd()} disabled={isSaving}>
+                  <Button
+                    onClick={() => void handleAdd()}
+                    disabled={isSaving || !newDomain.trim() || Boolean(domainValidation.error)}
+                  >
                     Add Domain
                   </Button>
                   <Button variant="ghost" onClick={() => setShowAdd(false)} disabled={isSaving}>
@@ -235,6 +296,14 @@ export default function SiteConnectorPage() {
             const customDomainSlugUrl = linkedPage?.slug ? `${customDomainRootUrl}/${linkedPage.slug}` : '';
             const publishedSlugUrl = linkedPage?.slug ? `${getOrigin()}/pages/${linkedPage.slug}` : '';
             const hasPublishedLinkedPage = Boolean(linkedPage?.published);
+            const publishedDomainPages = publishedPages.map((page) => ({
+              id: page.id,
+              name: page.name || 'Untitled',
+              slug: page.slug,
+              customUrl: `${customDomainRootUrl}/${page.slug}`,
+              platformUrl: `${getOrigin()}/pages/${page.slug}`,
+              isRootPage: page.id === domain.linkedPageId,
+            }));
             return (
               <motion.div
                 key={domain.id}
@@ -286,7 +355,7 @@ export default function SiteConnectorPage() {
                   </div>
                   {domain.linkedPageName && (
                     <div className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium bg-info/10 text-info">
-                      <Link2 className="w-3 h-3" /> {domain.linkedPageName}
+                      <Link2 className="w-3 h-3" /> Root: {domain.linkedPageName}
                     </div>
                   )}
                 </div>
@@ -304,7 +373,7 @@ export default function SiteConnectorPage() {
                       <div key={index} className="flex items-center gap-4 text-xs">
                         <span className="w-10 font-mono font-bold text-muted-foreground">{record.type}</span>
                         <span className="w-20 font-mono text-foreground">
-                          {getDisplayRecordName(domain.domain, domain.type, record)}
+                          {getSiteConnectorDnsRecordDisplayName(domain.domain, domain.type, record)}
                         </span>
                         <span className="flex-1 font-mono text-muted-foreground truncate">{record.value}</span>
                         {record.verified ? (
@@ -318,17 +387,17 @@ export default function SiteConnectorPage() {
                 </div>
 
                 <div className="space-y-2">
-                  <Label className="text-xs">Link Landing Page</Label>
+                  <Label className="text-xs">Root Path Page</Label>
                   <Select
                     value={domain.linkedPageId || '__none'}
                     onValueChange={(value) => void linkPage(domain.id, value === '__none' ? null : value)}
                     disabled={isSaving}
                   >
                     <SelectTrigger>
-                      <SelectValue placeholder="Select landing page" />
+                      <SelectValue placeholder="Select page for /" />
                     </SelectTrigger>
                     <SelectContent>
-                      <SelectItem value="__none">No page linked</SelectItem>
+                      <SelectItem value="__none">No page at root</SelectItem>
                       {linkablePages.map((page) => (
                         <SelectItem key={page.id} value={page.id}>
                           {page.name || 'Untitled'} {page.published ? '(Published)' : '(Draft)'}
@@ -341,105 +410,78 @@ export default function SiteConnectorPage() {
                       Create at least one landing page before linking domains.
                     </p>
                   )}
+                  <p className="text-xs text-muted-foreground">
+                    The selected page serves <span className="font-mono">/</span>. All published landing pages also stay
+                    available at <span className="font-mono">/&lt;slug&gt;</span> on this domain.
+                  </p>
 
-                  {linkedPage && (
-                    <div className="mt-3 rounded-lg border border-border bg-muted/40 p-3 space-y-2">
-                      {hasPublishedLinkedPage ? (
-                        <div className="space-y-1">
-                          <div className="flex items-center justify-between gap-2 text-xs">
-                            <span className="text-muted-foreground">Selected Domain URL</span>
-                            <div className="flex items-center gap-1">
-                              <a
-                                href={customDomainRootUrl}
-                                target="_blank"
-                                rel="noreferrer"
-                                className="font-mono text-primary hover:underline break-all"
-                              >
-                                {customDomainRootUrl}
-                              </a>
-                              <Button
-                                type="button"
-                                variant="ghost"
-                                size="icon"
-                                className="h-7 w-7"
-                                onClick={() => void copyToClipboard(customDomainRootUrl)}
-                              >
-                                <Copy className="w-3.5 h-3.5" />
-                              </Button>
-                              <Button
-                                type="button"
-                                variant="ghost"
-                                size="icon"
-                                className="h-7 w-7"
-                                onClick={() => window.open(customDomainRootUrl, '_blank', 'noopener,noreferrer')}
-                              >
-                                <ExternalLink className="w-3.5 h-3.5" />
-                              </Button>
-                            </div>
-                          </div>
-                          {domain.sslStatus !== 'active' && (
-                            <p className="text-[11px] text-muted-foreground">
-                              SSL is still provisioning. Use the HTTP URL until SSL status becomes Active.
-                            </p>
-                          )}
-                        </div>
+                  <div className="mt-3 rounded-lg border border-border bg-muted/40 p-3 space-y-4">
+                    <div className="space-y-2">
+                      <div>
+                        <h4 className="text-xs font-semibold text-foreground">Root Route</h4>
+                        <p className="text-[11px] text-muted-foreground">
+                          Visitors hitting <span className="font-mono">/</span> on this domain will use this page.
+                        </p>
+                      </div>
+
+                      {hasPublishedLinkedPage && linkedPage ? (
+                        <>
+                          {renderUrlRow('Root URL', customDomainRootUrl, { emphasize: true, canOpen: true })}
+                          {customDomainSlugUrl ? renderUrlRow('Root page slug', customDomainSlugUrl) : null}
+                          {publishedSlugUrl ? renderUrlRow('Platform URL', publishedSlugUrl) : null}
+                        </>
+                      ) : linkedPage ? (
+                        <p className="text-xs text-muted-foreground">
+                          The selected root page is still a draft. Publish it before routing <span className="font-mono">/</span>.
+                        </p>
                       ) : (
                         <p className="text-xs text-muted-foreground">
-                          Linked page is not published yet. Publish it to use domain URL.
+                          No page is linked to <span className="font-mono">/</span> yet. Users can still open any published page at its slug path.
                         </p>
                       )}
 
-                      {hasPublishedLinkedPage && customDomainSlugUrl && (
-                        <div className="flex items-center justify-between gap-2 text-xs">
-                          <span className="text-muted-foreground">Slug URL</span>
-                          <div className="flex items-center gap-1">
-                            <a
-                              href={customDomainSlugUrl}
-                              target="_blank"
-                              rel="noreferrer"
-                              className="font-mono text-muted-foreground hover:underline break-all"
-                            >
-                              {customDomainSlugUrl}
-                            </a>
-                            <Button
-                              type="button"
-                              variant="ghost"
-                              size="icon"
-                              className="h-7 w-7"
-                              onClick={() => void copyToClipboard(customDomainSlugUrl)}
-                            >
-                              <Copy className="w-3.5 h-3.5" />
-                            </Button>
-                          </div>
-                        </div>
+                      {domain.sslStatus !== 'active' && (
+                        <p className="text-[11px] text-muted-foreground">
+                          SSL is still provisioning. Use the HTTP URL until SSL status becomes Active.
+                        </p>
                       )}
+                    </div>
 
-                      {publishedSlugUrl && (
-                        <div className="flex items-center justify-between gap-2 text-xs">
-                          <span className="text-muted-foreground">Platform URL</span>
-                          <div className="flex items-center gap-1">
-                            <a
-                              href={publishedSlugUrl}
-                              target="_blank"
-                              rel="noreferrer"
-                              className="font-mono text-muted-foreground hover:underline break-all"
-                            >
-                              {publishedSlugUrl}
-                            </a>
-                            <Button
-                              type="button"
-                              variant="ghost"
-                              size="icon"
-                              className="h-7 w-7"
-                              onClick={() => void copyToClipboard(publishedSlugUrl)}
-                            >
-                              <Copy className="w-3.5 h-3.5" />
-                            </Button>
-                          </div>
+                    <div className="space-y-2">
+                      <div>
+                        <h4 className="text-xs font-semibold text-foreground">Published Slug Routes</h4>
+                        <p className="text-[11px] text-muted-foreground">
+                          Every published landing page can be opened on this domain at its slug path.
+                        </p>
+                      </div>
+
+                      {publishedDomainPages.length === 0 ? (
+                        <p className="text-xs text-muted-foreground">
+                          No published landing pages yet. Publish a page to make it available at a slug route.
+                        </p>
+                      ) : (
+                        <div className="space-y-3">
+                          {publishedDomainPages.map((page) => (
+                            <div key={page.id} className="rounded-lg border border-border/70 bg-background/80 p-3 space-y-2">
+                              <div className="flex items-center justify-between gap-2">
+                                <div>
+                                  <p className="text-xs font-medium text-foreground">{page.name}</p>
+                                  <p className="text-[11px] text-muted-foreground font-mono">/{page.slug}</p>
+                                </div>
+                                {page.isRootPage ? (
+                                  <span className="rounded-full bg-info/10 px-2 py-1 text-[11px] font-medium text-info">
+                                    Root page
+                                  </span>
+                                ) : null}
+                              </div>
+                              {renderUrlRow('Domain URL', page.customUrl, { emphasize: page.isRootPage, canOpen: true })}
+                              {renderUrlRow('Platform URL', page.platformUrl)}
+                            </div>
+                          ))}
                         </div>
                       )}
                     </div>
-                  )}
+                  </div>
                 </div>
               </motion.div>
             );

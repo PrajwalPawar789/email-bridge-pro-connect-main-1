@@ -4,6 +4,7 @@ import { resolveSiteDomain, type ResolvedSiteDomain } from "@/lib/siteConnectorP
 import { normalizeSiteConnectorHost, shouldResolveSiteDomainHost } from "@/lib/siteConnectorHost";
 import { applyLandingPageMetadata } from "@/lib/landingPageMetadata";
 import LandingPageRenderer from "@/components/landing-pages/LandingPageRenderer";
+import { getPublishedLandingPage } from "@/lib/landingPagesPersistence";
 
 const normalizeSlugPath = (pathname: string) =>
   pathname
@@ -14,6 +15,7 @@ const NotFound = () => {
   const location = useLocation();
   const [loading, setLoading] = useState(true);
   const [resolvedDomain, setResolvedDomain] = useState<ResolvedSiteDomain | null>(null);
+  const [publishedPage, setPublishedPage] = useState<ResolvedSiteDomain["page"] | null>(null);
 
   const host = useMemo(() => {
     if (typeof window === "undefined") return "";
@@ -29,6 +31,7 @@ const NotFound = () => {
 
   useEffect(() => {
     let cancelled = false;
+    const requestedSlug = normalizeSlugPath(location.pathname);
 
     const run = async () => {
       if (!shouldResolveSiteDomainHost(host)) {
@@ -38,15 +41,28 @@ const NotFound = () => {
 
       try {
         const resolved = await resolveSiteDomain(host);
+        let published = null;
+
+        if (requestedSlug) {
+          const resolvedSlug = normalizeSlugPath(resolved?.page.slug || "");
+          if (!resolved || !resolvedSlug || requestedSlug !== resolvedSlug) {
+            published = await getPublishedLandingPage(requestedSlug);
+          }
+        }
+
         if (!cancelled) {
           setResolvedDomain(resolved);
-          if (resolved) {
+          setPublishedPage(published);
+          if (published) {
+            applyLandingPageMetadata({ pageName: published.name, settings: published.settings });
+          } else if (resolved) {
             applyLandingPageMetadata({ pageName: resolved.page.name, settings: resolved.page.settings });
           }
         }
       } catch {
         if (!cancelled) {
           setResolvedDomain(null);
+          setPublishedPage(null);
         }
       } finally {
         if (!cancelled) {
@@ -60,7 +76,7 @@ const NotFound = () => {
     return () => {
       cancelled = true;
     };
-  }, [host]);
+  }, [host, location.pathname]);
 
   if (loading) {
     return (
@@ -77,6 +93,10 @@ const NotFound = () => {
     if (!requestedSlug || requestedSlug === expectedSlug || !expectedSlug) {
       return <LandingPageRenderer page={resolvedDomain.page} />;
     }
+  }
+
+  if (publishedPage) {
+    return <LandingPageRenderer page={publishedPage} />;
   }
 
   return (

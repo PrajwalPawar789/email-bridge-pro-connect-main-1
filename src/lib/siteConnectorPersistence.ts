@@ -1,4 +1,5 @@
 import { supabase } from '@/integrations/supabase/client';
+import { normalizeAndValidateSiteDomain } from '@/lib/siteConnectorDomain';
 import type { LandingPageBlock } from '@/lib/landingPagesPersistence';
 import type { LandingPageSettings } from '@/lib/landingPageSettings';
 import { normalizeLandingPageSettings } from '@/lib/landingPageSettings';
@@ -42,6 +43,68 @@ export interface ResolvedSiteDomain {
   page: ResolvedDomainPage;
 }
 
+const normalizeApiErrorMessage = async (response: Response) => {
+  const contentType = response.headers.get('content-type') || '';
+  if (contentType.includes('application/json')) {
+    const payload = await response.json().catch(() => null);
+    return String(payload?.error || `Request failed with status ${response.status}`);
+  }
+
+  const text = await response.text().catch(() => '');
+  return text || `Request failed with status ${response.status}`;
+};
+
+const resolveSiteDomainViaSameOrigin = async (host: string) => {
+  const params = new URLSearchParams({
+    host,
+    _ts: String(Date.now()),
+  });
+  const response = await fetch(`/api/resolve-site-domain?${params.toString()}`, {
+    cache: 'no-store',
+    headers: {
+      'Cache-Control': 'no-cache',
+      Pragma: 'no-cache',
+    },
+  });
+
+  if (response.status === 404) {
+    return null;
+  }
+
+  if (!response.ok) {
+    throw new Error(await normalizeApiErrorMessage(response));
+  }
+
+  return response.json();
+};
+
+const resolveSiteDomainViaPublicFunction = async (host: string) => {
+  const supabaseUrl = String(import.meta.env.VITE_SUPABASE_URL || '').trim().replace(/\/+$/, '');
+  if (!supabaseUrl) {
+    return null;
+  }
+
+  const params = new URLSearchParams({
+    host,
+    _ts: String(Date.now()),
+  });
+
+  const response = await fetch(`${supabaseUrl}/functions/v1/resolve-site-domain?${params.toString()}`, {
+    method: 'GET',
+    cache: 'no-store',
+  });
+
+  if (response.status === 404) {
+    return null;
+  }
+
+  if (!response.ok) {
+    throw new Error(await normalizeApiErrorMessage(response));
+  }
+
+  return response.json();
+};
+
 const getAuthenticatedUser = async () => {
   const {
     data: { user },
@@ -82,13 +145,6 @@ const toDomainRecord = (row: any, linkedPageName?: string): SiteDomainRecord => 
   createdAt: row?.created_at ? new Date(row.created_at) : new Date(),
 });
 
-const inferSubdomainHostLabel = (domain: string) => {
-  const normalized = domain.trim().toLowerCase();
-  const labels = normalized.split('.').filter(Boolean);
-  if (labels.length <= 2) return '';
-  return labels.slice(0, -2).join('.');
-};
-
 const normalizeDnsTargetValue = (value: string) => value.trim().toLowerCase().replace(/\.$/, '');
 
 const defaultTargetA = (import.meta.env.VITE_SITE_CONNECTOR_TARGET_A || '76.76.21.21').trim();
@@ -100,7 +156,7 @@ const defaultVerifyTxtPrefix = normalizeDnsTargetValue(
 );
 
 const defaultDnsRecords = (domain: string, type: SiteDomainType) => {
-  const hostLabel = type === 'subdomain' ? inferSubdomainHostLabel(domain) : '';
+  const hostLabel = type === 'subdomain' ? normalizeAndValidateSiteDomain(domain, type).hostLabel : '';
   const txtName = type === 'subdomain' && hostLabel ? `${defaultVerifyTxtPrefix}.${hostLabel}` : defaultVerifyTxtPrefix;
   const routingRecord =
     type === 'subdomain' && hostLabel && defaultTargetCname
@@ -148,8 +204,7 @@ export const listSiteDomains = async (): Promise<SiteDomainRecord[]> => {
 
 export const addSiteDomain = async (domain: string, type: SiteDomainType): Promise<SiteDomainRecord> => {
   const user = await getAuthenticatedUser();
-  const normalizedDomain = domain.trim().toLowerCase();
-  if (!normalizedDomain) throw new Error('Domain is required');
+  const { normalizedDomain } = normalizeAndValidateSiteDomain(domain, type);
 
   const { data, error } = await (supabase as any)
     .from('site_domains')
@@ -234,16 +289,38 @@ export const resolveSiteDomain = async (host: string): Promise<ResolvedSiteDomai
   const normalizedHost = host.trim().toLowerCase();
   if (!normalizedHost) return null;
 
-  const { data, error } = await supabase.functions.invoke('resolve-site-domain', {
-    body: { host: normalizedHost },
-  });
+  let data: any = null;
 
-  if (error) {
-    const status = Number((error as any)?.context?.status || (error as any)?.status || 0);
-    if (status === 404) {
-      return null;
+  if (!import.meta.env.DEV && typeof window !== 'undefined') {
+    try {
+      data = await resolveSiteDomainViaSameOrigin(normalizedHost);
+    } catch {
+      data = null;
     }
-    throw error;
+
+    if (!data) {
+      try {
+        data = await resolveSiteDomainViaPublicFunction(normalizedHost);
+      } catch {
+        data = null;
+      }
+    }
+  }
+
+  if (!data) {
+    const { data: functionData, error } = await supabase.functions.invoke('resolve-site-domain', {
+      body: { host: normalizedHost },
+    });
+
+    if (error) {
+      const status = Number((error as any)?.context?.status || (error as any)?.status || 0);
+      if (status === 404) {
+        return null;
+      }
+      throw error;
+    }
+
+    data = functionData;
   }
 
   if (!data?.page || !data?.domain) return null;
