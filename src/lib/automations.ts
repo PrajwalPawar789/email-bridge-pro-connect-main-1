@@ -3,7 +3,7 @@ import { supabase } from "@/integrations/supabase/client";
 export type AutomationWorkflowStatus = "draft" | "live" | "paused" | "archived";
 export type AutomationTriggerType = "list_joined" | "manual" | "custom_event";
 export type AutomationStepType = "send_email" | "wait" | "condition" | "stop";
-export type WaitUnit = "minutes" | "hours" | "days";
+export type WaitUnit = "seconds" | "minutes" | "hours" | "days";
 export type ConditionRule =
   | "has_replied"
   | "email_domain_contains"
@@ -87,7 +87,14 @@ export type AutomationDependencyData = {
   emailConfigs: Array<{ id: string; smtp_username: string; sender_name: string | null }>;
 };
 
-const db = supabase as any;
+const db = supabase;
+const EMPTY_AUTOMATION_STATS: AutomationContactStats = {
+  total: 0,
+  active: 0,
+  completed: 0,
+  failed: 0,
+  due: 0,
+};
 
 const toObject = (value: unknown): Record<string, unknown> => {
   if (!value || typeof value !== "object" || Array.isArray(value)) return {};
@@ -692,46 +699,75 @@ export const duplicateAutomationWorkflow = async (
   });
 };
 
-const countContacts = async (
-  workflowId: string,
-  options: { status?: string; due?: boolean } = {}
-) => {
-  let query = db
+const uniqueWorkflowIds = (workflowIds: string[]) =>
+  Array.from(
+    new Set(
+      workflowIds
+        .map((workflowId) => String(workflowId || "").trim())
+        .filter(Boolean)
+    )
+  );
+
+const createEmptyStatsMap = (workflowIds: string[]) =>
+  Object.fromEntries(
+    uniqueWorkflowIds(workflowIds).map((workflowId) => [
+      workflowId,
+      { ...EMPTY_AUTOMATION_STATS },
+    ])
+  ) as Record<string, AutomationContactStats>;
+
+export const getAutomationStatsBatch = async (
+  workflowIds: string[]
+): Promise<Record<string, AutomationContactStats>> => {
+  const normalizedIds = uniqueWorkflowIds(workflowIds);
+  if (normalizedIds.length === 0) return {};
+
+  const statsByWorkflowId = createEmptyStatsMap(normalizedIds);
+  const { data, error } = await db
     .from("automation_contacts")
-    .select("*", { count: "exact", head: true })
-    .eq("workflow_id", workflowId);
+    .select("workflow_id, status, next_run_at")
+    .in("workflow_id", normalizedIds);
 
-  if (options.status) {
-    query = query.eq("status", options.status);
-  }
-  if (options.due) {
-    query = query
-      .eq("status", "active")
-      .not("next_run_at", "is", null)
-      .lte("next_run_at", new Date().toISOString());
-  }
-
-  const { count, error } = await query;
   if (error) throw error;
-  return Number(count || 0);
+
+  const now = Date.now();
+  (data || []).forEach((row) => {
+    const workflowId = String(row.workflow_id || "").trim();
+    if (!workflowId || !statsByWorkflowId[workflowId]) return;
+
+    const stats = statsByWorkflowId[workflowId];
+    stats.total += 1;
+
+    const status = String(row.status || "").trim();
+    if (status === "active") {
+      stats.active += 1;
+
+      const nextRunAt = String(row.next_run_at || "").trim();
+      if (nextRunAt) {
+        const nextRunTimestamp = new Date(nextRunAt).getTime();
+        if (!Number.isNaN(nextRunTimestamp) && nextRunTimestamp <= now) {
+          stats.due += 1;
+        }
+      }
+      return;
+    }
+
+    if (status === "completed") {
+      stats.completed += 1;
+      return;
+    }
+
+    if (status === "failed") {
+      stats.failed += 1;
+    }
+  });
+
+  return statsByWorkflowId;
 };
 
 export const getAutomationStats = async (workflowId: string): Promise<AutomationContactStats> => {
-  const [total, active, completed, failed, due] = await Promise.all([
-    countContacts(workflowId),
-    countContacts(workflowId, { status: "active" }),
-    countContacts(workflowId, { status: "completed" }),
-    countContacts(workflowId, { status: "failed" }),
-    countContacts(workflowId, { due: true }),
-  ]);
-
-  return {
-    total,
-    active,
-    completed,
-    failed,
-    due,
-  };
+  const statsByWorkflowId = await getAutomationStatsBatch([workflowId]);
+  return statsByWorkflowId[workflowId] || { ...EMPTY_AUTOMATION_STATS };
 };
 
 export const listAutomationLogs = async (workflowId: string, limit = 50): Promise<AutomationLog[]> => {
@@ -746,6 +782,43 @@ export const listAutomationLogs = async (workflowId: string, limit = 50): Promis
   return (data || []) as AutomationLog[];
 };
 
+export const listRecentAutomationLogsByWorkflow = async (
+  userId: string,
+  workflowIds: string[],
+  options: { totalLimit?: number; perWorkflowLimit?: number } = {}
+): Promise<Record<string, AutomationLog[]>> => {
+  const normalizedIds = uniqueWorkflowIds(workflowIds);
+  const logsByWorkflowId = Object.fromEntries(
+    normalizedIds.map((workflowId) => [workflowId, [] as AutomationLog[]])
+  ) as Record<string, AutomationLog[]>;
+
+  if (!userId || normalizedIds.length === 0) {
+    return logsByWorkflowId;
+  }
+
+  const totalLimit = Math.max(1, Number(options.totalLimit || 50));
+  const perWorkflowLimit = Math.max(1, Number(options.perWorkflowLimit || 5));
+
+  const { data, error } = await db
+    .from("automation_logs")
+    .select("*")
+    .eq("user_id", userId)
+    .in("workflow_id", normalizedIds)
+    .order("created_at", { ascending: false })
+    .limit(totalLimit);
+
+  if (error) throw error;
+
+  (data || []).forEach((row) => {
+    const workflowId = String(row.workflow_id || "").trim();
+    if (!workflowId || !logsByWorkflowId[workflowId]) return;
+    if (logsByWorkflowId[workflowId].length >= perWorkflowLimit) return;
+    logsByWorkflowId[workflowId].push(row as AutomationLog);
+  });
+
+  return logsByWorkflowId;
+};
+
 export const runAutomationRunner = async (
   action: "tick" | "run_now" | "enroll_now" | "run_all",
   workflowId?: string | null
@@ -756,6 +829,27 @@ export const runAutomationRunner = async (
       workflowId: workflowId || null,
     },
   });
+  if (error) throw error;
+  return data;
+};
+
+export type AutomationTestEmailRequest = {
+  toEmail: string;
+  senderConfigId: string;
+  subject: string;
+  body: string;
+  templateId?: string | null;
+  workflowName?: string;
+  previewData?: Record<string, unknown>;
+};
+
+export const sendAutomationTestEmail = async (
+  payload: AutomationTestEmailRequest
+) => {
+  const { data, error } = await supabase.functions.invoke("automation-test-email", {
+    body: payload,
+  });
+
   if (error) throw error;
   return data;
 };

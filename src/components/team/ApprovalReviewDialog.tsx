@@ -3,6 +3,7 @@ import { CheckCircle2, Loader2, MessageSquareText, XCircle } from "lucide-react"
 import {
   approvalLabel,
   getApprovalBadgeClass,
+  isValidApprovalTransition,
   type ApprovalAction,
   type ApprovalTimelineEvent,
   type WorkspaceApprovalRequest,
@@ -38,6 +39,7 @@ const ApprovalReviewDialog = ({
   onSubmit,
 }: ApprovalReviewDialogProps) => {
   const [comment, setComment] = useState("");
+  const canReviewRequest = request ? isValidApprovalTransition(request.status, "approved") : false;
 
   useEffect(() => {
     if (!open) {
@@ -46,6 +48,7 @@ const ApprovalReviewDialog = ({
   }, [open]);
 
   const handleAction = async (action: ApprovalAction) => {
+    if (!request || !isValidApprovalTransition(request.status, action)) return;
     await onSubmit(action, comment);
     onOpenChange(false);
   };
@@ -121,20 +124,33 @@ const ApprovalReviewDialog = ({
         ) : null}
 
         <DialogFooter className="flex flex-wrap justify-between gap-2">
-          <div className="flex gap-2">
-            <Button variant="outline" onClick={() => void handleAction("changes_requested")} disabled={loading || !request}>
-              {loading ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
-              Request changes
-            </Button>
-            <Button variant="outline" className="border-rose-200 text-rose-700 hover:bg-rose-50" onClick={() => void handleAction("rejected")} disabled={loading || !request}>
-              <XCircle className="mr-2 h-4 w-4" />
-              Reject
-            </Button>
-          </div>
-          <Button onClick={() => void handleAction("approved")} disabled={loading || !request}>
-            {loading ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <CheckCircle2 className="mr-2 h-4 w-4" />}
-            Approve
-          </Button>
+          {canReviewRequest ? (
+            <>
+              <div className="flex gap-2">
+                <Button variant="outline" onClick={() => void handleAction("changes_requested")} disabled={loading || !request}>
+                  {loading ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
+                  Request changes
+                </Button>
+                <Button variant="outline" className="border-rose-200 text-rose-700 hover:bg-rose-50" onClick={() => void handleAction("rejected")} disabled={loading || !request}>
+                  <XCircle className="mr-2 h-4 w-4" />
+                  Reject
+                </Button>
+              </div>
+              <Button onClick={() => void handleAction("approved")} disabled={loading || !request}>
+                {loading ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <CheckCircle2 className="mr-2 h-4 w-4" />}
+                Approve
+              </Button>
+            </>
+          ) : (
+            <>
+              <p className="flex-1 text-sm text-slate-500">
+                This request is no longer pending review. You can view the timeline, but you cannot review it again.
+              </p>
+              <Button variant="outline" onClick={() => onOpenChange(false)}>
+                Close
+              </Button>
+            </>
+          )}
         </DialogFooter>
       </DialogContent>
     </Dialog>

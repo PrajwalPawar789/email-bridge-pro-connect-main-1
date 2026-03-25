@@ -9,6 +9,7 @@ import {
 } from "@tanstack/react-query";
 import { FixedSizeList as List, type ListOnItemsRenderedProps } from "react-window";
 import { differenceInDays, format, formatDistanceToNow } from "date-fns";
+import { motion, AnimatePresence } from "framer-motion";
 import { supabase } from "@/integrations/supabase/client";
 import { useDebounce } from "@/hooks/useDebounce";
 import { useMeasure } from "@/hooks/useMeasure";
@@ -115,6 +116,7 @@ import {
   X,
 } from "lucide-react";
 
+// ── Constants ──
 const DEFAULT_MAILBOX_SYNC_URL = "http://localhost:8787/sync-mailbox";
 const DEFAULT_MAILBOX_API_URL = "http://localhost:8787";
 const MAILBOX_SYNC_URL =
@@ -128,9 +130,7 @@ const ALL_INBOXES = "all";
 
 type ViewMode = "split" | "list" | "detail";
 type Density = "compact" | "comfortable";
-
 type BulkAction = "archive" | "markRead" | "markUnread" | "assign";
-
 type ComposerMode = "compose" | "reply" | "replyAll" | "forward";
 
 interface EmailMessage {
@@ -208,6 +208,7 @@ interface ReplyAttachment {
   file: File;
 }
 
+// ── Helpers ──
 const HTML_TAG_REGEX =
   /<\s*(html|head|body|div|p|br|table|tbody|tr|td|th|span|img|a|style|meta|link|!doctype)\b/i;
 
@@ -219,7 +220,6 @@ const extractPlainText = (body: string) => {
     .replace(/<\s*br\s*\/?>/gi, "\n")
     .replace(/<\s*\/p\s*>/gi, "\n")
     .replace(/<\s*\/div\s*>/gi, "\n");
-
   const stripped = withBreaks.replace(/<[^>]+>/g, " ");
   return stripped
     .replace(/[ \t]+/g, " ")
@@ -236,58 +236,36 @@ const buildPreviewText = (body: string | null) => {
 
 const sanitizeEmailHtml = (html: string) => {
   if (typeof window === "undefined") return html;
-
   const doc = new DOMParser().parseFromString(html, "text/html");
-  const blockedTags = [
-    "script",
-    "style",
-    "iframe",
-    "object",
-    "embed",
-    "link",
-    "meta",
-    "base",
-  ];
-
+  const blockedTags = ["script", "style", "iframe", "object", "embed", "link", "meta", "base"];
   blockedTags.forEach((tag) => {
     doc.querySelectorAll(tag).forEach((el) => el.remove());
   });
-
   doc.querySelectorAll("*").forEach((el) => {
     Array.from(el.attributes).forEach((attr) => {
       const name = attr.name.toLowerCase();
       const value = attr.value || "";
-
       if (name.startsWith("on")) {
         el.removeAttribute(attr.name);
         return;
       }
-
       if ((name === "href" || name === "src") && value) {
         const trimmed = value.trim().toLowerCase();
-        if (
-          trimmed.startsWith("javascript:") ||
-          trimmed.startsWith("data:text/html")
-        ) {
+        if (trimmed.startsWith("javascript:") || trimmed.startsWith("data:text/html")) {
           el.removeAttribute(attr.name);
         }
       }
     });
   });
-
   doc.querySelectorAll("a").forEach((el) => {
     el.setAttribute("target", "_blank");
     el.setAttribute("rel", "noopener noreferrer");
   });
-
   return doc.body.innerHTML;
 };
 
 const normalizeSubject = (subject: string | null) =>
-  (subject || "(No Subject)")
-    .replace(/^(re|fwd|fw):/gi, "")
-    .trim()
-    .toLowerCase();
+  (subject || "(No Subject)").replace(/^(re|fwd|fw):/gi, "").trim().toLowerCase();
 
 const normalizeEmail = (value: string | null | undefined) => (value || "").trim().toLowerCase();
 
@@ -301,12 +279,7 @@ const buildThreadKey = (message: EmailMessage) => {
 };
 
 const getInitials = (value: string) =>
-  value
-    .split(/\s+/)
-    .map((part) => part[0])
-    .join("")
-    .slice(0, 2)
-    .toUpperCase();
+  value.split(/\s+/).map((part) => part[0]).join("").slice(0, 2).toUpperCase();
 
 const buildReplySubject = (subject: string | null) => {
   const base = subject?.trim() || "(No Subject)";
@@ -321,10 +294,7 @@ const buildForwardSubject = (subject: string | null) => {
 const buildReplyBody = (email: EmailMessage) => {
   const plain = extractPlainText(email.body || "");
   const dateLabel = new Date(email.date).toLocaleString();
-  const quoted = plain
-    .split(/\r?\n/)
-    .map((line) => `> ${line}`)
-    .join("\n");
+  const quoted = plain.split(/\r?\n/).map((line) => `> ${line}`).join("\n");
   return `\n\nOn ${dateLabel}, ${email.from_email} wrote:\n${quoted}`;
 };
 
@@ -346,10 +316,7 @@ const buildMailtoLink = (to: string | null, subject: string, body: string) => {
 };
 
 const parseAddressInput = (value: string) =>
-  value
-    .split(/[,;]+/)
-    .map((entry) => entry.trim())
-    .filter(Boolean);
+  value.split(/[,;]+/).map((entry) => entry.trim()).filter(Boolean);
 
 const buildHtmlFromText = (value: string) =>
   value
@@ -391,7 +358,6 @@ const useMediaQuery = (query: string) => {
     if (typeof window === "undefined") return false;
     return window.matchMedia(query).matches;
   });
-
   useEffect(() => {
     if (typeof window === "undefined") return undefined;
     const media = window.matchMedia(query);
@@ -404,7 +370,6 @@ const useMediaQuery = (query: string) => {
     media.addListener(listener);
     return () => media.removeListener(listener);
   }, [query]);
-
   return matches;
 };
 
@@ -417,17 +382,36 @@ const savedViews: Array<{ id: InboxSavedViewId; label: string; description: stri
 ];
 
 const densityConfig: Record<Density, { rowHeight: number; padding: string }> = {
-  compact: { rowHeight: 64, padding: "py-2" },
-  comfortable: { rowHeight: 84, padding: "py-3" },
+  compact: { rowHeight: 72, padding: "py-2" },
+  comfortable: { rowHeight: 88, padding: "py-3" },
 };
 
 const buildMailboxLabel = (config: MailboxConfig) =>
   config.display_name || config.smtp_username || config.imap_username || "Inbox";
 
-// Aesthetic-usability effect: soft surfaces + consistent depth reduce perceived complexity.
-const inboxAccentClasses =
-  "bg-[var(--shell-surface-strong)]/90 border border-[var(--shell-border)] shadow-[0_12px_40px_-28px_rgba(15,23,42,0.45)]";
+// ── Avatar Colors ──
+const avatarColors = [
+  "bg-blue-100 text-blue-700",
+  "bg-emerald-100 text-emerald-700",
+  "bg-amber-100 text-amber-700",
+  "bg-violet-100 text-violet-700",
+  "bg-rose-100 text-rose-700",
+  "bg-cyan-100 text-cyan-700",
+  "bg-orange-100 text-orange-700",
+  "bg-pink-100 text-pink-700",
+];
 
+const getAvatarColor = (email: string) => {
+  let hash = 0;
+  for (let i = 0; i < email.length; i++) {
+    hash = ((hash << 5) - hash + email.charCodeAt(i)) | 0;
+  }
+  return avatarColors[Math.abs(hash) % avatarColors.length];
+};
+
+// ═══════════════════════════════════════════════════════
+// MAIN COMPONENT
+// ═══════════════════════════════════════════════════════
 const InboxPage: React.FC<{ user: any }> = ({ user }) => {
   const queryClient = useQueryClient();
   const isWide = useMediaQuery("(min-width: 1024px)");
@@ -483,6 +467,7 @@ const InboxPage: React.FC<{ user: any }> = ({ user }) => {
   const { ref: listContainerRef, bounds: listBounds } = useMeasure<HTMLDivElement>();
   const debouncedSearch = useDebounce(searchQuery, 300);
 
+  // ── Pipeline & Campaigns ──
   useEffect(() => {
     if (!user?.id) return;
     let active = true;
@@ -497,9 +482,7 @@ const InboxPage: React.FC<{ user: any }> = ({ user }) => {
       }
     };
     loadPipeline();
-    return () => {
-      active = false;
-    };
+    return () => { active = false; };
   }, [user?.id]);
 
   useEffect(() => {
@@ -512,18 +495,14 @@ const InboxPage: React.FC<{ user: any }> = ({ user }) => {
         .eq("user_id", user.id)
         .order("created_at", { ascending: false });
       if (!active) return;
-      if (error) {
-        console.error("Failed to load campaigns", error);
-        return;
-      }
+      if (error) { console.error("Failed to load campaigns", error); return; }
       setCampaignOptions(data || []);
     };
     loadCampaigns();
-    return () => {
-      active = false;
-    };
+    return () => { active = false; };
   }, [user?.id]);
 
+  // ── Mailboxes ──
   const mailboxesQuery = useQuery({
     queryKey: ["inbox-mailboxes", user?.id],
     enabled: Boolean(user?.id),
@@ -533,7 +512,6 @@ const InboxPage: React.FC<{ user: any }> = ({ user }) => {
         .select("*")
         .eq("user_id", user.id)
         .order("created_at", { ascending: false });
-
       if (error) throw error;
       return (data || []) as MailboxConfig[];
     },
@@ -542,10 +520,7 @@ const InboxPage: React.FC<{ user: any }> = ({ user }) => {
   const mailboxes = useMemo(() => mailboxesQuery.data ?? [], [mailboxesQuery.data]);
   const includedMailboxIds = useMemo(() => {
     if (selectedMailboxId !== ALL_INBOXES) return [selectedMailboxId];
-    return mailboxes
-      .map((config) => config.id)
-      .filter(Boolean)
-      .filter((id) => !excludedMailboxIds.includes(id));
+    return mailboxes.map((config) => config.id).filter(Boolean).filter((id) => !excludedMailboxIds.includes(id));
   }, [mailboxes, selectedMailboxId, excludedMailboxIds]);
   const selectedMailboxLabel = useMemo(() => {
     if (selectedMailboxId === ALL_INBOXES) {
@@ -559,9 +534,7 @@ const InboxPage: React.FC<{ user: any }> = ({ user }) => {
   const mailboxSearchTerm = mailboxMenuSearch.trim().toLowerCase();
   const filteredMailboxOptions = useMemo(() => {
     if (!mailboxSearchTerm) return mailboxes;
-    return mailboxes.filter((config) =>
-      buildMailboxLabel(config).toLowerCase().includes(mailboxSearchTerm)
-    );
+    return mailboxes.filter((config) => buildMailboxLabel(config).toLowerCase().includes(mailboxSearchTerm));
   }, [mailboxes, mailboxSearchTerm]);
   const allInboxesIncluded = useMemo(
     () => mailboxes.length > 0 && includedMailboxIds.length === mailboxes.length,
@@ -569,9 +542,7 @@ const InboxPage: React.FC<{ user: any }> = ({ user }) => {
   );
 
   const resolveDefaultComposerConfigId = useCallback(() => {
-    if (selectedMailboxId !== ALL_INBOXES && mailboxes.some((config) => config.id === selectedMailboxId)) {
-      return selectedMailboxId;
-    }
+    if (selectedMailboxId !== ALL_INBOXES && mailboxes.some((config) => config.id === selectedMailboxId)) return selectedMailboxId;
     if (includedMailboxIds.length > 0) return includedMailboxIds[0];
     return mailboxes[0]?.id || "";
   }, [includedMailboxIds, mailboxes, selectedMailboxId]);
@@ -581,6 +552,7 @@ const InboxPage: React.FC<{ user: any }> = ({ user }) => {
       ? `all:${includedMailboxIds.join(",")}`
       : selectedMailboxId;
 
+  // ── Messages ──
   const messagesQueryKey = useMemo(
     () => ["inbox-messages", user?.id, mailboxScopeKey, savedView, debouncedSearch],
     [user?.id, mailboxScopeKey, savedView, debouncedSearch]
@@ -596,7 +568,7 @@ const InboxPage: React.FC<{ user: any }> = ({ user }) => {
         .select("*")
         .eq("user_id", user.id)
         .order("date", { ascending: false })
-        .range(pageParam * PAGE_SIZE, pageParam * PAGE_SIZE + PAGE_SIZE - 1);
+        .range((pageParam as number) * PAGE_SIZE, (pageParam as number) * PAGE_SIZE + PAGE_SIZE - 1);
 
       if (selectedMailboxId !== ALL_INBOXES) {
         query = query.eq("config_id", selectedMailboxId);
@@ -610,9 +582,7 @@ const InboxPage: React.FC<{ user: any }> = ({ user }) => {
 
       if (debouncedSearch) {
         const safe = debouncedSearch.replace(/,/g, " ");
-        query = query.or(
-          `subject.ilike.*${safe}*,from_email.ilike.*${safe}*`
-        );
+        query = query.or(`subject.ilike.*${safe}*,from_email.ilike.*${safe}*`);
       }
 
       const { data, error } = await query;
@@ -620,7 +590,7 @@ const InboxPage: React.FC<{ user: any }> = ({ user }) => {
 
       return {
         data: (data || []) as EmailMessage[],
-        nextPage: (data || []).length === PAGE_SIZE ? pageParam + 1 : undefined,
+        nextPage: (data || []).length === PAGE_SIZE ? (pageParam as number) + 1 : undefined,
       };
     },
     getNextPageParam: (lastPage) => lastPage.nextPage,
@@ -631,54 +601,24 @@ const InboxPage: React.FC<{ user: any }> = ({ user }) => {
     [messagesQuery.data]
   );
 
-  const unreadCount = useMemo(
-    () => messages.filter((message) => !message.read).length,
-    [messages]
-  );
+  const unreadCount = useMemo(() => messages.filter((message) => !message.read).length, [messages]);
+
   const filteredMessages = useMemo(() => {
     return messages.filter((message) => {
-      if (savedView === "unread" && message.read) {
-        return false;
-      }
-
+      if (savedView === "unread" && message.read) return false;
       if (savedView === "needsReply") {
         const needsReply = !message.read && !/^re:/i.test(message.subject || "");
         if (!needsReply) return false;
       }
-
-      if (savedView === "assigned") {
-        return assignedIds.has(message.id);
-      }
-
-      if (savedView === "starred" && !starredIds.has(message.id)) {
-        return false;
-      }
-
-      if (filters.from) {
-        if (!message.from_email.toLowerCase().includes(filters.from.toLowerCase())) {
-          return false;
-        }
-      }
-
-      if (filters.subject) {
-        if (!(message.subject || "").toLowerCase().includes(filters.subject.toLowerCase())) {
-          return false;
-        }
-      }
-
+      if (savedView === "assigned") return assignedIds.has(message.id);
+      if (savedView === "starred" && !starredIds.has(message.id)) return false;
+      if (filters.from && !message.from_email.toLowerCase().includes(filters.from.toLowerCase())) return false;
+      if (filters.subject && !(message.subject || "").toLowerCase().includes(filters.subject.toLowerCase())) return false;
       if (filters.hasAttachment) {
-        const hasAttachment = /(attach|attachment|attached)/i.test(message.body || "");
-        if (!hasAttachment) return false;
+        if (!/(attach|attachment|attached)/i.test(message.body || "")) return false;
       }
-
-      if (filters.dateFrom) {
-        if (new Date(message.date) < new Date(filters.dateFrom)) return false;
-      }
-
-      if (filters.dateTo) {
-        if (new Date(message.date) > new Date(filters.dateTo)) return false;
-      }
-
+      if (filters.dateFrom && new Date(message.date) < new Date(filters.dateFrom)) return false;
+      if (filters.dateTo && new Date(message.date) > new Date(filters.dateTo)) return false;
       return true;
     });
   }, [messages, savedView, filters, starredIds, assignedIds]);
@@ -691,11 +631,8 @@ const InboxPage: React.FC<{ user: any }> = ({ user }) => {
       existing.push(message);
       map.set(key, existing);
     });
-
     return Array.from(map.entries()).map(([threadKey, items]) => {
-      const sorted = [...items].sort(
-        (a, b) => new Date(b.date).getTime() - new Date(a.date).getTime()
-      );
+      const sorted = [...items].sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
       return { threadKey, latest: sorted[0], messages: sorted };
     });
   }, [filteredMessages]);
@@ -703,10 +640,7 @@ const InboxPage: React.FC<{ user: any }> = ({ user }) => {
   const listItems = useMemo<ListItem[]>(() => {
     if (threadedView) {
       return threads
-        .sort(
-          (a, b) =>
-            new Date(b.latest.date).getTime() - new Date(a.latest.date).getTime()
-        )
+        .sort((a, b) => new Date(b.latest.date).getTime() - new Date(a.latest.date).getTime())
         .map((thread) => ({
           id: thread.threadKey,
           messageId: thread.latest.id,
@@ -716,16 +650,12 @@ const InboxPage: React.FC<{ user: any }> = ({ user }) => {
           preview: buildPreviewText(thread.latest.body),
           date: thread.latest.date,
           read: Boolean(thread.latest.read),
-          hasAttachment: /(attach|attachment|attached)/i.test(
-            thread.latest.body || ""
-          ),
+          hasAttachment: /(attach|attachment|attached)/i.test(thread.latest.body || ""),
           threadCount: thread.messages.length,
           mailboxId: thread.latest.config_id,
-          needsReply:
-            !thread.latest.read && !/^re:/i.test(thread.latest.subject || ""),
+          needsReply: !thread.latest.read && !/^re:/i.test(thread.latest.subject || ""),
         }));
     }
-
     return filteredMessages.map((message) => ({
       id: message.id,
       messageId: message.id,
@@ -742,9 +672,10 @@ const InboxPage: React.FC<{ user: any }> = ({ user }) => {
     }));
   }, [filteredMessages, threadedView, threads]);
 
-  const selectedMessage = useMemo(() => {
-    return messages.find((message) => message.id === selectedMessageId) || null;
-  }, [messages, selectedMessageId]);
+  const selectedMessage = useMemo(
+    () => messages.find((message) => message.id === selectedMessageId) || null,
+    [messages, selectedMessageId]
+  );
 
   const threadMessages = useMemo(() => {
     if (!selectedMessage) return [];
@@ -752,45 +683,30 @@ const InboxPage: React.FC<{ user: any }> = ({ user }) => {
     return thread?.messages ?? [selectedMessage];
   }, [selectedMessage, threads]);
 
+  // ── Pipeline side effects ──
   useEffect(() => {
-    if (!selectedMessage || !pipelineId) {
-      setSelectedOpportunity(null);
-      return;
-    }
+    if (!selectedMessage || !pipelineId) { setSelectedOpportunity(null); return; }
     let active = true;
     const loadOpportunity = async () => {
       try {
         const opportunity = await findOpportunityByEmail(pipelineId, selectedMessage.from_email);
         if (active) setSelectedOpportunity(opportunity);
-      } catch (error) {
-        console.error("Failed to load opportunity", error);
-      }
+      } catch (error) { console.error("Failed to load opportunity", error); }
     };
     loadOpportunity();
-    return () => {
-      active = false;
-    };
+    return () => { active = false; };
   }, [selectedMessage, pipelineId]);
 
-  useEffect(() => {
-    setNextStepDraft(selectedOpportunity?.next_step || "");
-  }, [selectedOpportunity]);
-
+  useEffect(() => { setNextStepDraft(selectedOpportunity?.next_step || ""); }, [selectedOpportunity]);
   useEffect(() => {
     const value = selectedOpportunity?.value;
     setDealValueDraft(value == null ? "" : String(value));
   }, [selectedOpportunity]);
-
-  useEffect(() => {
-    setCampaignDraft(selectedOpportunity?.campaign_id || "");
-  }, [selectedOpportunity]);
+  useEffect(() => { setCampaignDraft(selectedOpportunity?.campaign_id || ""); }, [selectedOpportunity]);
 
   useEffect(() => {
     if (selectedOpportunity) return;
-    if (!selectedMessage) {
-      setCampaignDraft("");
-      return;
-    }
+    if (!selectedMessage) { setCampaignDraft(""); return; }
     let active = true;
     setCampaignDraft("");
     const fetchSuggestedCampaign = async () => {
@@ -802,14 +718,10 @@ const InboxPage: React.FC<{ user: any }> = ({ user }) => {
       if (!active) return;
       if (error) return;
       const campaignId = data?.[0]?.campaign_id;
-      if (campaignId) {
-        setCampaignDraft(campaignId);
-      }
+      if (campaignId) setCampaignDraft(campaignId);
     };
     fetchSuggestedCampaign();
-    return () => {
-      active = false;
-    };
+    return () => { active = false; };
   }, [selectedMessage, selectedOpportunity]);
 
   const selectedIndex = useMemo(
@@ -850,18 +762,8 @@ const InboxPage: React.FC<{ user: any }> = ({ user }) => {
   };
 
   const resolveContactDetails = async (email: string) => {
-    const { data: recipientData } = await supabase
-      .from("recipients")
-      .select("name, campaign_id")
-      .eq("email", email)
-      .limit(1);
-
-    const { data: prospectData } = await supabase
-      .from("prospects")
-      .select("name, company")
-      .eq("email", email)
-      .limit(1);
-
+    const { data: recipientData } = await supabase.from("recipients").select("name, campaign_id").eq("email", email).limit(1);
+    const { data: prospectData } = await supabase.from("prospects").select("name, company").eq("email", email).limit(1);
     const contactName = recipientData?.[0]?.name || prospectData?.[0]?.name || email;
     const company = prospectData?.[0]?.company || null;
     const campaignId = recipientData?.[0]?.campaign_id || null;
@@ -874,56 +776,36 @@ const InboxPage: React.FC<{ user: any }> = ({ user }) => {
     setPipelineBusy(true);
     try {
       if (!stageId) {
-        if (selectedOpportunity) {
-          await deleteOpportunity(selectedOpportunity.id);
-        }
+        if (selectedOpportunity) await deleteOpportunity(selectedOpportunity.id);
         setSelectedOpportunity(null);
         return;
       }
-
       const status = resolveOpportunityStatus(stageId);
       if (selectedOpportunity) {
-        const updated = await updateOpportunity(selectedOpportunity.id, {
-          stageId,
-          status,
-          lastActivityAt: new Date().toISOString(),
-        });
+        const updated = await updateOpportunity(selectedOpportunity.id, { stageId, status, lastActivityAt: new Date().toISOString() });
         setSelectedOpportunity(updated);
         if (!updated.value && updated.campaign_id && isProposalStage(stageId)) {
           const suggested = await suggestOpportunityValueFromCampaign(updated.campaign_id);
           if (suggested != null) {
-            const withValue = await updateOpportunity(updated.id, {
-              value: suggested,
-              lastActivityAt: new Date().toISOString(),
-            });
+            const withValue = await updateOpportunity(updated.id, { value: suggested, lastActivityAt: new Date().toISOString() });
             setSelectedOpportunity(withValue);
             setDealValueDraft(String(Math.round(suggested)));
           }
         }
         return;
       }
-
       const details = await resolveContactDetails(selectedMessage.from_email);
       const created = await createOpportunity({
-        userId: user.id,
-        pipelineId,
-        stageId,
-        status,
-        contactName: details.contactName,
-        contactEmail: selectedMessage.from_email,
-        company: details.company,
-        owner: "",
-        nextStep: "",
+        userId: user.id, pipelineId, stageId, status,
+        contactName: details.contactName, contactEmail: selectedMessage.from_email,
+        company: details.company, owner: "", nextStep: "",
         campaignId: campaignDraft || details.campaignId,
       });
       let nextOpportunity = created;
       if (!created.value && created.campaign_id && isProposalStage(stageId)) {
         const suggested = await suggestOpportunityValueFromCampaign(created.campaign_id);
         if (suggested != null) {
-          nextOpportunity = await updateOpportunity(created.id, {
-            value: suggested,
-            lastActivityAt: new Date().toISOString(),
-          });
+          nextOpportunity = await updateOpportunity(created.id, { value: suggested, lastActivityAt: new Date().toISOString() });
           setDealValueDraft(String(Math.round(suggested)));
         }
       }
@@ -938,109 +820,68 @@ const InboxPage: React.FC<{ user: any }> = ({ user }) => {
   const updateNextStep = async (value: string) => {
     if (!selectedMessage || !pipelineId || !user?.id) return;
     if (!selectedOpportunity) {
-      toast({
-        title: "Select a pipeline stage first",
-        description: "Add this reply to a pipeline stage before setting a next step.",
-      });
+      toast({ title: "Select a pipeline stage first", description: "Add this reply to a pipeline stage before setting a next step." });
       return;
     }
     setPipelineBusy(true);
     try {
-      const updated = await updateOpportunity(selectedOpportunity.id, {
-        nextStep: value,
-        lastActivityAt: new Date().toISOString(),
-      });
+      const updated = await updateOpportunity(selectedOpportunity.id, { nextStep: value, lastActivityAt: new Date().toISOString() });
       setSelectedOpportunity(updated);
-    } catch (error) {
-      console.error("Failed to update next step", error);
-    } finally {
-      setPipelineBusy(false);
-    }
+    } catch (error) { console.error("Failed to update next step", error); }
+    finally { setPipelineBusy(false); }
   };
 
   const updateDealValue = async (value: string) => {
     if (!selectedMessage || !pipelineId || !user?.id) return;
     if (!selectedOpportunity) {
-      toast({
-        title: "Select a pipeline stage first",
-        description: "Add this reply to a pipeline stage before setting a value.",
-      });
+      toast({ title: "Select a pipeline stage first", description: "Add this reply to a pipeline stage before setting a value." });
       return;
     }
     const parsed = value ? Number(value.replace(/,/g, "")) : null;
     if (value && !Number.isFinite(parsed)) {
-      toast({
-        title: "Enter a valid number",
-        description: "Use plain numbers like 12000 or 12,000.",
-        variant: "destructive",
-      });
+      toast({ title: "Enter a valid number", description: "Use plain numbers like 12000 or 12,000.", variant: "destructive" });
       return;
     }
     setPipelineBusy(true);
     try {
-      const updated = await updateOpportunity(selectedOpportunity.id, {
-        value: parsed,
-        lastActivityAt: new Date().toISOString(),
-      });
+      const updated = await updateOpportunity(selectedOpportunity.id, { value: parsed, lastActivityAt: new Date().toISOString() });
       setSelectedOpportunity(updated);
-    } catch (error) {
-      console.error("Failed to update value", error);
-    } finally {
-      setPipelineBusy(false);
-    }
+    } catch (error) { console.error("Failed to update value", error); }
+    finally { setPipelineBusy(false); }
   };
 
   const updateCampaign = async (campaignId: string) => {
     setCampaignDraft(campaignId);
     if (!selectedOpportunity) return;
     try {
-      const updated = await updateOpportunity(selectedOpportunity.id, {
-        campaignId: campaignId || null,
-        lastActivityAt: new Date().toISOString(),
-      });
+      const updated = await updateOpportunity(selectedOpportunity.id, { campaignId: campaignId || null, lastActivityAt: new Date().toISOString() });
       let nextOpportunity = updated;
-      if (
-        campaignId &&
-        !updated.value &&
-        updated.stage_id &&
-        isProposalStage(updated.stage_id)
-      ) {
+      if (campaignId && !updated.value && updated.stage_id && isProposalStage(updated.stage_id)) {
         const suggested = await suggestOpportunityValueFromCampaign(campaignId);
         if (suggested != null) {
-          nextOpportunity = await updateOpportunity(updated.id, {
-            value: suggested,
-            lastActivityAt: new Date().toISOString(),
-          });
+          nextOpportunity = await updateOpportunity(updated.id, { value: suggested, lastActivityAt: new Date().toISOString() });
           setDealValueDraft(String(Math.round(suggested)));
         }
       }
       setSelectedOpportunity(nextOpportunity);
-    } catch (error) {
-      console.error("Failed to update campaign", error);
-    }
+    } catch (error) { console.error("Failed to update campaign", error); }
   };
 
+  // ── Auto-select & layout effects ──
   useEffect(() => {
-    if (listItems.length === 0) {
-      setSelectedMessageId(null);
-      return;
-    }
+    if (listItems.length === 0) { setSelectedMessageId(null); return; }
     if (!selectedMessageId || !listItems.some((item) => item.messageId === selectedMessageId)) {
       setSelectedMessageId(listItems[0].messageId);
     }
   }, [listItems, selectedMessageId]);
 
   useEffect(() => {
-    if (selectedIndex >= 0 && listRef.current) {
-      listRef.current.scrollToItem(selectedIndex, "smart");
-    }
+    if (selectedIndex >= 0 && listRef.current) listRef.current.scrollToItem(selectedIndex, "smart");
   }, [selectedIndex]);
 
   useEffect(() => {
     if (!mailboxes.length) return;
-    if (selectedMailboxId !== ALL_INBOXES && mailboxes.some((box) => box.id === selectedMailboxId)) {
-      return;
-    }
+    if (selectedMailboxId !== ALL_INBOXES && mailboxes.some((box) => box.id === selectedMailboxId)) return;
     setSelectedMailboxId(mailboxes.length > 1 ? ALL_INBOXES : mailboxes[0].id);
   }, [mailboxes, selectedMailboxId]);
 
@@ -1050,33 +891,19 @@ const InboxPage: React.FC<{ user: any }> = ({ user }) => {
     setComposerConfigId(resolveDefaultComposerConfigId());
   }, [composeOpen, composerConfigId, composerMode, mailboxes, resolveDefaultComposerConfigId]);
 
-  useEffect(() => {
-    if (!isWide) {
-      setContextOpen(false);
-    }
-  }, [isWide]);
+  useEffect(() => { if (!isWide) setContextOpen(false); }, [isWide]);
+  useEffect(() => { if (!selectedMessageId) return; if (!isWide) setMobileDetailOpen(true); }, [selectedMessageId, isWide]);
 
-  useEffect(() => {
-    if (!selectedMessageId) return;
-    if (!isWide) {
-      setMobileDetailOpen(true);
-    }
-  }, [selectedMessageId, isWide]);
-
+  // ── Cache helpers ──
   const updateCachedMessages = useCallback(
-    (
-      updater: (message: EmailMessage) => EmailMessage | null,
-      queryKey: Array<string | number | undefined>
-    ) => {
+    (updater: (message: EmailMessage) => EmailMessage | null, queryKey: Array<string | number | undefined>) => {
       queryClient.setQueryData<InfiniteData<MessagesPage>>(queryKey, (old) => {
         if (!old) return old;
         return {
           ...old,
           pages: old.pages.map((page) => ({
             ...page,
-            data: page.data
-              .map((message) => updater(message))
-              .filter((message): message is EmailMessage => Boolean(message)),
+            data: page.data.map((message) => updater(message)).filter((message): message is EmailMessage => Boolean(message)),
           })),
         };
       });
@@ -1087,28 +914,16 @@ const InboxPage: React.FC<{ user: any }> = ({ user }) => {
   const bulkActionMutation = useMutation({
     mutationFn: async ({ ids, action }: { ids: string[]; action: BulkAction }) => {
       if (ids.length === 0) return;
-
       if (action === "archive") {
-        const { error } = await supabase
-          .from("email_messages")
-          .update({ folder: "archive" })
-          .in("id", ids);
+        const { error } = await supabase.from("email_messages").update({ folder: "archive" }).in("id", ids);
         if (error) throw error;
       }
-
       if (action === "markRead") {
-        const { error } = await supabase
-          .from("email_messages")
-          .update({ read: true })
-          .in("id", ids);
+        const { error } = await supabase.from("email_messages").update({ read: true }).in("id", ids);
         if (error) throw error;
       }
-
       if (action === "markUnread") {
-        const { error } = await supabase
-          .from("email_messages")
-          .update({ read: false })
-          .in("id", ids);
+        const { error } = await supabase.from("email_messages").update({ read: false }).in("id", ids);
         if (error) throw error;
       }
     },
@@ -1120,14 +935,10 @@ const InboxPage: React.FC<{ user: any }> = ({ user }) => {
       if (action === "assign") {
         setAssignedIds((prev) => new Set([...prev, ...ids]));
         setSelectedIds(new Set());
-        toast({
-          title: "Assigned",
-          description: ids.length > 1 ? `${ids.length} conversations assigned to you.` : "Conversation assigned to you.",
-        });
+        toast({ title: "Assigned", description: ids.length > 1 ? `${ids.length} conversations assigned to you.` : "Conversation assigned to you." });
         return;
       }
       const previous = queryClient.getQueryData(messagesQueryKey);
-
       updateCachedMessages((message) => {
         if (!ids.includes(message.id)) return message;
         if (action === "archive") return null;
@@ -1135,34 +946,16 @@ const InboxPage: React.FC<{ user: any }> = ({ user }) => {
         if (action === "markUnread") return { ...message, read: false };
         return message;
       }, messagesQueryKey);
-
-      bulkActionMutation.mutate(
-        { ids, action },
-        {
-          onError: () => {
-            if (previous) queryClient.setQueryData(messagesQueryKey, previous);
-            toast({
-              title: "Action failed",
-              description: "We could not update those messages.",
-              variant: "destructive",
-            });
-          },
-        }
-      );
-
+      bulkActionMutation.mutate({ ids, action }, {
+        onError: () => {
+          if (previous) queryClient.setQueryData(messagesQueryKey, previous);
+          toast({ title: "Action failed", description: "We could not update those messages.", variant: "destructive" });
+        },
+      });
       toast({
         title: undoMessage || "Updated",
         description: ids.length > 1 ? `${ids.length} items updated` : "1 item updated",
-        action: (
-          <ToastAction
-            altText="Undo"
-            onClick={() => {
-              if (previous) queryClient.setQueryData(messagesQueryKey, previous);
-            }}
-          >
-            Undo
-          </ToastAction>
-        ),
+        action: <ToastAction altText="Undo" onClick={() => { if (previous) queryClient.setQueryData(messagesQueryKey, previous); }}>Undo</ToastAction>,
       });
       setSelectedIds(new Set());
     },
@@ -1172,27 +965,14 @@ const InboxPage: React.FC<{ user: any }> = ({ user }) => {
   const handleSelectMessage = useCallback(
     (messageId: string) => {
       setSelectedMessageId(messageId);
-
       const message = messages.find((item) => item.id === messageId);
       if (!message || message.read) return;
-
-      updateCachedMessages(
-        (item) => (item.id === messageId ? { ...item, read: true } : item),
-        messagesQueryKey
-      );
-
-      void supabase
-        .from("email_messages")
-        .update({ read: true })
-        .eq("id", messageId)
-        .then(({ error }) => {
-          if (!error) return;
-          updateCachedMessages(
-            (item) => (item.id === messageId ? { ...item, read: false } : item),
-            messagesQueryKey
-          );
-          console.error("Failed to mark message as read", error);
-        });
+      updateCachedMessages((item) => (item.id === messageId ? { ...item, read: true } : item), messagesQueryKey);
+      void supabase.from("email_messages").update({ read: true }).eq("id", messageId).then(({ error }) => {
+        if (!error) return;
+        updateCachedMessages((item) => (item.id === messageId ? { ...item, read: false } : item), messagesQueryKey);
+        console.error("Failed to mark message as read", error);
+      });
     },
     [messages, messagesQueryKey, updateCachedMessages]
   );
@@ -1200,139 +980,70 @@ const InboxPage: React.FC<{ user: any }> = ({ user }) => {
   const toggleStar = (messageId: string) => {
     setStarredIds((prev) => {
       const next = new Set(prev);
-      if (next.has(messageId)) next.delete(messageId);
-      else next.add(messageId);
+      if (next.has(messageId)) next.delete(messageId); else next.add(messageId);
       return next;
     });
   };
 
   const handleSelectAll = (checked: boolean) => {
-    if (!checked) {
-      setSelectedIds(new Set());
-      return;
-    }
-    const next = new Set(listItems.map((item) => item.messageId));
-    setSelectedIds(next);
+    if (!checked) { setSelectedIds(new Set()); return; }
+    setSelectedIds(new Set(listItems.map((item) => item.messageId)));
   };
 
   const handleSelectMessageToggle = (messageId: string, checked: boolean) => {
     setSelectedIds((prev) => {
       const next = new Set(prev);
-      if (checked) next.add(messageId);
-      else next.delete(messageId);
+      if (checked) next.add(messageId); else next.delete(messageId);
       return next;
     });
   };
+
+  // ── Composer ──
   const resetComposerState = useCallback(() => {
-    setComposerConfigId("");
-    setComposerMessageId(null);
-    setComposerTo("");
-    setComposerCc("");
-    setComposerBcc("");
-    setComposerSubject("");
-    setComposerBody("");
-    setComposerQuotedText("");
-    setComposerQuotedHtml("");
-    setComposerLoadingDraft(false);
-    setComposerSending(false);
-    setComposerThreadingLimited(false);
-    setComposerIncludeOriginalAttachments(false);
-    setComposerIncludeOriginalAttachmentsAvailable(false);
-    setComposerOriginalAttachments([]);
-    setComposerAttachments([]);
-    if (composerFileInputRef.current) {
-      composerFileInputRef.current.value = "";
-    }
+    setComposerConfigId(""); setComposerMessageId(null); setComposerTo(""); setComposerCc(""); setComposerBcc("");
+    setComposerSubject(""); setComposerBody(""); setComposerQuotedText(""); setComposerQuotedHtml("");
+    setComposerLoadingDraft(false); setComposerSending(false); setComposerThreadingLimited(false);
+    setComposerIncludeOriginalAttachments(false); setComposerIncludeOriginalAttachmentsAvailable(false);
+    setComposerOriginalAttachments([]); setComposerAttachments([]);
+    if (composerFileInputRef.current) composerFileInputRef.current.value = "";
   }, []);
 
   const openComposer = useCallback(
     async (mode: ComposerMode, message?: EmailMessage | null) => {
-      setComposerMode(mode);
-      setComposeOpen(true);
-      setComposerSending(false);
-
-      if (mode === "compose") {
-        resetComposerState();
-        setComposerConfigId(resolveDefaultComposerConfigId());
-        return;
-      }
-
+      setComposerMode(mode); setComposeOpen(true); setComposerSending(false);
+      if (mode === "compose") { resetComposerState(); setComposerConfigId(resolveDefaultComposerConfigId()); return; }
       if (!message) {
-        toast({
-          title: "Composer unavailable",
-          description: "Select a message first.",
-          variant: "destructive",
-        });
-        setComposeOpen(false);
-        resetComposerState();
-        return;
+        toast({ title: "Composer unavailable", description: "Select a message first.", variant: "destructive" });
+        setComposeOpen(false); resetComposerState(); return;
       }
-
       if (mode === "forward") {
-        setComposerConfigId(message.config_id || "");
-        setComposerMessageId(null);
-        setComposerTo("");
-        setComposerCc("");
-        setComposerBcc("");
-        setComposerSubject(buildForwardSubject(message.subject));
-        setComposerBody(buildForwardBody(message));
-        setComposerQuotedText("");
-        setComposerQuotedHtml("");
-        setComposerLoadingDraft(false);
-        setComposerThreadingLimited(false);
-        setComposerIncludeOriginalAttachments(false);
-        setComposerIncludeOriginalAttachmentsAvailable(false);
-        setComposerOriginalAttachments([]);
-        setComposerAttachments([]);
+        setComposerConfigId(message.config_id || ""); setComposerMessageId(null);
+        setComposerTo(""); setComposerCc(""); setComposerBcc("");
+        setComposerSubject(buildForwardSubject(message.subject)); setComposerBody(buildForwardBody(message));
+        setComposerQuotedText(""); setComposerQuotedHtml("");
+        setComposerLoadingDraft(false); setComposerThreadingLimited(false);
+        setComposerIncludeOriginalAttachments(false); setComposerIncludeOriginalAttachmentsAvailable(false);
+        setComposerOriginalAttachments([]); setComposerAttachments([]);
         return;
       }
-
-      setComposerConfigId(message.config_id || "");
-      setComposerMessageId(message.id);
-      setComposerLoadingDraft(true);
-      setComposerTo(message.from_email);
-      setComposerCc("");
-      setComposerBcc("");
-      setComposerSubject(buildReplySubject(message.subject));
-      setComposerBody("");
-      setComposerQuotedText(buildReplyBody(message));
-      setComposerQuotedHtml("");
-      setComposerThreadingLimited(false);
-      setComposerIncludeOriginalAttachments(false);
-      setComposerIncludeOriginalAttachmentsAvailable(false);
-      setComposerOriginalAttachments([]);
-      setComposerAttachments([]);
-
+      // reply / replyAll
+      setComposerConfigId(message.config_id || ""); setComposerMessageId(message.id);
+      setComposerLoadingDraft(true); setComposerTo(message.from_email); setComposerCc(""); setComposerBcc("");
+      setComposerSubject(buildReplySubject(message.subject)); setComposerBody("");
+      setComposerQuotedText(buildReplyBody(message)); setComposerQuotedHtml("");
+      setComposerThreadingLimited(false); setComposerIncludeOriginalAttachments(false);
+      setComposerIncludeOriginalAttachmentsAvailable(false); setComposerOriginalAttachments([]); setComposerAttachments([]);
       try {
-        const {
-          data: { session },
-        } = await supabase.auth.getSession();
+        const { data: { session } } = await supabase.auth.getSession();
         if (!session?.access_token) throw new Error("Not authenticated");
-
-        const response = await fetch(
-          `${MAILBOX_API_URL}/api/inbox/messages/${message.id}/reply-draft?mode=${mode}`,
-          {
-            headers: {
-              Authorization: `Bearer ${session.access_token}`,
-            },
-          }
-        );
-
+        const response = await fetch(`${MAILBOX_API_URL}/api/inbox/messages/${message.id}/reply-draft?mode=${mode}`, {
+          headers: { Authorization: `Bearer ${session.access_token}` },
+        });
         let payload: ReplyDraft | { error?: string } = {};
-        try {
-          payload = await response.json();
-        } catch (error) {
-          payload = {};
-        }
-
-        if (!response.ok) {
-          throw new Error((payload as { error?: string }).error || "Failed to build reply draft");
-        }
-
+        try { payload = await response.json(); } catch { payload = {}; }
+        if (!response.ok) throw new Error((payload as { error?: string }).error || "Failed to build reply draft");
         const draft = payload as ReplyDraft;
-        setComposerTo((draft.to || []).join(", "));
-        setComposerCc((draft.cc || []).join(", "));
-        setComposerBcc("");
+        setComposerTo((draft.to || []).join(", ")); setComposerCc((draft.cc || []).join(", ")); setComposerBcc("");
         setComposerSubject(draft.subject || buildReplySubject(message.subject));
         setComposerQuotedText(draft.text || buildReplyBody(message));
         setComposerQuotedHtml(draft.html || "");
@@ -1340,14 +1051,8 @@ const InboxPage: React.FC<{ user: any }> = ({ user }) => {
         setComposerIncludeOriginalAttachmentsAvailable(Boolean(draft.includeOriginalAttachmentsAvailable));
         setComposerOriginalAttachments(Array.isArray(draft.originalAttachments) ? draft.originalAttachments : []);
       } catch (error: any) {
-        toast({
-          title: "Reply draft unavailable",
-          description: error?.message || "Using fallback recipients for this reply.",
-          variant: "destructive",
-        });
-      } finally {
-        setComposerLoadingDraft(false);
-      }
+        toast({ title: "Reply draft unavailable", description: error?.message || "Using fallback recipients for this reply.", variant: "destructive" });
+      } finally { setComposerLoadingDraft(false); }
     },
     [resetComposerState, resolveDefaultComposerConfigId]
   );
@@ -1355,10 +1060,7 @@ const InboxPage: React.FC<{ user: any }> = ({ user }) => {
   const handleComposerAttachmentChange = useCallback((event: React.ChangeEvent<HTMLInputElement>) => {
     const files = Array.from(event.target.files || []);
     if (files.length === 0) return;
-    setComposerAttachments((prev) => [
-      ...prev,
-      ...files.map((file) => ({ id: createLocalId(), file })),
-    ]);
+    setComposerAttachments((prev) => [...prev, ...files.map((file) => ({ id: createLocalId(), file }))]);
     event.target.value = "";
   }, []);
 
@@ -1366,79 +1068,23 @@ const InboxPage: React.FC<{ user: any }> = ({ user }) => {
     setComposerAttachments((prev) => prev.filter((attachment) => attachment.id !== id));
   }, []);
 
+  // ── Keyboard shortcuts ──
   const handleKeyboardShortcut = useCallback(
     (event: KeyboardEvent) => {
       const target = event.target as HTMLElement | null;
-      const isTyping =
-        target?.tagName === "INPUT" ||
-        target?.tagName === "TEXTAREA" ||
-        target?.isContentEditable;
-
-      if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "k") {
-        event.preventDefault();
-        setCommandOpen(true);
-        return;
-      }
-
-      if (event.key === "/" && !isTyping) {
-        event.preventDefault();
-        searchInputRef.current?.focus();
-        return;
-      }
-
+      const isTyping = target?.tagName === "INPUT" || target?.tagName === "TEXTAREA" || target?.isContentEditable;
+      if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "k") { event.preventDefault(); setCommandOpen(true); return; }
+      if (event.key === "/" && !isTyping) { event.preventDefault(); searchInputRef.current?.focus(); return; }
       if (isTyping) return;
-
-      if (event.key.toLowerCase() === "j") {
-        event.preventDefault();
-        const nextIndex = Math.min(listItems.length - 1, selectedIndex + 1);
-        if (listItems[nextIndex]) {
-          handleSelectMessage(listItems[nextIndex].messageId);
-        }
-      }
-
-      if (event.key.toLowerCase() === "k") {
-        event.preventDefault();
-        const prevIndex = Math.max(0, selectedIndex - 1);
-        if (listItems[prevIndex]) {
-          handleSelectMessage(listItems[prevIndex].messageId);
-        }
-      }
-
-      if (event.key.toLowerCase() === "r" && selectedMessageId) {
-        event.preventDefault();
-        openComposer("reply", selectedMessage);
-      }
-
-      if (event.key.toLowerCase() === "a" && selectedMessageId) {
-        event.preventDefault();
-        performBulkAction("archive", [selectedMessageId], "Archived");
-      }
-
-      if (event.key.toLowerCase() === "f" && selectedMessageId) {
-        event.preventDefault();
-        openComposer("forward", selectedMessage);
-      }
-
-      if (event.key.toLowerCase() === "e" && selectedMessageId) {
-        event.preventDefault();
-        performBulkAction("archive", [selectedMessageId], "Archived");
-      }
-
-      if (event.key === "Escape" && mobileDetailOpen) {
-        event.preventDefault();
-        setMobileDetailOpen(false);
-      }
+      if (event.key.toLowerCase() === "j") { event.preventDefault(); const nextIndex = Math.min(listItems.length - 1, selectedIndex + 1); if (listItems[nextIndex]) handleSelectMessage(listItems[nextIndex].messageId); }
+      if (event.key.toLowerCase() === "k") { event.preventDefault(); const prevIndex = Math.max(0, selectedIndex - 1); if (listItems[prevIndex]) handleSelectMessage(listItems[prevIndex].messageId); }
+      if (event.key.toLowerCase() === "r" && selectedMessageId) { event.preventDefault(); openComposer("reply", selectedMessage); }
+      if (event.key.toLowerCase() === "a" && selectedMessageId) { event.preventDefault(); performBulkAction("archive", [selectedMessageId], "Archived"); }
+      if (event.key.toLowerCase() === "f" && selectedMessageId) { event.preventDefault(); openComposer("forward", selectedMessage); }
+      if (event.key.toLowerCase() === "e" && selectedMessageId) { event.preventDefault(); performBulkAction("archive", [selectedMessageId], "Archived"); }
+      if (event.key === "Escape" && mobileDetailOpen) { event.preventDefault(); setMobileDetailOpen(false); }
     },
-    [
-      listItems,
-      selectedIndex,
-      handleSelectMessage,
-      selectedMessageId,
-      selectedMessage,
-      performBulkAction,
-      openComposer,
-      mobileDetailOpen,
-    ]
+    [listItems, selectedIndex, handleSelectMessage, selectedMessageId, selectedMessage, performBulkAction, openComposer, mobileDetailOpen]
   );
 
   useEffect(() => {
@@ -1446,173 +1092,74 @@ const InboxPage: React.FC<{ user: any }> = ({ user }) => {
     return () => window.removeEventListener("keydown", handleKeyboardShortcut);
   }, [handleKeyboardShortcut]);
 
+  // ── Send ──
   const handleSend = useCallback(async () => {
     if (composerSending) return;
-
     if (composerMode === "forward") {
       const mailto = buildMailtoLink(composerTo || null, composerSubject, composerBody);
       window.open(mailto, "_blank", "noopener,noreferrer");
-      setComposeOpen(false);
-      resetComposerState();
-      toast({
-        title: "Forward opened",
-        description: "Your default mail app was opened for sending.",
-      });
+      setComposeOpen(false); resetComposerState();
+      toast({ title: "Forward opened", description: "Your default mail app was opened for sending." });
       return;
     }
-
     if (composerMode === "compose") {
       const to = parseAddressInput(composerTo);
-      if (!to.length) {
-        toast({
-          title: "Recipient required",
-          description: "Add at least one recipient in the To field.",
-          variant: "destructive",
-        });
-        return;
-      }
-      if (!composerBody.trim()) {
-        toast({
-          title: "Message required",
-          description: "Write your message before sending.",
-          variant: "destructive",
-        });
-        return;
-      }
-      if (!composerConfigId) {
-        toast({
-          title: "Inbox required",
-          description: "Choose which inbox to send from.",
-          variant: "destructive",
-        });
-        return;
-      }
-
+      if (!to.length) { toast({ title: "Recipient required", description: "Add at least one recipient in the To field.", variant: "destructive" }); return; }
+      if (!composerBody.trim()) { toast({ title: "Message required", description: "Write your message before sending.", variant: "destructive" }); return; }
+      if (!composerConfigId) { toast({ title: "Inbox required", description: "Choose which inbox to send from.", variant: "destructive" }); return; }
       setComposerSending(true);
       try {
-        const {
-          data: { session },
-        } = await supabase.auth.getSession();
+        const { data: { session } } = await supabase.auth.getSession();
         if (!session?.access_token) throw new Error("Not authenticated");
-
-        const attachmentPayload = await Promise.all(
-          composerAttachments.map(async (attachment) => ({
-            filename: attachment.file.name,
-            contentType: attachment.file.type || "application/octet-stream",
-            size: attachment.file.size,
-            content: await readFileAsBase64(attachment.file),
-          }))
-        );
-
+        const attachmentPayload = await Promise.all(composerAttachments.map(async (attachment) => ({
+          filename: attachment.file.name, contentType: attachment.file.type || "application/octet-stream",
+          size: attachment.file.size, content: await readFileAsBase64(attachment.file),
+        })));
         const response = await fetch(`${MAILBOX_API_URL}/api/inbox/compose`, {
           method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            Authorization: `Bearer ${session.access_token}`,
-          },
+          headers: { "Content-Type": "application/json", Authorization: `Bearer ${session.access_token}` },
           body: JSON.stringify({
-            configId: composerConfigId,
-            to,
-            cc: parseAddressInput(composerCc),
-            bcc: parseAddressInput(composerBcc),
-            subject: composerSubject,
-            text: composerBody,
-            html: buildHtmlFromText(composerBody),
-            attachments: attachmentPayload,
+            configId: composerConfigId, to, cc: parseAddressInput(composerCc), bcc: parseAddressInput(composerBcc),
+            subject: composerSubject, text: composerBody, html: buildHtmlFromText(composerBody), attachments: attachmentPayload,
           }),
         });
-
         let payload: { success?: boolean; error?: string } = {};
-        try {
-          payload = await response.json();
-        } catch (error) {
-          payload = {};
-        }
-
-        if (!response.ok || !payload?.success) {
-          throw new Error(payload?.error || "Failed to send message");
-        }
-
+        try { payload = await response.json(); } catch { payload = {}; }
+        if (!response.ok || !payload?.success) throw new Error(payload?.error || "Failed to send message");
         await queryClient.invalidateQueries({ queryKey: messagesQueryKey });
-        setComposeOpen(false);
-        resetComposerState();
-        toast({
-          title: "Message sent",
-          description: "Your email was sent successfully.",
-        });
+        setComposeOpen(false); resetComposerState();
+        toast({ title: "Message sent", description: "Your email was sent successfully." });
       } catch (error: any) {
-        toast({
-          title: "Send failed",
-          description: error?.message || "Unable to send message.",
-          variant: "destructive",
-        });
-      } finally {
-        setComposerSending(false);
-      }
+        toast({ title: "Send failed", description: error?.message || "Unable to send message.", variant: "destructive" });
+      } finally { setComposerSending(false); }
       return;
     }
-
-    if (!composerMessageId) {
-      toast({
-        title: "Reply unavailable",
-        description: "No message selected for this reply.",
-        variant: "destructive",
-      });
-      return;
-    }
-
+    if (!composerMessageId) { toast({ title: "Reply unavailable", description: "No message selected for this reply.", variant: "destructive" }); return; }
     setComposerSending(true);
     try {
-      const {
-        data: { session },
-      } = await supabase.auth.getSession();
+      const { data: { session } } = await supabase.auth.getSession();
       if (!session?.access_token) throw new Error("Not authenticated");
-
-      const attachmentPayload = await Promise.all(
-        composerAttachments.map(async (attachment) => ({
-          filename: attachment.file.name,
-          contentType: attachment.file.type || "application/octet-stream",
-          size: attachment.file.size,
-          content: await readFileAsBase64(attachment.file),
-        }))
-      );
-
+      const attachmentPayload = await Promise.all(composerAttachments.map(async (attachment) => ({
+        filename: attachment.file.name, contentType: attachment.file.type || "application/octet-stream",
+        size: attachment.file.size, content: await readFileAsBase64(attachment.file),
+      })));
       const replyText = composerBody.trim();
       const text = [replyText, composerQuotedText].filter(Boolean).join("\n\n");
       const html = [replyText ? buildHtmlFromText(replyText) : "", composerQuotedHtml].filter(Boolean).join("");
-
       const response = await fetch(`${MAILBOX_API_URL}/api/inbox/messages/${composerMessageId}/reply`, {
         method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${session.access_token}`,
-        },
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${session.access_token}` },
         body: JSON.stringify({
-          mode: composerMode,
-          text,
-          html,
-          ccOverride: parseAddressInput(composerCc),
-          bcc: parseAddressInput(composerBcc),
-          attachments: attachmentPayload,
+          mode: composerMode, text, html, ccOverride: parseAddressInput(composerCc),
+          bcc: parseAddressInput(composerBcc), attachments: attachmentPayload,
           includeOriginalAttachments: composerIncludeOriginalAttachments,
         }),
       });
-
       let payload: { success?: boolean; error?: string; threadingLimited?: boolean } = {};
-      try {
-        payload = await response.json();
-      } catch (error) {
-        payload = {};
-      }
-
-      if (!response.ok || !payload?.success) {
-        throw new Error(payload?.error || "Failed to send reply");
-      }
-
+      try { payload = await response.json(); } catch { payload = {}; }
+      if (!response.ok || !payload?.success) throw new Error(payload?.error || "Failed to send reply");
       await queryClient.invalidateQueries({ queryKey: messagesQueryKey });
-      setComposeOpen(false);
-      resetComposerState();
-
+      setComposeOpen(false); resetComposerState();
       toast({
         title: "Reply sent",
         description: payload.threadingLimited
@@ -1620,240 +1167,101 @@ const InboxPage: React.FC<{ user: any }> = ({ user }) => {
           : "Your reply was sent successfully.",
       });
     } catch (error: any) {
-      toast({
-        title: "Reply failed",
-        description: error?.message || "Unable to send reply.",
-        variant: "destructive",
-      });
-    } finally {
-      setComposerSending(false);
-    }
+      toast({ title: "Reply failed", description: error?.message || "Unable to send reply.", variant: "destructive" });
+    } finally { setComposerSending(false); }
   }, [
-    composerAttachments,
-    composerBcc,
-    composerBody,
-    composerCc,
-    composerConfigId,
-    composerIncludeOriginalAttachments,
-    composerMessageId,
-    composerMode,
-    composerQuotedHtml,
-    composerQuotedText,
-    composerSending,
-    composerSubject,
-    composerTo,
-    messagesQueryKey,
-    queryClient,
-    resetComposerState,
+    composerAttachments, composerBcc, composerBody, composerCc, composerConfigId,
+    composerIncludeOriginalAttachments, composerMessageId, composerMode,
+    composerQuotedHtml, composerQuotedText, composerSending, composerSubject, composerTo,
+    messagesQueryKey, queryClient, resetComposerState,
   ]);
 
   useEffect(() => {
     const handleComposerKeys = (event: KeyboardEvent) => {
       if (!composeOpen) return;
-      if ((event.metaKey || event.ctrlKey) && event.key === "Enter") {
-        event.preventDefault();
-        void handleSend();
-      }
+      if ((event.metaKey || event.ctrlKey) && event.key === "Enter") { event.preventDefault(); void handleSend(); }
     };
     window.addEventListener("keydown", handleComposerKeys);
     return () => window.removeEventListener("keydown", handleComposerKeys);
   }, [composeOpen, handleSend]);
 
+  // ── Sync ──
   const triggerMailboxSync = async (configId: string, accessToken: string) => {
     const response = await fetch(MAILBOX_SYNC_URL, {
       method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${accessToken}`,
-      },
-      body: JSON.stringify({
-        configId,
-        config_id: configId,
-        mailboxId: configId,
-        limit: 50,
-      }),
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${accessToken}` },
+      body: JSON.stringify({ configId, config_id: configId, mailboxId: configId, limit: 50 }),
     });
-
     let payload: any = null;
-    try {
-      payload = await response.json();
-    } catch (error) {
-      payload = null;
-    }
-
+    try { payload = await response.json(); } catch { payload = null; }
     if (!response.ok || payload?.success === false) {
       const baseMessage = payload?.error || payload?.message || "Sync failed";
       const detailMessage = payload?.details || payload?.hint || "";
       throw new Error(detailMessage ? `${baseMessage}: ${detailMessage}` : baseMessage);
     }
-
     return payload;
   };
 
   const syncMailbox = async (mailboxId?: string) => {
-    const targetIds = mailboxId
-      ? [mailboxId]
-      : selectedMailboxId === ALL_INBOXES
-        ? includedMailboxIds
-        : mailboxes.map((config) => config.id).filter(Boolean);
-
-    if (targetIds.length === 0) {
-      toast({
-        title: "No inboxes selected",
-        description: "Choose at least one inbox to sync.",
-      });
-      return;
-    }
-
+    const targetIds = mailboxId ? [mailboxId]
+      : selectedMailboxId === ALL_INBOXES ? includedMailboxIds
+      : mailboxes.map((config) => config.id).filter(Boolean);
+    if (targetIds.length === 0) { toast({ title: "No inboxes selected", description: "Choose at least one inbox to sync." }); return; }
     setSyncState((prev) => {
       const next = { ...prev };
-      if (!mailboxId) {
-        next.all = {
-          status: "syncing",
-          lastSyncedAt: prev.all?.lastSyncedAt,
-          error: undefined,
-        };
-      }
-      for (const id of targetIds) {
-        next[id] = {
-          status: "syncing",
-          lastSyncedAt: prev[id]?.lastSyncedAt,
-          error: undefined,
-        };
-      }
+      if (!mailboxId) next.all = { status: "syncing", lastSyncedAt: prev.all?.lastSyncedAt, error: undefined };
+      for (const id of targetIds) next[id] = { status: "syncing", lastSyncedAt: prev[id]?.lastSyncedAt, error: undefined };
       return next;
     });
-
     try {
       const { data: { session } } = await supabase.auth.getSession();
       if (!session?.access_token) throw new Error("Not authenticated");
-
-      let successCount = 0;
-      let errorCount = 0;
-
+      let successCount = 0, errorCount = 0;
       for (const id of targetIds) {
         try {
           await triggerMailboxSync(id, session.access_token);
-          successCount += 1;
-          setSyncState((prev) => ({
-            ...prev,
-            [id]: { status: "success", lastSyncedAt: new Date().toISOString(), error: undefined },
-          }));
+          successCount++;
+          setSyncState((prev) => ({ ...prev, [id]: { status: "success", lastSyncedAt: new Date().toISOString(), error: undefined } }));
         } catch (error: any) {
-          errorCount += 1;
-          setSyncState((prev) => ({
-            ...prev,
-            [id]: {
-              status: "error",
-              lastSyncedAt: prev[id]?.lastSyncedAt,
-              error: error?.message || "Sync failed",
-            },
-          }));
+          errorCount++;
+          setSyncState((prev) => ({ ...prev, [id]: { status: "error", lastSyncedAt: prev[id]?.lastSyncedAt, error: error?.message || "Sync failed" } }));
         }
       }
-
       if (!mailboxId) {
         const now = new Date().toISOString();
-        setSyncState((prev) => ({
-          ...prev,
-          all: {
-            status: errorCount ? "error" : "success",
-            lastSyncedAt: now,
-            error: errorCount
-              ? `${errorCount} mailbox${errorCount === 1 ? "" : "es"} failed`
-              : undefined,
-          },
-        }));
+        setSyncState((prev) => ({ ...prev, all: { status: errorCount ? "error" : "success", lastSyncedAt: now, error: errorCount ? `${errorCount} mailbox${errorCount === 1 ? "" : "es"} failed` : undefined } }));
       }
-
-      if (successCount > 0) {
-        messagesQuery.refetch();
-      }
-
-      if (errorCount === 0) {
-        toast({
-          title: "Synced",
-          description: mailboxId
-            ? "Inbox is up to date."
-            : `Synced ${successCount} mailbox${successCount === 1 ? "" : "es"}.`,
-        });
-      } else if (successCount > 0) {
-        toast({
-          title: "Sync completed with errors",
-          description: `${errorCount} mailbox${errorCount === 1 ? "" : "es"} failed.`,
-          variant: "destructive",
-        });
-      } else {
-        toast({
-          title: "Sync failed",
-          description: "All mailbox syncs failed. Try again in a moment.",
-          variant: "destructive",
-        });
-      }
+      if (successCount > 0) messagesQuery.refetch();
+      if (errorCount === 0) toast({ title: "Synced", description: mailboxId ? "Inbox is up to date." : `Synced ${successCount} mailbox${successCount === 1 ? "" : "es"}.` });
+      else if (successCount > 0) toast({ title: "Sync completed with errors", description: `${errorCount} mailbox${errorCount === 1 ? "" : "es"} failed.`, variant: "destructive" });
+      else toast({ title: "Sync failed", description: "All mailbox syncs failed. Try again in a moment.", variant: "destructive" });
     } catch (error: any) {
       const message = error?.message || "Try again in a moment.";
       setSyncState((prev) => {
         const next = { ...prev };
-        if (!mailboxId) {
-          next.all = {
-            status: "error",
-            lastSyncedAt: prev.all?.lastSyncedAt,
-            error: message,
-          };
-        }
-        for (const id of targetIds) {
-          next[id] = {
-            status: "error",
-            lastSyncedAt: prev[id]?.lastSyncedAt,
-            error: message,
-          };
-        }
+        if (!mailboxId) next.all = { status: "error", lastSyncedAt: prev.all?.lastSyncedAt, error: message };
+        for (const id of targetIds) next[id] = { status: "error", lastSyncedAt: prev[id]?.lastSyncedAt, error: message };
         return next;
       });
-
-      // Nielsen: helpful error messages with next-step guidance.
-      toast({
-        title: "Sync failed",
-        description: message,
-        variant: "destructive",
-      });
+      toast({ title: "Sync failed", description: message, variant: "destructive" });
     }
   };
 
   const onItemsRendered = ({ visibleStopIndex }: ListOnItemsRenderedProps) => {
     if (messagesQuery.hasNextPage && !messagesQuery.isFetchingNextPage) {
-      if (visibleStopIndex >= listItems.length - 8) {
-        messagesQuery.fetchNextPage();
-      }
+      if (visibleStopIndex >= listItems.length - 8) messagesQuery.fetchNextPage();
     }
   };
 
   const listData = useMemo(
     () => ({
-      items: listItems,
-      selectedId: selectedMessageId,
-      density,
-      selectedIds,
-      onSelect: handleSelectMessage,
-      onToggleSelect: handleSelectMessageToggle,
+      items: listItems, selectedId: selectedMessageId, density, selectedIds,
+      onSelect: handleSelectMessage, onToggleSelect: handleSelectMessageToggle,
       onArchive: (id: string) => performBulkAction("archive", [id], "Archived"),
-      onToggleRead: (id: string, isRead: boolean) =>
-        performBulkAction(isRead ? "markUnread" : "markRead", [id]),
-      onToggleStar: toggleStar,
-      starredIds,
-      assignedIds,
+      onToggleRead: (id: string, isRead: boolean) => performBulkAction(isRead ? "markUnread" : "markRead", [id]),
+      onToggleStar: toggleStar, starredIds, assignedIds,
     }),
-    [
-      listItems,
-      selectedMessageId,
-      density,
-      selectedIds,
-      handleSelectMessage,
-      performBulkAction,
-      toggleStar,
-      starredIds,
-      assignedIds,
-    ]
+    [listItems, selectedMessageId, density, selectedIds, handleSelectMessage, performBulkAction, toggleStar, starredIds, assignedIds]
   );
 
   const allSelected = selectedIds.size > 0 && selectedIds.size === listItems.length;
@@ -1861,35 +1269,10 @@ const InboxPage: React.FC<{ user: any }> = ({ user }) => {
 
   const filterChips = useMemo(() => {
     const chips: Array<{ label: string; onRemove: () => void }> = [];
-
-    if (filters.from) {
-      chips.push({
-        label: `From: ${filters.from}`,
-        onRemove: () => setFilters((prev) => ({ ...prev, from: undefined })),
-      });
-    }
-
-    if (filters.subject) {
-      chips.push({
-        label: `Subject: ${filters.subject}`,
-        onRemove: () => setFilters((prev) => ({ ...prev, subject: undefined })),
-      });
-    }
-
-    if (filters.hasAttachment) {
-      chips.push({
-        label: "Has attachment",
-        onRemove: () => setFilters((prev) => ({ ...prev, hasAttachment: undefined })),
-      });
-    }
-
-    if (filters.dateFrom || filters.dateTo) {
-      chips.push({
-        label: `Date: ${filters.dateFrom || "Any"} ? ${filters.dateTo || "Any"}`,
-        onRemove: () => setFilters((prev) => ({ ...prev, dateFrom: undefined, dateTo: undefined })),
-      });
-    }
-
+    if (filters.from) chips.push({ label: `From: ${filters.from}`, onRemove: () => setFilters((prev) => ({ ...prev, from: undefined })) });
+    if (filters.subject) chips.push({ label: `Subject: ${filters.subject}`, onRemove: () => setFilters((prev) => ({ ...prev, subject: undefined })) });
+    if (filters.hasAttachment) chips.push({ label: "Has attachment", onRemove: () => setFilters((prev) => ({ ...prev, hasAttachment: undefined })) });
+    if (filters.dateFrom || filters.dateTo) chips.push({ label: `Date: ${filters.dateFrom || "Any"} → ${filters.dateTo || "Any"}`, onRemove: () => setFilters((prev) => ({ ...prev, dateFrom: undefined, dateTo: undefined })) });
     return chips;
   }, [filters]);
 
@@ -1906,372 +1289,225 @@ const InboxPage: React.FC<{ user: any }> = ({ user }) => {
     : "Sync status unknown";
 
   const effectiveViewMode = isWide ? viewMode : "list";
-
   const emptyMailboxes = !mailboxesQuery.isLoading && mailboxes.length === 0;
   const isLoadingList = messagesQuery.isLoading && listItems.length === 0;
 
+  // ═══════════════════════════════════════════════════════
+  // RENDER — New Matte Ceramic / Pro Tool Design
+  // ═══════════════════════════════════════════════════════
   return (
-    <div className="flex flex-col gap-6">
-      {/* Nielsen: visibility of system status via sync banner + unread count */}
-      <div className="flex flex-wrap items-center justify-between gap-4">
-        <div>
-          <div className="flex items-center gap-3">
-            <h1 className="text-3xl font-semibold tracking-tight text-slate-900">Inbox</h1>
-            <Badge variant="secondary" className="rounded-full px-3 text-xs">
-              {unreadCount} unread
+    <div className="flex h-screen flex-col overflow-hidden bg-inbox-surface">
+      {/* ── Top Header Bar ── */}
+      <header className="flex items-center justify-between border-b border-inbox-border bg-inbox-surface-elevated px-6 py-3">
+        <div className="flex items-center gap-4">
+          <h1 className="text-xl font-semibold tracking-tight text-inbox-ink">Inbox</h1>
+          {unreadCount > 0 && (
+            <Badge className="rounded-full bg-primary/10 text-primary border-0 px-2.5 text-xs font-medium">
+              {unreadCount} new
             </Badge>
-          </div>
-          <p className="mt-1 text-sm text-slate-600">
-            Triage conversations across every workspace and mailbox.
-          </p>
+          )}
         </div>
-
-        <div className="flex flex-wrap items-center gap-3">
-          {/* Von Restorff + Fitts: primary action is distinct, large, and near top-right */}
+        <div className="flex items-center gap-2">
           <Button
             onClick={() => openComposer("compose")}
-            className="gap-2 bg-[var(--shell-accent)] text-white hover:bg-emerald-700"
+            className="gap-2 bg-accent text-accent-foreground hover:bg-inbox-accent-hover"
+            size="sm"
           >
             <MailPlus className="h-4 w-4" />
             Compose
           </Button>
           <Button
-            variant="outline"
+            variant="outline" size="sm" className="gap-2 border-inbox-border"
             onClick={() => syncMailbox(selectedMailboxId === ALL_INBOXES ? undefined : selectedMailboxId)}
             disabled={isSyncingSelection}
-            className="gap-2"
           >
-            <RefreshCw className={cn("h-4 w-4", isSyncingSelection && "animate-spin")} />
+            <RefreshCw className={cn("h-3.5 w-3.5", isSyncingSelection && "animate-spin")} />
             {isSyncingSelection ? "Syncing..." : "Sync"}
           </Button>
         </div>
-      </div>
-      {/* Hick's Law + Miller: group controls into chunks and keep the first row focused */}
-      <div className={cn("rounded-3xl p-5", inboxAccentClasses)}>
-        <div className="flex flex-wrap items-center justify-between gap-4">
-          <div className="flex flex-wrap items-center gap-3">
-            <div className="flex items-center gap-2 rounded-full border border-slate-200 bg-white px-3 py-1 text-xs text-slate-600">
-              <span className="text-[11px] uppercase tracking-wide text-slate-400">Workspace</span>
-              <span className="font-medium">Acme Revenue</span>
-              <Badge variant="outline" className="text-[10px]">Admin</Badge>
-            </div>
+      </header>
 
-            <DropdownMenu>
-              <DropdownMenuTrigger asChild>
-                <Button
-                  variant="outline"
-                  className="h-9 w-[220px] justify-between bg-white px-3 font-normal"
-                >
-                  <span className="truncate text-left">{selectedMailboxLabel}</span>
-                  <ChevronDown className="h-3 w-3 text-slate-500" />
-                </Button>
-              </DropdownMenuTrigger>
-              <DropdownMenuContent className="w-80 max-h-[70vh] overflow-y-auto" align="start">
-                <div className="px-2 pb-2">
-                  <div className="relative">
-                    <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
-                    <Input
-                      value={mailboxMenuSearch}
-                      onChange={(event) => setMailboxMenuSearch(event.target.value)}
-                      placeholder="Search inboxes..."
-                      className="h-9 border-slate-200 bg-white pl-9 text-sm"
-                    />
-                  </div>
+      {/* ── Controls Bar ── */}
+      <div className="border-b border-inbox-border bg-inbox-surface-elevated px-6 py-2.5">
+        <div className="flex flex-wrap items-center gap-3">
+          {/* Mailbox selector */}
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button variant="outline" size="sm" className="h-8 gap-2 border-inbox-border bg-inbox-surface-elevated px-3 text-xs font-normal">
+                <span className="text-inbox-ink-muted text-[10px] uppercase tracking-wider">Mailbox</span>
+                <span className="font-medium text-inbox-ink">{selectedMailboxLabel}</span>
+                <ChevronDown className="h-3 w-3 text-inbox-ink-subtle" />
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="start" className="w-80 max-h-[70vh] overflow-y-auto">
+              <div className="px-2 pb-2">
+                <div className="relative">
+                  <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-inbox-ink-subtle" />
+                  <Input
+                    value={mailboxMenuSearch}
+                    onChange={(event) => setMailboxMenuSearch(event.target.value)}
+                    placeholder="Search inboxes..."
+                    className="h-9 border-inbox-border pl-9 text-sm"
+                  />
                 </div>
-                <DropdownMenuLabel>Mailbox scope</DropdownMenuLabel>
-                <DropdownMenuSeparator />
-                <DropdownMenuRadioGroup
-                  value={selectedMailboxId}
-                  onValueChange={setSelectedMailboxId}
-                >
-                  <DropdownMenuRadioItem value={ALL_INBOXES}>
-                    All inboxes
-                  </DropdownMenuRadioItem>
-                  {filteredMailboxOptions.map((config) => (
-                    <DropdownMenuRadioItem key={config.id} value={config.id}>
-                      {buildMailboxLabel(config)}
-                    </DropdownMenuRadioItem>
-                  ))}
-                </DropdownMenuRadioGroup>
+              </div>
+              <DropdownMenuLabel className="text-xs">Mailbox scope</DropdownMenuLabel>
+              <DropdownMenuSeparator />
+              <DropdownMenuRadioGroup value={selectedMailboxId} onValueChange={setSelectedMailboxId}>
+                <DropdownMenuRadioItem value={ALL_INBOXES}>All inboxes</DropdownMenuRadioItem>
+                {filteredMailboxOptions.map((config) => (
+                  <DropdownMenuRadioItem key={config.id} value={config.id}>{buildMailboxLabel(config)}</DropdownMenuRadioItem>
+                ))}
+              </DropdownMenuRadioGroup>
+              {selectedMailboxId === ALL_INBOXES && mailboxes.length > 1 && (
+                <>
+                  <DropdownMenuSeparator />
+                  <DropdownMenuLabel>Included inboxes</DropdownMenuLabel>
+                  <DropdownMenuItem onSelect={(event) => { event.preventDefault(); setExcludedMailboxIds([]); }}>
+                    <Check className={cn("mr-2 h-4 w-4", allInboxesIncluded ? "opacity-100" : "opacity-0")} />
+                    Select all
+                  </DropdownMenuItem>
+                  <DropdownMenuItem onSelect={(event) => { event.preventDefault(); setExcludedMailboxIds(mailboxes.map((c) => c.id).filter((id): id is string => Boolean(id))); }}>
+                    Deselect all
+                  </DropdownMenuItem>
+                  <DropdownMenuSeparator />
+                  <div className="max-h-56 overflow-y-auto">
+                    {filteredMailboxOptions.map((config) => {
+                      const checked = !excludedMailboxIds.includes(config.id);
+                      return (
+                        <DropdownMenuCheckboxItem
+                          key={config.id} checked={checked}
+                          onCheckedChange={(value) => {
+                            setExcludedMailboxIds((prev) => {
+                              const has = prev.includes(config.id);
+                              if (value === true && has) return prev.filter((id) => id !== config.id);
+                              if (value !== true && !has) return [...prev, config.id];
+                              return prev;
+                            });
+                          }}
+                          onSelect={(event) => event.preventDefault()}
+                        >
+                          {buildMailboxLabel(config)}
+                        </DropdownMenuCheckboxItem>
+                      );
+                    })}
+                    {filteredMailboxOptions.length === 0 && <DropdownMenuItem disabled>No inboxes found</DropdownMenuItem>}
+                  </div>
+                </>
+              )}
+            </DropdownMenuContent>
+          </DropdownMenu>
 
-                {selectedMailboxId === ALL_INBOXES && mailboxes.length > 1 && (
-                  <>
-                    <DropdownMenuSeparator />
-                    <DropdownMenuLabel>Included inboxes</DropdownMenuLabel>
-                    <DropdownMenuItem
-                      onSelect={(event) => {
-                        event.preventDefault();
-                        setExcludedMailboxIds([]);
-                      }}
-                    >
-                      <Check
-                        className={cn(
-                          "mr-2 h-4 w-4",
-                          allInboxesIncluded ? "opacity-100" : "opacity-0"
-                        )}
-                      />
-                      Select all
-                    </DropdownMenuItem>
-                    <DropdownMenuItem
-                      onSelect={(event) => {
-                        event.preventDefault();
-                        setExcludedMailboxIds(
-                          mailboxes
-                            .map((config) => config.id)
-                            .filter((id): id is string => Boolean(id))
-                        );
-                      }}
-                    >
-                      Deselect all
-                    </DropdownMenuItem>
-                    <DropdownMenuSeparator />
-                    <div className="max-h-56 overflow-y-auto">
-                      {filteredMailboxOptions.map((config) => {
-                        const checked = !excludedMailboxIds.includes(config.id);
-                        return (
-                          <DropdownMenuCheckboxItem
-                            key={config.id}
-                            checked={checked}
-                            onCheckedChange={(value) => {
-                              setExcludedMailboxIds((prev) => {
-                                const has = prev.includes(config.id);
-                                if (value === true && has) {
-                                  return prev.filter((id) => id !== config.id);
-                                }
-                                if (value !== true && !has) {
-                                  return [...prev, config.id];
-                                }
-                                return prev;
-                              });
-                            }}
-                            onSelect={(event) => event.preventDefault()}
-                          >
-                            {buildMailboxLabel(config)}
-                          </DropdownMenuCheckboxItem>
-                        );
-                      })}
-                      {filteredMailboxOptions.length === 0 && (
-                        <DropdownMenuItem disabled>No inboxes found</DropdownMenuItem>
-                      )}
-                    </div>
-                  </>
-                )}
-              </DropdownMenuContent>
-            </DropdownMenu>
-          </div>
-
-          <div className="flex flex-wrap items-center gap-2 text-xs text-slate-500">
-            <Badge variant="outline" className="text-[11px]">
-              {syncSummary?.status === "syncing" ? "Syncing" : "Healthy"}
-            </Badge>
-            <span>{syncLabel}</span>
-            <DropdownMenu>
-              <DropdownMenuTrigger asChild>
-                <Button variant="ghost" size="sm" className="gap-1 text-xs">
-                  <RefreshCw className="h-3 w-3" />
-                  Sync details
-                </Button>
-              </DropdownMenuTrigger>
-              <DropdownMenuContent align="end" className="w-72">
-                <DropdownMenuLabel>Mailbox sync</DropdownMenuLabel>
-                <DropdownMenuSeparator />
-                {mailboxes.map((config) => {
-                  const mailboxSync = syncState[config.id];
-                  const statusLabel = mailboxSync?.status || "idle";
-                  return (
-                    <DropdownMenuItem key={config.id} className="flex items-center justify-between gap-3">
-                      <div className="flex flex-col">
-                        <span className="text-xs font-medium text-slate-700">{buildMailboxLabel(config)}</span>
-                        <span className="text-[10px] text-slate-400">
-                          {mailboxSync?.lastSyncedAt
-                            ? `Last synced ${formatDistanceToNow(new Date(mailboxSync.lastSyncedAt), { addSuffix: true })}`
-                            : "Never synced"}
-                        </span>
-                        {mailboxSync?.error && (
-                          <span className="text-[10px] text-rose-500">{mailboxSync.error}</span>
-                        )}
-                      </div>
-                      <Badge variant="outline" className="text-[10px] capitalize">
-                        {statusLabel}
-                      </Badge>
-                    </DropdownMenuItem>
-                  );
-                })}
-                <DropdownMenuSeparator />
-                <DropdownMenuItem onSelect={() => syncMailbox(undefined)}>
-                  Sync all mailboxes
-                </DropdownMenuItem>
-              </DropdownMenuContent>
-            </DropdownMenu>
-            <Button variant="ghost" size="sm" className="gap-1 text-xs" onClick={() => setCommandOpen(true)}>
-              <CommandIcon className="h-3 w-3" />
-              Cmd/Ctrl+K
-            </Button>
-          </div>
-        </div>
-
-        {/* Progressive disclosure: advanced filters sit in a popover */}
-        <div className="mt-4 flex flex-wrap items-center gap-3">
-          <div className="relative flex-1 min-w-[240px]">
-            <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
+          {/* Search */}
+          <div className="relative flex-1 max-w-md">
+            <Search className="absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-inbox-ink-subtle" />
             <Input
               ref={searchInputRef}
               value={searchQuery}
-              onChange={(event) => setSearchQuery(event.target.value)}
-              placeholder="Search conversations, people, or subject"
-              className="h-10 pl-10 pr-14"
+              onChange={(e) => setSearchQuery(e.target.value)}
+              placeholder="Search conversations..."
+              className="h-8 border-inbox-border bg-inbox-surface pl-8 pr-10 text-xs"
             />
-            <kbd className="absolute right-2 top-1/2 -translate-y-1/2 rounded border border-slate-200 bg-slate-50 px-2 py-0.5 text-[10px] text-slate-500">
-              /
-            </kbd>
+            <kbd className="absolute right-2 top-1/2 -translate-y-1/2 rounded border border-inbox-border bg-inbox-surface px-1.5 py-0.5 text-[9px] text-inbox-ink-subtle font-mono">/</kbd>
           </div>
 
+          {/* Filters */}
           <Popover>
             <PopoverTrigger asChild>
-              <Button variant="outline" className="gap-2">
-                <Filter className="h-4 w-4" />
+              <Button variant="outline" size="sm" className="h-8 gap-1.5 border-inbox-border text-xs">
+                <Filter className="h-3.5 w-3.5" />
                 Filters
               </Button>
             </PopoverTrigger>
             <PopoverContent className="w-80 p-4" align="start">
               <div className="space-y-3">
-                <div className="space-y-2">
-                  <Label className="text-xs text-slate-500">From</Label>
-                  <Input
-                    value={filters.from || ""}
-                    onChange={(event) => setFilters((prev) => ({ ...prev, from: event.target.value || undefined }))}
-                    placeholder="name@company.com"
-                  />
+                <div className="space-y-1.5">
+                  <Label className="text-[11px] text-inbox-ink-muted">From</Label>
+                  <Input value={filters.from || ""} onChange={(e) => setFilters((p) => ({ ...p, from: e.target.value || undefined }))} placeholder="name@company.com" className="h-8 text-xs" />
                 </div>
-                <div className="space-y-2">
-                  <Label className="text-xs text-slate-500">Subject</Label>
-                  <Input
-                    value={filters.subject || ""}
-                    onChange={(event) => setFilters((prev) => ({ ...prev, subject: event.target.value || undefined }))}
-                    placeholder="Proposal, follow up..."
-                  />
+                <div className="space-y-1.5">
+                  <Label className="text-[11px] text-inbox-ink-muted">Subject</Label>
+                  <Input value={filters.subject || ""} onChange={(e) => setFilters((p) => ({ ...p, subject: e.target.value || undefined }))} placeholder="Keyword..." className="h-8 text-xs" />
                 </div>
                 <div className="flex items-center justify-between">
-                  <Label className="text-xs text-slate-500">Has attachment</Label>
-                  <Switch
-                    checked={Boolean(filters.hasAttachment)}
-                    onCheckedChange={(checked) =>
-                      setFilters((prev) => ({ ...prev, hasAttachment: checked || undefined }))
-                    }
-                  />
+                  <Label className="text-[11px] text-inbox-ink-muted">Has attachment</Label>
+                  <Switch checked={Boolean(filters.hasAttachment)} onCheckedChange={(checked) => setFilters((p) => ({ ...p, hasAttachment: checked || undefined }))} />
                 </div>
                 <div className="grid grid-cols-2 gap-2">
-                  <div className="space-y-2">
-                    <Label className="text-xs text-slate-500">From date</Label>
-                    <Input
-                      type="date"
-                      value={filters.dateFrom || ""}
-                      onChange={(event) => setFilters((prev) => ({ ...prev, dateFrom: event.target.value || undefined }))}
-                    />
+                  <div className="space-y-1.5">
+                    <Label className="text-[11px] text-inbox-ink-muted">From date</Label>
+                    <Input type="date" value={filters.dateFrom || ""} onChange={(e) => setFilters((p) => ({ ...p, dateFrom: e.target.value || undefined }))} className="h-8 text-xs" />
                   </div>
-                  <div className="space-y-2">
-                    <Label className="text-xs text-slate-500">To date</Label>
-                    <Input
-                      type="date"
-                      value={filters.dateTo || ""}
-                      onChange={(event) => setFilters((prev) => ({ ...prev, dateTo: event.target.value || undefined }))}
-                    />
+                  <div className="space-y-1.5">
+                    <Label className="text-[11px] text-inbox-ink-muted">To date</Label>
+                    <Input type="date" value={filters.dateTo || ""} onChange={(e) => setFilters((p) => ({ ...p, dateTo: e.target.value || undefined }))} className="h-8 text-xs" />
                   </div>
                 </div>
-                <div className="flex items-center justify-between gap-2 pt-2">
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    onClick={() => setFilters({})}
-                  >
-                    Clear
-                  </Button>
-                  <Button size="sm">Apply</Button>
+                <div className="flex gap-2 pt-1">
+                  <Button variant="ghost" size="sm" className="text-xs" onClick={() => setFilters({})}>Clear</Button>
+                  <Button size="sm" className="text-xs">Apply</Button>
                 </div>
               </div>
             </PopoverContent>
           </Popover>
 
-          <ToggleGroup
-            type="single"
-            value={viewMode}
-            onValueChange={(value) => value && setViewMode(value as ViewMode)}
-            className="rounded-full border border-[var(--shell-border)] bg-white px-1"
-          >
-            <ToggleGroupItem
-              value="split"
-              aria-label="Split view"
-              className="data-[state=on]:bg-[var(--shell-accent)] data-[state=on]:text-white"
-            >
-              <LayoutPanelLeft className="h-4 w-4" />
+          <div className="h-4 w-px bg-inbox-border" />
+
+          {/* View mode */}
+          <ToggleGroup type="single" value={viewMode} onValueChange={(v) => v && setViewMode(v as ViewMode)} className="h-8">
+            <ToggleGroupItem value="split" aria-label="Split" className="h-8 w-8 p-0 data-[state=on]:bg-primary data-[state=on]:text-primary-foreground">
+              <LayoutPanelLeft className="h-3.5 w-3.5" />
             </ToggleGroupItem>
-            <ToggleGroupItem
-              value="list"
-              aria-label="List view"
-              className="data-[state=on]:bg-[var(--shell-accent)] data-[state=on]:text-white"
-            >
-              <LayoutList className="h-4 w-4" />
+            <ToggleGroupItem value="list" aria-label="List" className="h-8 w-8 p-0 data-[state=on]:bg-primary data-[state=on]:text-primary-foreground">
+              <LayoutList className="h-3.5 w-3.5" />
             </ToggleGroupItem>
-            <ToggleGroupItem
-              value="detail"
-              aria-label="Detail view"
-              className="data-[state=on]:bg-[var(--shell-accent)] data-[state=on]:text-white"
-            >
-              <LayoutPanelTop className="h-4 w-4" />
+            <ToggleGroupItem value="detail" aria-label="Detail" className="h-8 w-8 p-0 data-[state=on]:bg-primary data-[state=on]:text-primary-foreground">
+              <LayoutPanelTop className="h-3.5 w-3.5" />
             </ToggleGroupItem>
           </ToggleGroup>
 
-          <ToggleGroup
-            type="single"
-            value={density}
-            onValueChange={(value) => value && setDensity(value as Density)}
-            className="rounded-full border border-[var(--shell-border)] bg-white px-1"
-          >
-            <ToggleGroupItem value="compact" aria-label="Compact density">
-              <ArrowDownNarrowWide className="h-4 w-4" />
+          {/* Density */}
+          <ToggleGroup type="single" value={density} onValueChange={(v) => v && setDensity(v as Density)} className="h-8">
+            <ToggleGroupItem value="compact" aria-label="Compact" className="h-8 w-8 p-0">
+              <ArrowDownNarrowWide className="h-3.5 w-3.5" />
             </ToggleGroupItem>
-            <ToggleGroupItem value="comfortable" aria-label="Comfortable density">
-              <ArrowDownNarrowWide className="h-4 w-4" />
+            <ToggleGroupItem value="comfortable" aria-label="Comfortable" className="h-8 w-8 p-0">
+              <ArrowDownNarrowWide className="h-3.5 w-3.5 rotate-180" />
             </ToggleGroupItem>
           </ToggleGroup>
 
-          <div className="flex items-center gap-2 text-xs text-slate-500">
-            <Switch
-              checked={threadedView}
-              onCheckedChange={setThreadedView}
-              id="threaded-view"
-            />
-            <Label htmlFor="threaded-view">Threaded</Label>
+          <div className="flex items-center gap-1.5 text-xs text-inbox-ink-muted">
+            <Switch checked={threadedView} onCheckedChange={setThreadedView} id="threaded" className="scale-75" />
+            <Label htmlFor="threaded" className="text-[11px] cursor-pointer">Threaded</Label>
+          </div>
+
+          {/* Sync details */}
+          <div className="flex items-center gap-1.5 text-[11px] text-inbox-ink-subtle">
+            <Badge variant="outline" className="text-[10px] border-inbox-border">
+              {syncSummary?.status === "syncing" ? "Syncing" : "Healthy"}
+            </Badge>
+            <span>{syncLabel}</span>
           </div>
 
           {isWide && viewMode === "split" && (
-            <Button
-              variant="outline"
-              size="sm"
-              className="gap-2"
-              onClick={() => setContextOpen((prev) => !prev)}
-            >
-              {contextOpen ? <ChevronRight className="h-4 w-4" /> : <ChevronLeft className="h-4 w-4" />}
-              {contextOpen ? "Hide context" : "Show context"}
+            <Button variant="ghost" size="sm" className="h-8 gap-1 text-[11px] text-inbox-ink-muted" onClick={() => setContextOpen((p) => !p)}>
+              {contextOpen ? <ChevronRight className="h-3 w-3" /> : <ChevronLeft className="h-3 w-3" />}
+              {contextOpen ? "Hide context" : "Context"}
             </Button>
           )}
+
+          <Button variant="ghost" size="sm" className="h-8 gap-1 text-[11px] text-inbox-ink-muted" onClick={() => setCommandOpen(true)}>
+            <CommandIcon className="h-3 w-3" />
+            <span className="hidden sm:inline">⌘K</span>
+          </Button>
         </div>
 
         {filterChips.length > 0 && (
-          <div className="mt-3 flex flex-wrap gap-2">
+          <div className="mt-2 flex flex-wrap gap-2">
             {filterChips.map((chip) => (
-              <Badge
-                key={chip.label}
-                variant="secondary"
-                className="gap-1 rounded-full px-3"
-              >
+              <Badge key={chip.label} variant="secondary" className="gap-1 rounded-full px-3 text-[11px]">
                 {chip.label}
-                <button
-                  type="button"
-                  onClick={chip.onRemove}
-                  className="rounded-full p-0.5 hover:bg-slate-200"
-                  aria-label={`Remove ${chip.label}`}
-                >
+                <button type="button" onClick={chip.onRemove} className="rounded-full p-0.5 hover:bg-muted" aria-label={`Remove ${chip.label}`}>
                   <X className="h-3 w-3" />
                 </button>
               </Badge>
@@ -2280,394 +1516,253 @@ const InboxPage: React.FC<{ user: any }> = ({ user }) => {
         )}
       </div>
 
-      {/* Gestalt + Miller: tabs chunk the list into recognizable slices */}
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <Tabs value={savedView} onValueChange={(value) => setSavedView(value as InboxSavedViewId)}>
-          <TabsList className="bg-white">
+      {/* ── Tabs Bar ── */}
+      <div className="flex items-center justify-between border-b border-inbox-border bg-inbox-surface-elevated px-6 py-1.5">
+        <Tabs value={savedView} onValueChange={(v) => setSavedView(v as InboxSavedViewId)}>
+          <TabsList className="h-8 bg-transparent p-0 gap-0">
             {savedViews.map((view) => (
-              <TabsTrigger key={view.id} value={view.id} className="gap-2">
+              <TabsTrigger
+                key={view.id} value={view.id}
+                className="h-8 rounded-none border-b-2 border-transparent px-3 text-xs font-medium text-inbox-ink-muted data-[state=active]:border-primary data-[state=active]:text-inbox-ink data-[state=active]:shadow-none"
+              >
                 {view.label}
                 {view.id === "unread" && unreadCount > 0 && (
-                  <Badge variant="secondary" className="px-2 text-[10px]">
-                    {unreadCount}
-                  </Badge>
+                  <Badge className="ml-1.5 h-4 rounded-full bg-primary/10 text-primary border-0 px-1.5 text-[10px]">{unreadCount}</Badge>
                 )}
               </TabsTrigger>
             ))}
           </TabsList>
         </Tabs>
-
-        <div className="flex items-center gap-2 text-xs text-slate-500">
-          <Badge variant="outline" className="text-[11px]">
-            {threadedView ? "Threaded" : "Flat"}
-          </Badge>
-          <span>{listItems.length} conversations</span>
-        </div>
+        <span className="text-[11px] text-inbox-ink-subtle tabular-nums">{listItems.length} conversation{listItems.length !== 1 ? "s" : ""}</span>
       </div>
-      <div className="min-h-[520px]">
-        {emptyMailboxes ? (
-          <div className="flex h-[420px] flex-col items-center justify-center rounded-3xl border border-dashed border-slate-200 bg-white/60 p-12 text-center">
-            <InboxIcon className="h-10 w-10 text-slate-300" />
-            <h3 className="mt-4 text-lg font-semibold text-slate-900">Connect your first inbox</h3>
-            <p className="mt-2 text-sm text-slate-500">Bring replies from Gmail, Outlook, or IMAP.</p>
-            <Button className="mt-6">Connect mailbox</Button>
-          </div>
-        ) : (
-          <div className="h-[calc(100vh-22rem)] min-h-[520px] rounded-3xl bg-[var(--shell-surface)]/95 shadow-[0_18px_50px_-32px_rgba(15,23,42,0.5)]">
-            {effectiveViewMode === "split" && (
-              <ResizablePanelGroup direction="horizontal" className="h-full">
-                <ResizablePanel defaultSize={36} minSize={25} className="border-r border-[var(--shell-border)]">
-                  <InboxListPanel
-                    listData={listData}
-                    listBounds={listBounds}
-                    listContainerRef={listContainerRef}
-                    listRef={listRef}
-                    isLoading={isLoadingList}
-                    onItemsRendered={onItemsRendered}
-                    listItems={listItems}
-                    density={density}
-                    allSelected={allSelected}
-                    someSelected={someSelected}
-                    onSelectAll={handleSelectAll}
-                    selectedIds={selectedIds}
-                    onBulkAction={(action) => performBulkAction(action, Array.from(selectedIds))}
-                  />
-                </ResizablePanel>
-                <ResizableHandle />
-                <ResizablePanel defaultSize={44} minSize={30} className="border-r border-[var(--shell-border)]">
-                  <MessageDetailPanel
-                    message={selectedMessage}
-                    threadMessages={threadMessages}
-                    onReply={() => openComposer("reply", selectedMessage)}
-                    onReplyAll={() => openComposer("replyAll", selectedMessage)}
-                    onForward={() => openComposer("forward", selectedMessage)}
-                    onArchive={() =>
-                      selectedMessageId && performBulkAction("archive", [selectedMessageId], "Archived")
-                    }
-                  />
-                </ResizablePanel>
-                {contextOpen && (
-                  <>
-                    <ResizableHandle />
-                    <ResizablePanel defaultSize={20} minSize={18} collapsible onCollapse={() => setContextOpen(false)}>
-                      <ProspectPanel
-                        message={selectedMessage}
-                        isSelectedStale={isSelectedStale}
-                        pipelineDisabled={pipelineDisabled}
-                        pipelineStages={pipelineStages}
-                        selectedPipelineStage={selectedPipelineStage}
-                        selectedPipelineStageId={selectedPipelineStageId}
-                        campaignOptions={campaignOptions}
-                        campaignDraft={campaignDraft}
-                        nextStepDraft={nextStepDraft}
-                        dealValueDraft={dealValueDraft}
-                        onUpdateStage={updatePipelineStage}
-                        onCampaignChange={updateCampaign}
-                        onNextStepChange={setNextStepDraft}
-                        onNextStepSave={updateNextStep}
-                        onDealValueChange={setDealValueDraft}
-                        onDealValueSave={updateDealValue}
-                        onCollapse={() => setContextOpen(false)}
-                      />
-                    </ResizablePanel>
-                  </>
-                )}
-              </ResizablePanelGroup>
-            )}
 
-            {effectiveViewMode === "list" && (
+      {/* ── Main Content ── */}
+      <div className="flex-1 min-h-0">
+        {emptyMailboxes ? (
+          <div className="flex h-full flex-col items-center justify-center gap-3 text-center p-12">
+            <InboxIcon className="h-10 w-10 text-inbox-ink-subtle/30" />
+            <h3 className="text-lg font-semibold text-inbox-ink">Connect your first inbox</h3>
+            <p className="text-sm text-inbox-ink-muted">Bring replies from Gmail, Outlook, or IMAP.</p>
+            <Button className="mt-4">Connect mailbox</Button>
+          </div>
+        ) : effectiveViewMode === "split" ? (
+          <ResizablePanelGroup direction="horizontal" className="h-full">
+            <ResizablePanel defaultSize={32} minSize={24}>
               <InboxListPanel
-                listData={listData}
-                listBounds={listBounds}
-                listContainerRef={listContainerRef}
-                listRef={listRef}
-                isLoading={isLoadingList}
-                onItemsRendered={onItemsRendered}
-                listItems={listItems}
-                density={density}
-                allSelected={allSelected}
-                someSelected={someSelected}
-                onSelectAll={handleSelectAll}
-                selectedIds={selectedIds}
+                listData={listData} listBounds={listBounds} listContainerRef={listContainerRef}
+                listRef={listRef} isLoading={isLoadingList} onItemsRendered={onItemsRendered}
+                listItems={listItems} density={density} allSelected={allSelected} someSelected={someSelected}
+                onSelectAll={handleSelectAll} selectedIds={selectedIds}
                 onBulkAction={(action) => performBulkAction(action, Array.from(selectedIds))}
               />
-            )}
-
-            {effectiveViewMode === "detail" && (
+            </ResizablePanel>
+            <ResizableHandle className="bg-inbox-border w-px" />
+            <ResizablePanel defaultSize={contextOpen ? 48 : 68} minSize={30}>
               <MessageDetailPanel
-                message={selectedMessage}
-                threadMessages={threadMessages}
+                message={selectedMessage} threadMessages={threadMessages}
                 onReply={() => openComposer("reply", selectedMessage)}
                 onReplyAll={() => openComposer("replyAll", selectedMessage)}
                 onForward={() => openComposer("forward", selectedMessage)}
-                onArchive={() =>
-                  selectedMessageId && performBulkAction("archive", [selectedMessageId], "Archived")
-                }
+                onArchive={() => selectedMessageId && performBulkAction("archive", [selectedMessageId], "Archived")}
               />
+            </ResizablePanel>
+            {contextOpen && (
+              <>
+                <ResizableHandle className="bg-inbox-border w-px" />
+                <ResizablePanel defaultSize={20} minSize={16} collapsible onCollapse={() => setContextOpen(false)}>
+                  <ProspectPanel
+                    message={selectedMessage} isSelectedStale={isSelectedStale}
+                    pipelineDisabled={pipelineDisabled} pipelineStages={pipelineStages}
+                    selectedPipelineStage={selectedPipelineStage} selectedPipelineStageId={selectedPipelineStageId}
+                    campaignOptions={campaignOptions} campaignDraft={campaignDraft}
+                    nextStepDraft={nextStepDraft} dealValueDraft={dealValueDraft}
+                    onUpdateStage={updatePipelineStage} onCampaignChange={updateCampaign}
+                    onNextStepChange={setNextStepDraft} onNextStepSave={updateNextStep}
+                    onDealValueChange={setDealValueDraft} onDealValueSave={updateDealValue}
+                    onCollapse={() => setContextOpen(false)}
+                  />
+                </ResizablePanel>
+              </>
             )}
-          </div>
+          </ResizablePanelGroup>
+        ) : effectiveViewMode === "list" ? (
+          <InboxListPanel
+            listData={listData} listBounds={listBounds} listContainerRef={listContainerRef}
+            listRef={listRef} isLoading={isLoadingList} onItemsRendered={onItemsRendered}
+            listItems={listItems} density={density} allSelected={allSelected} someSelected={someSelected}
+            onSelectAll={handleSelectAll} selectedIds={selectedIds}
+            onBulkAction={(action) => performBulkAction(action, Array.from(selectedIds))}
+          />
+        ) : (
+          <MessageDetailPanel
+            message={selectedMessage} threadMessages={threadMessages}
+            onReply={() => openComposer("reply", selectedMessage)}
+            onReplyAll={() => openComposer("replyAll", selectedMessage)}
+            onForward={() => openComposer("forward", selectedMessage)}
+            onArchive={() => selectedMessageId && performBulkAction("archive", [selectedMessageId], "Archived")}
+          />
         )}
       </div>
 
-      <Drawer open={mobileDetailOpen && !isWide} onOpenChange={setMobileDetailOpen}>
-        <DrawerContent className="h-[90vh] overflow-hidden">
-          <DrawerHeader className="flex items-center justify-between">
-            <DrawerTitle>Message detail</DrawerTitle>
-            <DrawerClose asChild>
-              <Button variant="ghost" size="icon" aria-label="Close">
-                <X className="h-4 w-4" />
-              </Button>
-            </DrawerClose>
-          </DrawerHeader>
-          <div className="h-full overflow-hidden px-4 pb-6">
+      {/* ── Mobile detail drawer ── */}
+      {!isWide && (
+        <Drawer open={mobileDetailOpen} onOpenChange={setMobileDetailOpen}>
+          <DrawerContent className="h-[90vh]">
+            <DrawerHeader className="border-b border-inbox-border">
+              <DrawerTitle className="text-base font-semibold text-inbox-ink truncate">
+                {selectedMessage?.subject || "Message"}
+              </DrawerTitle>
+              <DrawerClose asChild>
+                <Button variant="ghost" size="icon" className="absolute right-4 top-4"><X className="h-4 w-4" /></Button>
+              </DrawerClose>
+            </DrawerHeader>
             <MessageDetailPanel
-              message={selectedMessage}
-              threadMessages={threadMessages}
+              message={selectedMessage} threadMessages={threadMessages} compact
               onReply={() => openComposer("reply", selectedMessage)}
               onReplyAll={() => openComposer("replyAll", selectedMessage)}
               onForward={() => openComposer("forward", selectedMessage)}
-              onArchive={() =>
-                selectedMessageId && performBulkAction("archive", [selectedMessageId], "Archived")
-              }
-              compact
+              onArchive={() => selectedMessageId && performBulkAction("archive", [selectedMessageId], "Archived")}
             />
-          </div>
-        </DrawerContent>
-      </Drawer>
+          </DrawerContent>
+        </Drawer>
+      )}
 
+      {/* ── Command Palette ── */}
       <CommandPalette
         open={commandOpen}
         onOpenChange={setCommandOpen}
         onSelect={(action) => {
+          setCommandOpen(false);
           if (action === "compose") openComposer("compose");
-          if (action === "sync") syncMailbox(selectedMailboxId === ALL_INBOXES ? undefined : selectedMailboxId);
-          if (action === "list") setViewMode("list");
-          if (action === "split") setViewMode("split");
-          if (action === "detail") setViewMode("detail");
-          if (action === "compact") setDensity("compact");
-          if (action === "comfortable") setDensity("comfortable");
-          if (action === "threaded") setThreadedView((prev) => !prev);
-          if (action === "archive" && selectedMessageId) performBulkAction("archive", [selectedMessageId], "Archived");
+          else if (action === "sync") syncMailbox(selectedMailboxId === ALL_INBOXES ? undefined : selectedMailboxId);
+          else if (action === "archive" && selectedMessageId) performBulkAction("archive", [selectedMessageId], "Archived");
+          else if (action === "split" || action === "list" || action === "detail") setViewMode(action);
+          else if (action === "compact" || action === "comfortable") setDensity(action);
+          else if (action === "threaded") setThreadedView((p) => !p);
         }}
       />
 
-      <Dialog
-        open={composeOpen}
-        onOpenChange={(open) => {
-          setComposeOpen(open);
-          if (!open) resetComposerState();
-        }}
-      >
-        <DialogContent className="w-[min(96vw,50rem)] max-w-3xl max-h-[90vh] overflow-hidden border border-[var(--shell-border)] bg-[var(--shell-surface-strong)] p-0 text-[var(--shell-ink)] shadow-[0_20px_48px_rgba(15,23,42,0.18)]">
-          <DialogHeader className="bg-[var(--shell-surface-strong)] px-6 py-5 pr-12">
-            <DialogTitle>
-              {composerMode === "compose" && "Compose"}
-              {composerMode === "reply" && "Reply"}
-              {composerMode === "replyAll" && "Reply all"}
-              {composerMode === "forward" && "Forward"}
+      {/* ── Composer Dialog ── */}
+      <Dialog open={composeOpen} onOpenChange={(open) => { setComposeOpen(open); if (!open) resetComposerState(); }}>
+        <DialogContent className="w-[min(96vw,640px)] max-h-[90vh] overflow-hidden border border-inbox-border bg-inbox-surface-elevated p-0 shadow-2xl">
+          <DialogHeader className="px-6 pt-5 pb-3">
+            <DialogTitle className="text-base font-semibold text-inbox-ink">
+              {composerMode === "compose" ? "New message" : composerMode === "reply" ? "Reply" : composerMode === "replyAll" ? "Reply all" : "Forward"}
             </DialogTitle>
           </DialogHeader>
 
-          <div className="max-h-[calc(90vh-144px)] overflow-y-auto px-6 py-2 pb-4">
-            <div className="space-y-4">
-            {(composerMode === "reply" || composerMode === "replyAll") && composerLoadingDraft && (
-              <div className="rounded-lg border border-[var(--shell-border)] bg-white/70 px-3 py-2 text-xs text-[var(--shell-muted)]">
-                Preparing draft recipients and threading headers...
-              </div>
-            )}
-
+          <div className="max-h-[calc(90vh-160px)] overflow-y-auto px-6 pb-4 space-y-3">
             {composerMode === "compose" && mailboxes.length > 1 && (
-              <div className="space-y-2">
-                <Label className="text-xs text-[var(--shell-muted)]">From inbox</Label>
+              <div className="space-y-1.5">
+                <Label className="text-[11px] text-inbox-ink-muted uppercase tracking-wider">From</Label>
                 <Select value={composerConfigId} onValueChange={setComposerConfigId}>
-                  <SelectTrigger className="border-[var(--shell-border)] bg-white/90">
-                    <SelectValue placeholder="Select inbox" />
-                  </SelectTrigger>
+                  <SelectTrigger className="h-9 text-sm border-inbox-border"><SelectValue placeholder="Select inbox" /></SelectTrigger>
                   <SelectContent>
                     {mailboxes.map((config) => (
-                      <SelectItem key={config.id} value={config.id}>
-                        {buildMailboxLabel(config)}
-                      </SelectItem>
+                      <SelectItem key={config.id} value={config.id}>{buildMailboxLabel(config)}</SelectItem>
                     ))}
                   </SelectContent>
                 </Select>
               </div>
             )}
-
-            <div className="space-y-2">
-              <Label className="text-xs text-[var(--shell-muted)]">To</Label>
-              <Input
-                value={composerTo}
-                onChange={(event) => setComposerTo(event.target.value)}
-                readOnly={composerMode === "reply" || composerMode === "replyAll"}
-                className="border-[var(--shell-border)] bg-white/90"
-              />
+            <div className="space-y-1.5">
+              <Label className="text-[11px] text-inbox-ink-muted uppercase tracking-wider">To</Label>
+              <Input value={composerTo} onChange={(e) => setComposerTo(e.target.value)} readOnly={composerMode === "reply" || composerMode === "replyAll"} className="h-9 text-sm border-inbox-border" />
             </div>
-            <div className="space-y-2">
-              <Label className="text-xs text-[var(--shell-muted)]">Cc</Label>
-              <Input
-                value={composerCc}
-                onChange={(event) => setComposerCc(event.target.value)}
-                placeholder="Add Cc recipients"
-                className="border-[var(--shell-border)] bg-white/90"
-              />
+            <div className="space-y-1.5">
+              <Label className="text-[11px] text-inbox-ink-muted uppercase tracking-wider">Cc</Label>
+              <Input value={composerCc} onChange={(e) => setComposerCc(e.target.value)} placeholder="Add Cc..." className="h-9 text-sm border-inbox-border" />
             </div>
             {(composerMode === "reply" || composerMode === "replyAll") && (
-              <div className="space-y-2">
-              <Label className="text-xs text-[var(--shell-muted)]">Bcc</Label>
-              <Input
-                value={composerBcc}
-                onChange={(event) => setComposerBcc(event.target.value)}
-                placeholder="Add Bcc recipients"
-                className="border-[var(--shell-border)] bg-white/90"
-              />
-            </div>
+              <div className="space-y-1.5">
+                <Label className="text-[11px] text-inbox-ink-muted uppercase tracking-wider">Bcc</Label>
+                <Input value={composerBcc} onChange={(e) => setComposerBcc(e.target.value)} placeholder="Add Bcc..." className="h-9 text-sm border-inbox-border" />
+              </div>
             )}
-            <div className="space-y-2">
-              <Label className="text-xs text-[var(--shell-muted)]">Subject</Label>
-              <Input
-                value={composerSubject}
-                onChange={(event) => setComposerSubject(event.target.value)}
-                className="border-[var(--shell-border)] bg-white/90"
-              />
+            <div className="space-y-1.5">
+              <Label className="text-[11px] text-inbox-ink-muted uppercase tracking-wider">Subject</Label>
+              <Input value={composerSubject} onChange={(e) => setComposerSubject(e.target.value)} className="h-9 text-sm border-inbox-border" />
             </div>
-            <div className="space-y-2">
-              <Label className="text-xs text-[var(--shell-muted)]">Message</Label>
+            <div className="space-y-1.5">
+              <Label className="text-[11px] text-inbox-ink-muted uppercase tracking-wider">Message</Label>
               <Textarea
-                value={composerBody}
-                onChange={(event) => setComposerBody(event.target.value)}
-                rows={8}
+                value={composerBody} onChange={(e) => setComposerBody(e.target.value)} rows={8}
                 placeholder={composerMode === "compose" ? "Write your message..." : "Write your reply..."}
-                className="border-[var(--shell-border)] bg-white/95"
+                className="text-sm border-inbox-border resize-none"
               />
             </div>
+            {composerQuotedText && (
+              <div className="max-h-40 overflow-auto rounded-lg border border-inbox-border bg-inbox-surface p-3 text-xs text-inbox-ink-muted whitespace-pre-wrap font-mono">
+                {composerQuotedText}
+              </div>
+            )}
 
-            {(composerMode === "reply" || composerMode === "replyAll") && (
-              <>
-                {(composerMode === "reply" || composerMode === "replyAll") && composerQuotedText && (
-                  <div className="max-h-52 overflow-auto rounded-lg border border-[var(--shell-border)] bg-white/70 p-3 text-xs text-[var(--shell-muted)] whitespace-pre-wrap">
-                    {composerQuotedText}
-                  </div>
-                )}
-
-                <div className="space-y-2">
-                  <Label className="text-xs text-[var(--shell-muted)]">Attachments</Label>
-                  <div className="flex flex-wrap items-center gap-2">
-                    <input
-                      ref={composerFileInputRef}
-                      type="file"
-                      multiple
-                      className="hidden"
-                      onChange={handleComposerAttachmentChange}
-                    />
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      className="h-9 border-[var(--shell-border)] bg-white/90"
-                      onClick={() => composerFileInputRef.current?.click()}
-                    >
-                      <Paperclip className="mr-2 h-4 w-4" />
-                      Add files
-                    </Button>
-                    {composerAttachments.length > 0 && (
-                      <span className="text-xs text-[var(--shell-muted)]">
-                        {composerAttachments.length} attachment{composerAttachments.length === 1 ? "" : "s"}
-                      </span>
-                    )}
-                  </div>
+            {/* Attachments */}
+            {(composerMode === "reply" || composerMode === "replyAll" || composerMode === "compose") && (
+              <div className="space-y-2">
+                <Label className="text-[11px] text-inbox-ink-muted uppercase tracking-wider">Attachments</Label>
+                <div className="flex flex-wrap items-center gap-2">
+                  <input ref={composerFileInputRef} type="file" multiple className="hidden" onChange={handleComposerAttachmentChange} />
+                  <Button variant="outline" size="sm" className="h-8 border-inbox-border text-xs" onClick={() => composerFileInputRef.current?.click()}>
+                    <Paperclip className="mr-2 h-3.5 w-3.5" />
+                    Add files
+                  </Button>
                   {composerAttachments.length > 0 && (
-                    <div className="space-y-2">
-                      {composerAttachments.map((attachment) => (
-                        <div
-                          key={attachment.id}
-                          className="flex items-center justify-between rounded-md border border-[var(--shell-border)] bg-white px-3 py-2 text-xs"
-                        >
-                          <div className="min-w-0">
-                            <p className="truncate font-medium text-[var(--shell-ink)]">{attachment.file.name}</p>
-                            <p className="text-[11px] text-[var(--shell-muted)]">{formatBytes(attachment.file.size)}</p>
-                          </div>
-                          <Button
-                            type="button"
-                            variant="ghost"
-                            size="icon"
-                            className="h-7 w-7"
-                            onClick={() => handleRemoveComposerAttachment(attachment.id)}
-                          >
-                            <X className="h-4 w-4" />
-                          </Button>
-                        </div>
-                      ))}
-                    </div>
+                    <span className="text-[11px] text-inbox-ink-muted">{composerAttachments.length} attachment{composerAttachments.length === 1 ? "" : "s"}</span>
                   )}
                 </div>
-
-                {(composerMode === "reply" || composerMode === "replyAll") && composerIncludeOriginalAttachmentsAvailable && (
-                  <div className="rounded-lg border border-[var(--shell-border)] bg-white/70 p-3 text-xs text-[var(--shell-muted)]">
-                    <div className="flex items-center gap-2">
-                      <Checkbox
-                        checked={composerIncludeOriginalAttachments}
-                        onCheckedChange={(value) => setComposerIncludeOriginalAttachments(value === true)}
-                      />
-                      <span>
-                        Include original attachments ({composerOriginalAttachments.length})
-                      </span>
-                    </div>
-                    {composerOriginalAttachments.length > 0 && (
-                      <div className="mt-2 flex flex-wrap gap-2">
-                        {composerOriginalAttachments.map((attachment, index) => (
-                          <span
-                            key={`${attachment.filename || "attachment"}-${index}`}
-                            className="rounded-full border border-[var(--shell-border)] bg-white px-2 py-1 text-[11px]"
-                          >
-                            {attachment.filename || "attachment"}
-                          </span>
-                        ))}
+                {composerAttachments.length > 0 && (
+                  <div className="space-y-2">
+                    {composerAttachments.map((attachment) => (
+                      <div key={attachment.id} className="flex items-center justify-between rounded-md border border-inbox-border bg-inbox-surface-elevated px-3 py-2 text-xs">
+                        <div className="min-w-0">
+                          <p className="truncate font-medium text-inbox-ink">{attachment.file.name}</p>
+                          <p className="text-[11px] text-inbox-ink-muted">{formatBytes(attachment.file.size)}</p>
+                        </div>
+                        <Button type="button" variant="ghost" size="icon" className="h-7 w-7" onClick={() => handleRemoveComposerAttachment(attachment.id)}>
+                          <X className="h-4 w-4" />
+                        </Button>
                       </div>
-                    )}
+                    ))}
                   </div>
                 )}
-
-                {(composerMode === "reply" || composerMode === "replyAll") && composerThreadingLimited && (
-                  <p className="text-xs text-amber-700">
-                    This message is missing a Message-ID. Reply threading may be limited in Gmail or Outlook.
-                  </p>
-                )}
-              </>
+              </div>
             )}
-            </div>
+
+            {(composerMode === "reply" || composerMode === "replyAll") && composerIncludeOriginalAttachmentsAvailable && (
+              <div className="rounded-lg border border-inbox-border bg-inbox-surface p-3 text-xs text-inbox-ink-muted">
+                <div className="flex items-center gap-2">
+                  <Checkbox checked={composerIncludeOriginalAttachments} onCheckedChange={(value) => setComposerIncludeOriginalAttachments(value === true)} />
+                  <span>Include original attachments ({composerOriginalAttachments.length})</span>
+                </div>
+                {composerOriginalAttachments.length > 0 && (
+                  <div className="mt-2 flex flex-wrap gap-2">
+                    {composerOriginalAttachments.map((attachment, index) => (
+                      <span key={`${attachment.filename || "attachment"}-${index}`} className="rounded-full border border-inbox-border bg-inbox-surface-elevated px-2 py-1 text-[11px]">
+                        {attachment.filename || "attachment"}
+                      </span>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
+
+            {(composerMode === "reply" || composerMode === "replyAll") && composerThreadingLimited && (
+              <p className="text-xs text-amber-700">This message is missing a Message-ID. Reply threading may be limited in Gmail or Outlook.</p>
+            )}
           </div>
 
-          <DialogFooter className="bg-[var(--shell-surface-strong)] px-6 py-5">
-            <Button
-              variant="outline"
-              className="h-10 border-[var(--shell-border)] bg-white/90 px-6"
-              onClick={() => {
-                setComposeOpen(false);
-                resetComposerState();
-              }}
-              disabled={composerSending}
-            >
-              Cancel
+          <DialogFooter className="px-6 py-4 border-t border-inbox-border bg-inbox-surface">
+            <Button variant="outline" size="sm" className="border-inbox-border" onClick={() => { setComposeOpen(false); resetComposerState(); }} disabled={composerSending}>
+              Discard
             </Button>
             <Button
-              onClick={() => void handleSend()}
-              className="h-10 gap-2 bg-[#0b1735] px-6 text-white hover:bg-[#0a142d]"
-              disabled={
-                composerLoadingDraft ||
-                composerSending ||
-                (composerMode === "compose" && !composerConfigId)
-              }
+              size="sm" onClick={() => void handleSend()}
+              className="gap-2 bg-inbox-ink text-inbox-surface-elevated hover:bg-inbox-ink/90 text-xs"
+              disabled={composerLoadingDraft || composerSending || (composerMode === "compose" && !composerConfigId)}
             >
-              <Send className="h-4 w-4" />
-              {composerSending
-                ? "Sending..."
-                : composerMode === "reply"
-                  ? "Send reply"
-                  : composerMode === "replyAll"
-                    ? "Send reply all"
-                    : composerMode === "compose"
-                      ? "Send"
-                      : "Open in mail app"}
+              <Send className="h-3.5 w-3.5" />
+              {composerSending ? "Sending..." : composerMode === "reply" ? "Send reply" : composerMode === "replyAll" ? "Send reply all" : composerMode === "compose" ? "Send" : "Open in mail app"}
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -2676,20 +1771,12 @@ const InboxPage: React.FC<{ user: any }> = ({ user }) => {
   );
 };
 
+// ═══════════════════════════════════════════════════════
+// INBOX LIST PANEL
+// ═══════════════════════════════════════════════════════
 const InboxListPanel = ({
-  listData,
-  listBounds,
-  listContainerRef,
-  listRef,
-  isLoading,
-  onItemsRendered,
-  listItems,
-  density,
-  allSelected,
-  someSelected,
-  onSelectAll,
-  selectedIds,
-  onBulkAction,
+  listData, listBounds, listContainerRef, listRef, isLoading, onItemsRendered,
+  listItems, density, allSelected, someSelected, onSelectAll, selectedIds, onBulkAction,
 }: {
   listData: any;
   listBounds: { width: number; height: number };
@@ -2706,40 +1793,28 @@ const InboxListPanel = ({
   onBulkAction: (action: BulkAction) => void;
 }) => {
   return (
-    <div className="flex h-full flex-col">
-      {/* Nielsen: user control and undo for bulk actions */}
-      <div className="border-b border-slate-200 px-4 py-3">
-        <div className="flex flex-wrap items-center justify-between gap-3">
-          <div className="flex items-center gap-3">
-            <Checkbox
-              checked={allSelected ? true : someSelected ? "indeterminate" : false}
-              onCheckedChange={(value) => onSelectAll(value === true)}
-              aria-label="Select all"
-            />
-            <span className="text-sm text-slate-600">Select all</span>
-          </div>
-
+    <div className="flex h-full flex-col bg-inbox-surface-elevated">
+      {/* Bulk action bar */}
+      <div className="flex items-center justify-between border-b border-inbox-border px-4 py-2 min-h-[40px]">
+        <div className="flex items-center gap-2.5">
+          <Checkbox
+            checked={allSelected ? true : someSelected ? "indeterminate" : false}
+            onCheckedChange={(v) => onSelectAll(v === true)}
+            aria-label="Select all"
+          />
           {selectedIds.size > 0 ? (
-            <div className="flex flex-wrap items-center gap-2">
-              <Badge variant="secondary" className="rounded-full">
-                {selectedIds.size} selected
-              </Badge>
-              <Button size="sm" variant="outline" onClick={() => onBulkAction("markRead")}>
-                Mark read
-              </Button>
-              <Button size="sm" variant="outline" onClick={() => onBulkAction("markUnread")}>
-                Mark unread
-              </Button>
-              <Button size="sm" variant="outline" onClick={() => onBulkAction("assign")}>
-                Assign to me
-              </Button>
-              <Button size="sm" onClick={() => onBulkAction("archive")}>Archive</Button>
+            <div className="flex items-center gap-1.5">
+              <Badge className="rounded-full bg-primary/10 text-primary border-0 text-[10px] px-2">{selectedIds.size}</Badge>
+              <Button size="sm" variant="ghost" className="h-7 text-[11px] px-2" onClick={() => onBulkAction("markRead")}>Read</Button>
+              <Button size="sm" variant="ghost" className="h-7 text-[11px] px-2" onClick={() => onBulkAction("markUnread")}>Unread</Button>
+              <Button size="sm" variant="ghost" className="h-7 text-[11px] px-2" onClick={() => onBulkAction("assign")}>Assign</Button>
+              <Button size="sm" variant="ghost" className="h-7 text-[11px] px-2" onClick={() => onBulkAction("archive")}>Archive</Button>
             </div>
           ) : (
-            <div className="flex items-center gap-2 text-xs text-slate-500">
+            <span className="text-[11px] text-inbox-ink-subtle flex items-center gap-1">
               <UserCheck className="h-3 w-3" />
-              Tip: Use J/K to move between messages
-            </div>
+              J/K to navigate
+            </span>
           )}
         </div>
       </div>
@@ -2755,12 +1830,10 @@ const InboxListPanel = ({
             ))}
           </div>
         ) : listItems.length === 0 ? (
-          <div className="flex h-full flex-col items-center justify-center gap-3 text-center text-sm text-slate-500">
-            <InboxIcon className="h-8 w-8 text-slate-300" />
-            <div>
-              <p className="font-medium text-slate-700">No messages found</p>
-              <p className="text-xs text-slate-500">Try a different saved view or clear filters.</p>
-            </div>
+          <div className="flex h-full flex-col items-center justify-center gap-3 py-20 text-center">
+            <InboxIcon className="h-8 w-8 text-inbox-ink-subtle/50" />
+            <p className="text-sm font-medium text-inbox-ink-muted">No messages found</p>
+            <p className="text-xs text-inbox-ink-subtle">Try a different view or clear filters.</p>
           </div>
         ) : (
           <List
@@ -2780,104 +1853,106 @@ const InboxListPanel = ({
   );
 };
 
+// ═══════════════════════════════════════════════════════
+// INBOX ROW (virtualized)
+// ═══════════════════════════════════════════════════════
 const InboxRow = ({ index, style, data }: any) => {
   const item: ListItem = data.items[index];
   const isSelected = data.selectedId === item.messageId;
   const isChecked = data.selectedIds.has(item.messageId);
+  const isStarred = data.starredIds?.has(item.messageId);
+  const compact = data.density === "compact";
 
   return (
-    <div style={style} className="px-3">
-      {/* Fitts: large row target with hover quick actions */}
+    <div style={style} className="px-1">
       <div
         className={cn(
-          "group flex h-full items-center gap-3 rounded-2xl border border-transparent px-3",
-          data.density === "compact" ? "py-2" : "py-3",
-          isSelected
-            ? "border-slate-200 bg-slate-50"
-            : "hover:border-slate-200 hover:bg-slate-50/60"
+          "group relative flex items-start gap-3 px-4 cursor-pointer inbox-transition rounded-lg mx-1",
+          compact ? "py-2.5" : "py-3.5",
+          isSelected ? "bg-inbox-selected" : "hover:bg-inbox-hover",
         )}
+        onClick={() => data.onSelect(item.messageId)}
       >
-        <Checkbox
-          checked={isChecked}
-          onCheckedChange={(value) => data.onToggleSelect(item.messageId, value === true)}
-          aria-label={`Select ${item.subject}`}
-        />
-        <button
-          type="button"
-          className="flex-1 text-left"
-          onClick={() => data.onSelect(item.messageId)}
-        >
-          <div className="flex items-center justify-between gap-3">
-            <div className="flex items-center gap-2">
-              {!item.read && <span className="h-2 w-2 rounded-full bg-emerald-500" />}
-              <span className="text-sm font-semibold text-slate-900">{item.from}</span>
+        {/* Active indicator */}
+        {isSelected && (
+          <motion.div
+            layoutId="active-pill"
+            className="absolute left-0 top-0 bottom-0 w-[3px] bg-inbox-active-pill rounded-r-full"
+            transition={{ type: "spring", stiffness: 500, damping: 35 }}
+          />
+        )}
+
+        {/* Checkbox */}
+        <div className="pt-0.5 shrink-0" onClick={(e) => e.stopPropagation()}>
+          <Checkbox
+            checked={isChecked}
+            onCheckedChange={(v) => data.onToggleSelect(item.messageId, v === true)}
+            aria-label={`Select ${item.subject}`}
+          />
+        </div>
+
+        {/* Avatar */}
+        <Avatar className={cn("h-8 w-8 shrink-0 text-[11px] font-semibold", getAvatarColor(item.from))}>
+          <AvatarFallback className={cn("text-[11px] font-semibold", getAvatarColor(item.from))}>
+            {getInitials(item.from.split("@")[0])}
+          </AvatarFallback>
+        </Avatar>
+
+        {/* Content */}
+        <div className="flex-1 min-w-0">
+          <div className="flex items-center justify-between gap-2">
+            <div className="flex items-center gap-2 min-w-0">
+              {!item.read && <span className="h-2 w-2 rounded-full bg-inbox-unread-dot shrink-0" />}
+              <span className={cn("text-[13px] truncate", item.read ? "text-inbox-ink-muted font-medium" : "text-inbox-ink font-semibold")}>
+                {item.from}
+              </span>
               {item.needsReply && (
-                <Badge variant="secondary" className="text-[10px]">
-                  Needs reply
-                </Badge>
+                <Badge className="shrink-0 rounded bg-amber-50 text-amber-700 border-amber-200 text-[9px] px-1.5 py-0 h-4 font-medium">Needs reply</Badge>
               )}
               {data.assignedIds?.has(item.messageId) && (
-                <Badge variant="outline" className="text-[10px]">
-                  Assigned
-                </Badge>
+                <Badge variant="outline" className="shrink-0 text-[9px] px-1.5 py-0 h-4">Assigned</Badge>
               )}
             </div>
-            <span className="text-xs text-slate-400">
-              {formatDistanceToNow(new Date(item.date), { addSuffix: true })}
+            <span className="text-[11px] tabular-nums text-inbox-ink-subtle shrink-0">
+              {formatDistanceToNow(new Date(item.date), { addSuffix: false })}
             </span>
           </div>
-          <div className="mt-1 flex items-center gap-2">
-            <span className="text-sm text-slate-800 truncate">{item.subject}</span>
+          <div className="flex items-center gap-2 mt-0.5">
+            <span className={cn("text-[12.5px] truncate", item.read ? "text-inbox-ink-muted" : "text-inbox-ink font-medium")}>
+              {item.subject}
+            </span>
             {item.threadCount > 1 && (
-              <Badge variant="outline" className="text-[10px]">
-                {item.threadCount}
-              </Badge>
+              <Badge variant="outline" className="shrink-0 text-[9px] px-1 py-0 h-4 rounded tabular-nums border-inbox-border">{item.threadCount}</Badge>
             )}
+            {item.hasAttachment && <Paperclip className="h-3 w-3 text-inbox-ink-subtle shrink-0" />}
           </div>
-          <p className="mt-1 text-xs text-slate-500 truncate">{item.preview}</p>
-        </button>
-        <div className="flex items-center gap-1 opacity-0 transition group-hover:opacity-100">
-          <Button
-            variant="ghost"
-            size="icon"
-            className="h-8 w-8"
-            onClick={() => data.onToggleStar(item.messageId)}
-            aria-label="Star"
-          >
-            <Star className={cn("h-4 w-4", data.starredIds.has(item.messageId) && "fill-amber-400 text-amber-500")} />
-          </Button>
-          <Button
-            variant="ghost"
-            size="icon"
-            className="h-8 w-8"
-            onClick={() => data.onToggleRead(item.messageId, item.read)}
-            aria-label="Mark read"
-          >
-            <Check className="h-4 w-4" />
-          </Button>
-          <Button
-            variant="ghost"
-            size="icon"
-            className="h-8 w-8"
-            onClick={() => data.onArchive(item.messageId)}
-            aria-label="Archive"
-          >
-            <Archive className="h-4 w-4" />
-          </Button>
+          {!compact && (
+            <p className="mt-0.5 text-[11.5px] text-inbox-ink-subtle truncate leading-relaxed">{item.preview}</p>
+          )}
+        </div>
+
+        {/* Quick actions */}
+        <div className="flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity shrink-0 pt-0.5" onClick={(e) => e.stopPropagation()}>
+          <button className="p-1 rounded hover:bg-inbox-border transition-colors" onClick={() => data.onToggleStar(item.messageId)}>
+            <Star className={cn("h-3.5 w-3.5", isStarred ? "fill-inbox-star text-inbox-star" : "text-inbox-ink-subtle")} />
+          </button>
+          <button className="p-1 rounded hover:bg-inbox-border transition-colors" onClick={() => data.onToggleRead(item.messageId, item.read)}>
+            <Check className="h-3.5 w-3.5 text-inbox-ink-subtle" />
+          </button>
+          <button className="p-1 rounded hover:bg-inbox-border transition-colors" onClick={() => data.onArchive(item.messageId)}>
+            <Archive className="h-3.5 w-3.5 text-inbox-ink-subtle" />
+          </button>
         </div>
       </div>
     </div>
   );
 };
 
+// ═══════════════════════════════════════════════════════
+// MESSAGE DETAIL PANEL
+// ═══════════════════════════════════════════════════════
 const MessageDetailPanel = ({
-  message,
-  threadMessages,
-  onReply,
-  onReplyAll,
-  onForward,
-  onArchive,
-  compact,
+  message, threadMessages, onReply, onReplyAll, onForward, onArchive, compact,
 }: {
   message: EmailMessage | null;
   threadMessages: EmailMessage[];
@@ -2888,161 +1963,197 @@ const MessageDetailPanel = ({
   compact?: boolean;
 }) => {
   const [showQuoted, setShowQuoted] = useState(false);
-  useEffect(() => {
-    setShowQuoted(false);
-  }, [message?.id]);
+
+  useEffect(() => { setShowQuoted(false); }, [message?.id]);
 
   if (!message) {
     return (
-      <div className="flex h-full flex-col items-center justify-center text-center text-sm text-slate-500">
-        <InboxIcon className="h-8 w-8 text-slate-300" />
-        <p className="mt-3 font-medium text-slate-700">Select a conversation</p>
-        <p className="text-xs text-slate-500">Use J/K to navigate quickly.</p>
+      <div className="flex h-full flex-col items-center justify-center bg-inbox-surface text-center">
+        <InboxIcon className="h-10 w-10 text-inbox-ink-subtle/30" />
+        <p className="mt-4 text-sm font-medium text-inbox-ink-muted">Select a conversation</p>
+        <p className="mt-1 text-xs text-inbox-ink-subtle">Use J/K to navigate</p>
       </div>
     );
   }
 
   return (
-    <div className="flex h-full flex-col">
-      {/* Fitts + consistency: sticky action bar keeps primary actions in reach */}
-      <div className="sticky top-0 z-10 border-b border-[var(--shell-border)] bg-[var(--shell-surface-strong)]/95 px-4 py-3">
-        <div className="flex flex-wrap items-center justify-between gap-3">
-          <div>
-            <h2 className="text-lg font-semibold text-[var(--shell-ink)]">{message.subject || "(No Subject)"}</h2>
-            <div className="mt-1 flex flex-wrap items-center gap-2 text-xs text-slate-500">
-              <span>Received {format(new Date(message.date), "PPP p")}</span>
-              {!message.read && <Badge variant="secondary">Unread</Badge>}
-            </div>
+    <div className="flex h-full flex-col bg-inbox-surface-elevated">
+      {/* Toolbar */}
+      <div className="flex items-center justify-between border-b border-inbox-border px-5 py-2.5 bg-inbox-toolbar">
+        <div className="min-w-0 flex-1 mr-4">
+          <h2 className="text-[15px] font-semibold text-inbox-ink truncate tracking-tight">
+            {message.subject || "(No Subject)"}
+          </h2>
+          <div className="flex items-center gap-2 mt-0.5">
+            <span className="text-[11px] text-inbox-ink-subtle tabular-nums">
+              {format(new Date(message.date), "MMM d, yyyy 'at' h:mm a")}
+            </span>
+            {!message.read && (
+              <Badge className="rounded bg-primary/10 text-primary border-0 text-[9px] px-1.5 py-0 h-4">Unread</Badge>
+            )}
           </div>
-          <div className="flex flex-wrap items-center gap-2">
-            <Button
-              size="sm"
-              onClick={onReply}
-              className="gap-1 bg-[var(--shell-accent)] text-white hover:bg-emerald-700"
-            >
-              <Reply className="h-4 w-4" />
-              Reply
-            </Button>
-            <Button
-              size="sm"
-              variant="outline"
-              onClick={onReplyAll}
-              className="gap-1 border-[var(--shell-border)] bg-white/90"
-            >
-              <ReplyAll className="h-4 w-4" />
-              Reply all
-            </Button>
-            <Button
-              size="sm"
-              variant="outline"
-              onClick={onForward}
-              className="gap-1 border-[var(--shell-border)] bg-white/90"
-            >
-              <Forward className="h-4 w-4" />
-              Forward
-            </Button>
-            <Button
-              size="sm"
-              variant="outline"
-              onClick={onArchive}
-              className="gap-1 border-[var(--shell-border)] bg-white/90"
-            >
-              <Archive className="h-4 w-4" />
-              Archive
-            </Button>
-            <Button size="sm" variant="ghost" className="gap-1">
-              <MoreHorizontal className="h-4 w-4" />
-              More
-            </Button>
-          </div>
+        </div>
+        <div className="flex items-center gap-1 shrink-0">
+          <Button size="sm" onClick={onReply} className="h-8 gap-1.5 bg-accent text-accent-foreground hover:bg-inbox-accent-hover text-xs">
+            <Reply className="h-3.5 w-3.5" />
+            Reply
+          </Button>
+          <Button size="sm" variant="outline" onClick={onReplyAll} className="h-8 gap-1.5 border-inbox-border text-xs">
+            <ReplyAll className="h-3.5 w-3.5" />
+            Reply all
+          </Button>
+          <Button size="sm" variant="outline" onClick={onForward} className="h-8 gap-1.5 border-inbox-border text-xs">
+            <Forward className="h-3.5 w-3.5" />
+            Forward
+          </Button>
+          <Button size="sm" variant="outline" onClick={onArchive} className="h-8 gap-1.5 border-inbox-border text-xs">
+            <Archive className="h-3.5 w-3.5" />
+            Archive
+          </Button>
+          <Button size="sm" variant="ghost" className="h-8 w-8 p-0">
+            <MoreHorizontal className="h-3.5 w-3.5" />
+          </Button>
         </div>
       </div>
 
-      <ScrollArea className={cn("flex-1 px-4", compact ? "pb-6" : "pb-8")}> 
-        <div className="mt-4 rounded-2xl border border-[var(--shell-border)] bg-white p-4">
-          <div className="flex items-start justify-between gap-4">
-            <div className="flex items-start gap-3">
-              <Avatar className="h-10 w-10">
-                <AvatarImage src={`https://www.gravatar.com/avatar/${message.from_email}?d=mp`} />
-                <AvatarFallback className="bg-slate-100 text-slate-600">
-                  {getInitials(message.from_email)}
-                </AvatarFallback>
-              </Avatar>
-              <div>
-                <p className="text-sm font-semibold text-[var(--shell-ink)]">{message.from_email}</p>
-                <p className="text-xs text-slate-500">to {message.to_email}</p>
-              </div>
-            </div>
-            <Badge variant="outline" className="text-[10px]">
-              Primary inbox
-            </Badge>
-          </div>
+      {/* Message body */}
+      <ScrollArea className="flex-1 inbox-scrollbar">
+        <div className="px-6 py-6">
+          <AnimatePresence mode="wait">
+            <motion.div
+              key={message.id}
+              initial={{ opacity: 0, y: 8 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: -8 }}
+              transition={{ duration: 0.15, ease: [0.2, 0, 0, 1] }}
+              className="max-w-3xl mx-auto space-y-6"
+            >
+              {threadMessages.map((msg, idx) => {
+                const isLatest = idx === threadMessages.length - 1;
+                const isSent = msg.from_email === msg.to_email ? false : !/inbox/i.test(msg.folder || "");
+                const bodyContent = msg.body || "";
+                const isHtml = looksLikeHtml(bodyContent);
 
-          {/* Progressive disclosure: quoted text can be collapsed */}
-          <div className={cn("mt-4 text-sm text-slate-700", !showQuoted && "max-h-[260px] overflow-hidden")}>
-            {message.body && looksLikeHtml(message.body) ? (
-              <div
-                className="prose max-w-none text-sm text-slate-800"
-                dangerouslySetInnerHTML={{ __html: sanitizeEmailHtml(message.body) }}
-              />
-            ) : (
-              <div className="whitespace-pre-wrap leading-relaxed">{message.body}</div>
-            )}
-          </div>
-          <Button
-            variant="ghost"
-            size="sm"
-            className="mt-3"
-            onClick={() => setShowQuoted((prev) => !prev)}
-          >
-            {showQuoted ? "Hide quoted text" : "Show quoted text"}
-          </Button>
+                return (
+                  <div
+                    key={msg.id}
+                    className={cn(
+                      "rounded-xl border p-5",
+                      isLatest ? "border-inbox-border bg-inbox-surface-elevated shadow-sm" : "border-inbox-border/50 bg-inbox-surface/50"
+                    )}
+                  >
+                    {/* Sender header */}
+                    <div className="flex items-start justify-between gap-3 mb-4">
+                      <div className="flex items-center gap-3">
+                        <Avatar className={cn("h-9 w-9 text-[11px] font-semibold", getAvatarColor(msg.from_email))}>
+                          <AvatarFallback className={cn("text-[11px] font-semibold", getAvatarColor(msg.from_email))}>
+                            {getInitials(msg.from_email.split("@")[0])}
+                          </AvatarFallback>
+                        </Avatar>
+                        <div>
+                          <div className="flex items-center gap-2">
+                            <span className="text-[13px] font-semibold text-inbox-ink">{msg.from_email}</span>
+                            {msg.folder === "sent" && (
+                              <Badge variant="outline" className="text-[9px] px-1.5 py-0 h-4 border-inbox-border">You</Badge>
+                            )}
+                          </div>
+                          <span className="text-[11px] text-inbox-ink-subtle">to {msg.to_email}</span>
+                        </div>
+                      </div>
+                      <span className="text-[11px] text-inbox-ink-subtle tabular-nums shrink-0">
+                        {format(new Date(msg.date), "MMM d, h:mm a")}
+                      </span>
+                    </div>
 
-          <div className="mt-4 flex items-center gap-2 text-xs text-slate-500">
-            <Paperclip className="h-4 w-4" />
-            No attachments
-          </div>
-        </div>
+                    {/* Body */}
+                    {isHtml ? (
+                      <div
+                        className="text-[13.5px] text-inbox-ink leading-relaxed tracking-[-0.01em] prose prose-sm max-w-none"
+                        dangerouslySetInnerHTML={{ __html: sanitizeEmailHtml(bodyContent) }}
+                      />
+                    ) : (
+                      <div className="text-[13.5px] text-inbox-ink leading-relaxed whitespace-pre-wrap tracking-[-0.01em]">
+                        {extractPlainText(bodyContent)}
+                      </div>
+                    )}
 
-        <div className="mt-6">
-          <h3 className="text-sm font-semibold text-[var(--shell-ink)]">Thread timeline</h3>
-          <div className="mt-3 space-y-3">
-            {threadMessages.map((item) => (
-              <div key={item.id} className="rounded-2xl border border-[var(--shell-border)] bg-white p-3">
-                <div className="flex items-center justify-between text-xs text-slate-500">
-                  <span>{item.from_email}</span>
-                  <span>{format(new Date(item.date), "PP p")}</span>
-                </div>
-                <p className="mt-2 text-sm text-slate-700">
-                  {buildPreviewText(item.body)}
-                </p>
-              </div>
-            ))}
-          </div>
+                    {/* Attachment indicator */}
+                    {/(attach|attachment|attached)/i.test(bodyContent) && (
+                      <div className="mt-4 flex items-center gap-2 rounded-lg border border-inbox-border bg-inbox-surface px-3 py-2">
+                        <Paperclip className="h-3.5 w-3.5 text-inbox-ink-subtle" />
+                        <span className="text-[11px] text-inbox-ink-muted">Attachment referenced</span>
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+            </motion.div>
+          </AnimatePresence>
         </div>
       </ScrollArea>
+
+      {/* Inline reply box */}
+      <InlineReplyBox message={message} onReply={onReply} onReplyAll={onReplyAll} onForward={onForward} />
     </div>
   );
 };
 
+// ═══════════════════════════════════════════════════════
+// INLINE REPLY BOX
+// ═══════════════════════════════════════════════════════
+const InlineReplyBox: React.FC<{
+  message: EmailMessage;
+  onReply: () => void;
+  onReplyAll: () => void;
+  onForward: () => void;
+}> = ({ message, onReply }) => {
+  const [text, setText] = useState("");
+  const [focused, setFocused] = useState(false);
+
+  return (
+    <div className="border-t border-inbox-border bg-inbox-toolbar p-4">
+      <div className={cn(
+        "max-w-3xl mx-auto rounded-xl border overflow-hidden inbox-transition",
+        focused ? "border-inbox-border-focus ring-2 ring-primary/10 shadow-sm" : "border-inbox-border"
+      )}>
+        <textarea
+          value={text}
+          onChange={(e) => setText(e.target.value)}
+          onFocus={() => setFocused(true)}
+          onBlur={() => setFocused(false)}
+          placeholder={`Reply to ${message.from_email}...`}
+          className="w-full bg-inbox-surface-elevated px-4 py-3 text-[13px] outline-none resize-none min-h-[80px] placeholder:text-inbox-ink-subtle"
+          rows={3}
+        />
+        <div className="flex items-center justify-between px-4 py-2.5 bg-inbox-surface border-t border-inbox-border">
+          <div className="flex items-center gap-1">
+            <button className="p-1.5 rounded hover:bg-inbox-border transition-colors">
+              <Paperclip className="h-4 w-4 text-inbox-ink-subtle" />
+            </button>
+          </div>
+          <Button
+            size="sm"
+            className="h-8 gap-2 bg-inbox-ink text-inbox-surface-elevated hover:bg-inbox-ink/90 text-xs"
+            disabled={!text.trim()}
+            onClick={() => { if (text.trim()) onReply(); }}
+          >
+            <Send className="h-3.5 w-3.5" />
+            Send
+          </Button>
+        </div>
+      </div>
+    </div>
+  );
+};
+
+// ═══════════════════════════════════════════════════════
+// PROSPECT PANEL
+// ═══════════════════════════════════════════════════════
 const ProspectPanel = ({
-  message,
-  isSelectedStale,
-  pipelineDisabled,
-  pipelineStages,
-  selectedPipelineStage,
-  selectedPipelineStageId,
-  campaignOptions,
-  campaignDraft,
-  nextStepDraft,
-  dealValueDraft,
-  onUpdateStage,
-  onCampaignChange,
-  onNextStepChange,
-  onNextStepSave,
-  onDealValueChange,
-  onDealValueSave,
-  onCollapse,
+  message, isSelectedStale, pipelineDisabled, pipelineStages, selectedPipelineStage,
+  selectedPipelineStageId, campaignOptions, campaignDraft, nextStepDraft, dealValueDraft,
+  onUpdateStage, onCampaignChange, onNextStepChange, onNextStepSave, onDealValueChange,
+  onDealValueSave, onCollapse,
 }: {
   message: EmailMessage | null;
   isSelectedStale: boolean;
@@ -3062,247 +2173,139 @@ const ProspectPanel = ({
   onDealValueSave: (value: string) => void;
   onCollapse: () => void;
 }) => {
+  if (!message) {
+    return (
+      <div className="flex h-full flex-col items-center justify-center bg-inbox-surface text-center px-4">
+        <InboxIcon className="h-8 w-8 text-inbox-ink-subtle/30" />
+        <p className="mt-3 text-xs font-medium text-inbox-ink-muted">Select a conversation</p>
+      </div>
+    );
+  }
+
   return (
-    <div className="flex h-full flex-col border-l border-slate-200 bg-slate-50/50">
-      <div className="flex items-center justify-between border-b border-slate-200 px-4 py-3">
+    <div className="flex h-full flex-col bg-inbox-surface">
+      <div className="flex items-center justify-between border-b border-inbox-border px-4 py-3 bg-inbox-toolbar">
         <div>
-          <h3 className="text-sm font-semibold text-slate-900">Prospect pipeline</h3>
-          <p className="text-xs text-slate-500">Track lifecycle, stage, and next step.</p>
+          <h3 className="text-[13px] font-semibold text-inbox-ink">Prospect pipeline</h3>
+          <p className="text-[11px] text-inbox-ink-subtle">Track lifecycle & stage</p>
         </div>
         <div className="flex items-center gap-2">
           {isSelectedStale && (
-            <Badge variant="secondary" className="bg-amber-50 text-amber-700 text-[10px] uppercase">
-              Stale
-            </Badge>
+            <Badge className="bg-amber-50 text-amber-700 border-amber-200 text-[9px] px-1.5 py-0 h-4 font-medium uppercase">Stale</Badge>
           )}
-          <Button variant="ghost" size="icon" onClick={onCollapse} aria-label="Collapse panel">
-            <ChevronRight className="h-4 w-4" />
+          <Button variant="ghost" size="sm" className="h-7 w-7 p-0" onClick={onCollapse}>
+            <ChevronRight className="h-3.5 w-3.5" />
           </Button>
         </div>
       </div>
 
-      {!message ? (
-        <div className="flex flex-1 flex-col items-center justify-center px-6 text-center text-sm text-slate-500">
-          <InboxIcon className="h-8 w-8 text-slate-300" />
-          <p className="mt-3 font-medium text-slate-700">Select a conversation</p>
-          <p className="text-xs text-slate-500">Pipeline context appears here.</p>
-        </div>
-      ) : (
-        <ScrollArea className="flex-1 px-4 py-4">
-          <div className="space-y-4">
-            <div className="rounded-2xl border border-slate-200 bg-white p-3 text-xs text-slate-600">
-              <div className="flex items-center justify-between">
-                <span className="text-slate-500">Lifecycle</span>
-                <Badge variant="secondary" className="bg-emerald-50 text-emerald-700">
-                  Replied
-                </Badge>
-              </div>
-              <div className="mt-2 flex items-center justify-between">
-                <span className="text-slate-500">Last activity</span>
-                <span className="text-slate-700">
-                  {formatDistanceToNow(new Date(message.date), { addSuffix: true })}
-                </span>
-              </div>
+      <ScrollArea className="flex-1 inbox-scrollbar">
+        <div className="p-4 space-y-4">
+          {/* Lifecycle card */}
+          <div className="rounded-lg border border-inbox-border bg-inbox-surface-elevated p-3 space-y-2">
+            <div className="flex items-center justify-between text-[11px]">
+              <span className="text-inbox-ink-subtle">Lifecycle</span>
+              <Badge className="rounded bg-accent/10 text-accent border-0 text-[9px] px-1.5 py-0 h-4 font-medium">Replied</Badge>
             </div>
-
-            <div className="space-y-2">
-              <Label className="text-xs text-slate-500">Pipeline stage</Label>
-              <Select
-                value={selectedPipelineStageId || "none"}
-                onValueChange={(value) => onUpdateStage(value === "none" ? "" : value)}
-                disabled={pipelineDisabled}
-              >
-                <SelectTrigger className="h-9 bg-white">
-                  <SelectValue placeholder="Not in pipeline" />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="none">Not in pipeline</SelectItem>
-                  {pipelineStages.map((stage) => (
-                    <SelectItem key={stage.id} value={stage.id}>
-                      {stage.name}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-              {selectedPipelineStage ? (
-                <p className="text-[11px] text-slate-500">{selectedPipelineStage.description}</p>
-              ) : (
-                <p className="text-[11px] text-slate-500">
-                  Pick a stage or use quick actions to start a deal.
-                </p>
-              )}
-            </div>
-
-            <div className="space-y-2">
-              <Label className="text-xs text-slate-500">Campaign (optional)</Label>
-              <Select
-                value={campaignDraft || "none"}
-                onValueChange={(value) => onCampaignChange(value === "none" ? "" : value)}
-                disabled={pipelineDisabled}
-              >
-                <SelectTrigger className="h-9 bg-white">
-                  <SelectValue placeholder="No campaign" />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="none">No campaign</SelectItem>
-                  {campaignOptions.map((campaign) => (
-                    <SelectItem key={campaign.id} value={campaign.id}>
-                      {campaign.name}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-              <p className="text-[11px] text-slate-500">
-                Optional: link this reply to a campaign for reporting.
-              </p>
-            </div>
-
-            <div className="space-y-2">
-              <Label className="text-xs text-slate-500">Next step</Label>
-              <Input
-                value={nextStepDraft}
-                onChange={(event) => onNextStepChange(event.target.value)}
-                onBlur={() => onNextStepSave(nextStepDraft)}
-                onKeyDown={(event) => {
-                  if (event.key === "Enter") {
-                    event.preventDefault();
-                    onNextStepSave(nextStepDraft);
-                  }
-                }}
-                placeholder="e.g., Send pricing deck"
-                className="h-9 bg-white"
-                disabled={pipelineDisabled}
-              />
-            </div>
-
-            <div className="space-y-2">
-              <Label className="text-xs text-slate-500">Deal value</Label>
-              <Input
-                value={dealValueDraft}
-                onChange={(event) => onDealValueChange(event.target.value)}
-                onBlur={() => onDealValueSave(dealValueDraft)}
-                onKeyDown={(event) => {
-                  if (event.key === "Enter") {
-                    event.preventDefault();
-                    onDealValueSave(dealValueDraft);
-                  }
-                }}
-                placeholder="e.g., 12000"
-                className="h-9 bg-white"
-                disabled={pipelineDisabled}
-              />
-              <p className="text-[11px] text-slate-500">
-                Auto-filled from proposal emails when available.
-              </p>
-            </div>
-
-            <div className="rounded-xl border border-slate-200 bg-white/95 p-3">
-              <p className="mb-3 text-xs font-semibold uppercase tracking-wide text-slate-500">
-                Quick actions
-              </p>
-              <div className="grid grid-cols-2 gap-2">
-                <Button
-                  variant="outline"
-                  size="sm"
-                  onClick={() => onUpdateStage("qualified")}
-                  disabled={pipelineDisabled}
-                >
-                  Interested
-                </Button>
-                <Button
-                  variant="outline"
-                  size="sm"
-                  onClick={() => onUpdateStage("meeting-booked")}
-                  disabled={pipelineDisabled}
-                >
-                  Meeting booked
-                </Button>
-                <Button
-                  variant="outline"
-                  size="sm"
-                  onClick={() => onUpdateStage("closed-lost")}
-                  disabled={pipelineDisabled}
-                >
-                  Not interested
-                </Button>
-                <Button
-                  variant="outline"
-                  size="sm"
-                  onClick={() => onNextStepSave("Follow up next week")}
-                  disabled={pipelineDisabled}
-                >
-                  Snooze
-                </Button>
-              </div>
-              <p className="mt-3 text-[11px] text-slate-500">
-                Updates are saved to your pipeline. CRM sync can be added later.
-              </p>
+            <div className="flex items-center justify-between text-[11px]">
+              <span className="text-inbox-ink-subtle">Last activity</span>
+              <span className="text-inbox-ink-muted tabular-nums">{formatDistanceToNow(new Date(message.date), { addSuffix: true })}</span>
             </div>
           </div>
-        </ScrollArea>
-      )}
+
+          {/* Pipeline stage */}
+          <div className="space-y-1.5">
+            <Label className="text-[11px] text-inbox-ink-subtle">Pipeline stage</Label>
+            <Select value={selectedPipelineStageId || "none"} onValueChange={(v) => onUpdateStage(v === "none" ? "" : v)} disabled={pipelineDisabled}>
+              <SelectTrigger className="h-8 text-xs border-inbox-border bg-inbox-surface-elevated"><SelectValue placeholder="Not in pipeline" /></SelectTrigger>
+              <SelectContent>
+                <SelectItem value="none">Not in pipeline</SelectItem>
+                {pipelineStages.map((s) => <SelectItem key={s.id} value={s.id}>{s.name}</SelectItem>)}
+              </SelectContent>
+            </Select>
+            {selectedPipelineStage && <p className="text-[11px] text-inbox-ink-subtle">{selectedPipelineStage.description}</p>}
+          </div>
+
+          {/* Campaign */}
+          <div className="space-y-1.5">
+            <Label className="text-[11px] text-inbox-ink-subtle">Campaign</Label>
+            <Select value={campaignDraft || "none"} onValueChange={(v) => onCampaignChange(v === "none" ? "" : v)} disabled={pipelineDisabled}>
+              <SelectTrigger className="h-8 text-xs border-inbox-border bg-inbox-surface-elevated"><SelectValue placeholder="No campaign" /></SelectTrigger>
+              <SelectContent>
+                <SelectItem value="none">No campaign</SelectItem>
+                {campaignOptions.map((c) => <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>)}
+              </SelectContent>
+            </Select>
+          </div>
+
+          {/* Next step */}
+          <div className="space-y-1.5">
+            <Label className="text-[11px] text-inbox-ink-subtle">Next step</Label>
+            <Input
+              value={nextStepDraft} onChange={(e) => onNextStepChange(e.target.value)}
+              onBlur={() => onNextStepSave(nextStepDraft)}
+              onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); onNextStepSave(nextStepDraft); } }}
+              placeholder="e.g., Send pricing deck"
+              className="h-8 text-xs border-inbox-border bg-inbox-surface-elevated"
+              disabled={pipelineDisabled}
+            />
+          </div>
+
+          {/* Deal value */}
+          <div className="space-y-1.5">
+            <Label className="text-[11px] text-inbox-ink-subtle">Deal value</Label>
+            <Input
+              value={dealValueDraft} onChange={(e) => onDealValueChange(e.target.value)}
+              onBlur={() => onDealValueSave(dealValueDraft)}
+              onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); onDealValueSave(dealValueDraft); } }}
+              placeholder="e.g., 12000"
+              className="h-8 text-xs border-inbox-border bg-inbox-surface-elevated"
+              disabled={pipelineDisabled}
+            />
+            <p className="text-[10px] text-inbox-ink-subtle">Auto-filled from proposal emails when available.</p>
+          </div>
+
+          {/* Quick actions */}
+          <div className="rounded-lg border border-inbox-border bg-inbox-surface-elevated p-3">
+            <p className="text-[10px] font-semibold uppercase tracking-wider text-inbox-ink-subtle mb-2">Quick actions</p>
+            <div className="grid grid-cols-2 gap-1.5">
+              <Button variant="outline" size="sm" className="h-7 text-[11px] border-inbox-border" onClick={() => onUpdateStage("qualified")} disabled={pipelineDisabled}>Interested</Button>
+              <Button variant="outline" size="sm" className="h-7 text-[11px] border-inbox-border" onClick={() => onUpdateStage("meeting-booked")} disabled={pipelineDisabled}>Meeting</Button>
+              <Button variant="outline" size="sm" className="h-7 text-[11px] border-inbox-border" onClick={() => onUpdateStage("closed-lost")} disabled={pipelineDisabled}>Not interested</Button>
+              <Button variant="outline" size="sm" className="h-7 text-[11px] border-inbox-border" onClick={() => onNextStepSave("Follow up next week")} disabled={pipelineDisabled}>Snooze</Button>
+            </div>
+          </div>
+        </div>
+      </ScrollArea>
     </div>
   );
 };
 
-const CommandPalette = ({
-  open,
-  onOpenChange,
-  onSelect,
-}: {
-  open: boolean;
-  onOpenChange: (open: boolean) => void;
-  onSelect: (action: string) => void;
-}) => {
+// ═══════════════════════════════════════════════════════
+// COMMAND PALETTE
+// ═══════════════════════════════════════════════════════
+const CommandPalette = ({ open, onOpenChange, onSelect }: { open: boolean; onOpenChange: (open: boolean) => void; onSelect: (action: string) => void }) => {
   return (
     <CommandDialog open={open} onOpenChange={onOpenChange}>
       <CommandInput placeholder="Search actions..." />
       <CommandList>
         <CommandEmpty>No results found.</CommandEmpty>
         <CommandGroup heading="Create">
-          <CommandItem onSelect={() => onSelect("compose")}>
-            <MailPlus className="mr-2 h-4 w-4" />
-            Compose
-            <CommandShortcut>?C</CommandShortcut>
-          </CommandItem>
+          <CommandItem onSelect={() => onSelect("compose")}><MailPlus className="mr-2 h-4 w-4" />Compose<CommandShortcut>⌘C</CommandShortcut></CommandItem>
         </CommandGroup>
         <CommandSeparator />
         <CommandGroup heading="View">
-          <CommandItem onSelect={() => onSelect("split")}>
-            <LayoutPanelLeft className="mr-2 h-4 w-4" />
-            Split view
-          </CommandItem>
-          <CommandItem onSelect={() => onSelect("list")}>
-            <LayoutList className="mr-2 h-4 w-4" />
-            List only
-          </CommandItem>
-          <CommandItem onSelect={() => onSelect("detail")}>
-            <LayoutPanelTop className="mr-2 h-4 w-4" />
-            Detail only
-          </CommandItem>
-          <CommandItem onSelect={() => onSelect("compact")}>
-            <ArrowDownNarrowWide className="mr-2 h-4 w-4" />
-            Compact density
-          </CommandItem>
-          <CommandItem onSelect={() => onSelect("comfortable")}>
-            <ArrowDownNarrowWide className="mr-2 h-4 w-4" />
-            Comfortable density
-          </CommandItem>
-          <CommandItem onSelect={() => onSelect("threaded")}>
-            <Tag className="mr-2 h-4 w-4" />
-            Toggle threaded
-          </CommandItem>
+          <CommandItem onSelect={() => onSelect("split")}><LayoutPanelLeft className="mr-2 h-4 w-4" />Split view</CommandItem>
+          <CommandItem onSelect={() => onSelect("list")}><LayoutList className="mr-2 h-4 w-4" />List only</CommandItem>
+          <CommandItem onSelect={() => onSelect("detail")}><LayoutPanelTop className="mr-2 h-4 w-4" />Detail only</CommandItem>
+          <CommandItem onSelect={() => onSelect("compact")}><ArrowDownNarrowWide className="mr-2 h-4 w-4" />Compact density</CommandItem>
+          <CommandItem onSelect={() => onSelect("comfortable")}><ArrowDownNarrowWide className="mr-2 h-4 w-4" />Comfortable density</CommandItem>
+          <CommandItem onSelect={() => onSelect("threaded")}><Tag className="mr-2 h-4 w-4" />Toggle threaded</CommandItem>
         </CommandGroup>
         <CommandSeparator />
         <CommandGroup heading="Actions">
-          <CommandItem onSelect={() => onSelect("sync")}>
-            <RefreshCw className="mr-2 h-4 w-4" />
-            Sync inbox
-          </CommandItem>
-          <CommandItem onSelect={() => onSelect("archive")}>
-            <Archive className="mr-2 h-4 w-4" />
-            Archive selected
-          </CommandItem>
+          <CommandItem onSelect={() => onSelect("sync")}><RefreshCw className="mr-2 h-4 w-4" />Sync inbox</CommandItem>
+          <CommandItem onSelect={() => onSelect("archive")}><Archive className="mr-2 h-4 w-4" />Archive selected</CommandItem>
         </CommandGroup>
       </CommandList>
     </CommandDialog>

@@ -101,6 +101,10 @@ const Dashboard = () => {
       navigate('/pipeline');
       return;
     }
+    if (tab === 'find') {
+      navigate('/find');
+      return;
+    }
     if (tab === 'referrals') {
       navigate('/referrals');
       return;
@@ -165,6 +169,7 @@ const Dashboard = () => {
       onTabChange={handleTabChange} 
       user={user} 
       onLogout={handleLogout}
+      contentClassName={normalizedActiveTab === 'segments' ? 'max-w-[1520px]' : undefined}
     >
       {mountedTabs.map((tabKey) => (
         <section key={tabKey} hidden={tabKey !== normalizedActiveTab}>

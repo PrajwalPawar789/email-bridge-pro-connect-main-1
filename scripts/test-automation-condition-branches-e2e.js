@@ -8,9 +8,12 @@ dotenv.config({ path: path.resolve(__dirname, "../.env") });
 
 const supabaseUrl = process.env.VITE_SUPABASE_URL || process.env.SUPABASE_URL;
 const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
+const anonKey = process.env.SUPABASE_ANON_KEY || process.env.VITE_SUPABASE_ANON_KEY;
 
-if (!supabaseUrl || !serviceKey) {
-  throw new Error("Missing VITE_SUPABASE_URL/SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY in .env");
+if (!supabaseUrl || !serviceKey || !anonKey) {
+  throw new Error(
+    "Missing VITE_SUPABASE_URL/SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, or SUPABASE_ANON_KEY in .env"
+  );
 }
 
 const admin = createClient(supabaseUrl, serviceKey);
@@ -45,12 +48,13 @@ const findUserContext = async () => {
   return { userId: created.data.user.id, createdTempUser: true };
 };
 
-const invokeRunner = async (payload) => {
+const invokeRunner = async (payload, ownerAccessToken) => {
   const response = await fetch(`${supabaseUrl.replace(/\/+$/, "")}/functions/v1/automation-runner`, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
-      Authorization: `Bearer ${serviceKey}`,
+      Authorization: `Bearer ${ownerAccessToken}`,
+      apikey: anonKey,
     },
     body: JSON.stringify(payload),
   });
@@ -66,6 +70,58 @@ const invokeRunner = async (payload) => {
     throw new Error(`Runner call failed (${response.status}): ${JSON.stringify(body)}`);
   }
   return body;
+};
+
+const invokeRunnerTickRpc = async () => {
+  const { error } = await admin.rpc("invoke_automation_runner");
+  if (error) {
+    throw new Error(`invoke_automation_runner RPC failed: ${error.message}`);
+  }
+  return { success: true, via: "rpc_tick" };
+};
+
+const getOwnerAccessToken = async (userId) => {
+  const owner = await admin.auth.admin.getUserById(userId);
+  if (owner.error || !owner.data?.user?.email) {
+    throw new Error(`Failed to load workflow owner: ${owner.error?.message || "email missing"}`);
+  }
+
+  const email = String(owner.data.user.email || "").trim().toLowerCase();
+  const magicLink = await admin.auth.admin.generateLink({
+    type: "magiclink",
+    email,
+    options: {
+      redirectTo: "http://localhost/auth/confirm",
+    },
+  });
+
+  if (magicLink.error) {
+    throw new Error(`Failed to generate owner magic link: ${magicLink.error.message}`);
+  }
+
+  const emailOtp = magicLink.data?.properties?.email_otp;
+  if (!emailOtp) {
+    throw new Error("Owner magic link did not return email_otp.");
+  }
+
+  const anon = createClient(supabaseUrl, anonKey, {
+    auth: {
+      autoRefreshToken: false,
+      persistSession: false,
+    },
+  });
+
+  const verified = await anon.auth.verifyOtp({
+    email,
+    token: emailOtp,
+    type: "magiclink",
+  });
+
+  if (verified.error || !verified.data?.session?.access_token) {
+    throw new Error(`Failed to verify owner magic link: ${verified.error?.message || "access token missing"}`);
+  }
+
+  return String(verified.data.session.access_token);
 };
 
 const toObject = (value) => (value && typeof value === "object" && !Array.isArray(value) ? value : {});
@@ -240,11 +296,24 @@ const run = async () => {
 
     const byEmail = new Map((insertContacts.data || []).map((row) => [row.email, row.id]));
 
-    const runResult = await invokeRunner({
-      action: "run_now",
-      workflowId,
-      batchSize: 30,
-    });
+    const ownerAccessToken = await getOwnerAccessToken(userId);
+    let runResult;
+    try {
+      runResult = await invokeRunner(
+        {
+          action: "run_now",
+          workflowId,
+          batchSize: 30,
+        },
+        ownerAccessToken
+      );
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      if (!/401|unauthorized/i.test(message)) {
+        throw error;
+      }
+      runResult = await invokeRunnerTickRpc();
+    }
 
     const logsResponse = await admin
       .from("automation_logs")

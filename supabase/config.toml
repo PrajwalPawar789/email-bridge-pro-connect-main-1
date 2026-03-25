@@ -30,7 +30,13 @@ verify_jwt = false
 [functions.automation-webhook]
 verify_jwt = false
 
+[functions.automation-test-email]
+verify_jwt = false
+
 [functions.resolve-site-domain]
+verify_jwt = false
+
+[functions.resolve-site-page]
 verify_jwt = false
 
 [functions.verify-site-domain]
@@ -46,6 +52,9 @@ verify_jwt = false
 verify_jwt = false
 
 [functions.workspace-invite-member]
+verify_jwt = false
+
+[functions.catalog-search]
 verify_jwt = false
 
 [db]

@@ -14,6 +14,7 @@ import CampaignTracker from "./pages/CampaignTracker";
 import Inbox from "./pages/Inbox";
 import Automations from "./pages/Automations";
 import Pipeline from "./pages/Pipeline";
+import Find from "./pages/Find";
 import EmailBuilder from "./pages/EmailBuilder";
 import LandingPages from "./pages/LandingPages";
 import SiteConnector from "./pages/SiteConnector";
@@ -53,6 +54,7 @@ const App = () => (
                 <Route path="/inbox" element={<Inbox />} />
                 <Route path="/automations" element={<Automations />} />
                 <Route path="/pipeline" element={<Pipeline />} />
+                <Route path="/find" element={<Find />} />
                 <Route path="/email-builder" element={<EmailBuilder />} />
                 <Route path="/landing-pages" element={<LandingPages />} />
                 <Route path="/site-connector" element={<SiteConnector />} />

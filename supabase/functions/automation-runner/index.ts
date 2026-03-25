@@ -2,6 +2,7 @@
 import { serve } from "https://deno.land/std@0.190.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { createTransport } from "npm:nodemailer@6.9.7";
+import { looksLikeHtml, normalizePlainTextEmailBody } from "../../../shared/email-content.js";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -27,7 +28,7 @@ const CREDIT_RETRY_MINUTES = 60;
 const WEBHOOK_RETRY_MINUTES = 10;
 const WEBHOOK_DEFAULT_TIMEOUT_MS = 12000;
 const WEBHOOK_MAX_BODY_CHARS = 2000;
-const ENGAGEMENT_CONDITION_RECHECK_MINUTES = 15;
+const ENGAGEMENT_CONDITION_RECHECK_MINUTES = 0.5;
 const TRACKING_LINK_REGEX =
   /(href\s*=\s*["'])((?:https?:\/\/|www\.)[^\s"']+)(["'])|((?:https?:\/\/|www\.)[^\s<>"']+)/gi;
 
@@ -60,7 +61,14 @@ const escapeHtml = (value: string) =>
     .replace(/"/g, "&quot;")
     .replace(/'/g, "&#39;");
 
-const looksLikeHtml = (value: string) => /<\s*[a-z][\w-]*(\s[^>]*)?>/i.test(value);
+const buildHiddenPreheaderHtml = (value: string) => {
+  const preheader = String(value || "").trim();
+  if (!preheader) return "";
+  return `<div style="display:none;overflow:hidden;line-height:1px;opacity:0;max-height:0;max-width:0;color:transparent;">${escapeHtml(
+    preheader
+  )}</div>`;
+};
+
 const EMAIL_BUILDER_STATE_REGEX = /<!--\s*VINTRO_EMAIL_BUILDER_STATE:([\s\S]*?)-->/;
 
 const fromBase64 = (value: string) => {
@@ -93,6 +101,7 @@ const extractBuilderStateContent = (content: string) => {
       cleanContent: String(content || ""),
       builderText: "",
       builderHtml: "",
+      preheader: "",
     };
   }
 
@@ -100,17 +109,20 @@ const extractBuilderStateContent = (content: string) => {
   try {
     const decoded = fromBase64(match[1]);
     const parsed = JSON.parse(decoded);
+    const meta = parsed?.meta && typeof parsed.meta === "object" ? parsed.meta : {};
     const blocks = Array.isArray(parsed?.blocks) ? parsed.blocks : [];
     return {
       cleanContent,
       builderText: renderBuilderBlocksText(blocks),
       builderHtml: renderBuilderBlocksHtml(blocks),
+      preheader: typeof meta.preheader === "string" ? meta.preheader : "",
     };
   } catch {
     return {
       cleanContent,
       builderText: "",
       builderHtml: "",
+      preheader: "",
     };
   }
 };
@@ -270,6 +282,7 @@ const getWaitMinutes = (config: Record<string, unknown>) => {
   const duration = Number.isFinite(durationRaw) && durationRaw > 0 ? durationRaw : WAIT_DEFAULT_MINUTES;
   const unit = String(config.unit || "minutes").toLowerCase();
 
+  if (unit === "seconds") return duration / 60;
   if (unit === "days") return duration * 24 * 60;
   if (unit === "hours") return duration * 60;
   return duration;
@@ -1001,6 +1014,27 @@ const normalizeGraphConditionConfig = (rawConfig: unknown) => {
   };
 };
 
+const normalizeGraphSendEmailConfig = (rawConfig: unknown) => {
+  const config = safeJsonObject(rawConfig);
+  return {
+    ...config,
+    sender_config_id: String(config.sender_config_id || config.senderConfigId || "").trim(),
+    template_id: String(config.template_id || config.templateId || "").trim(),
+    thread_with_previous:
+      config.thread_with_previous !== undefined
+        ? config.thread_with_previous
+        : config.threadWithPrevious !== undefined
+          ? config.threadWithPrevious
+          : true,
+    is_html:
+      config.is_html !== undefined
+        ? config.is_html
+        : config.isHtml !== undefined
+          ? config.isHtml
+          : undefined,
+  };
+};
+
 const pickGraphConditionBranch = async (
   workflow: Record<string, unknown>,
   contact: Record<string, unknown>,
@@ -1040,7 +1074,7 @@ const sendEmailForStep = async (
     completeAfterSend?: boolean;
   } = {}
 ) => {
-  const config = safeJsonObject(step.config);
+  const config = normalizeGraphSendEmailConfig(step.config);
   const state = stripConditionWaitState(safeJsonObject(contact.state));
   const nodeId = options.nodeId || String(step.id || "");
   const stepLabel = String(step.name || "Email");
@@ -1064,7 +1098,13 @@ const sendEmailForStep = async (
   const personalizedSubject = personalize(subjectRaw, contact, state, sender);
   const personalizedBody = personalize(sourceTextBody, contact, state, sender);
   const personalizedHtmlBody = personalize(sourceHtmlBody, contact, state, sender);
-  const htmlBody = isHtml ? personalizedHtmlBody : formatPlainTextToHtml(personalizedBody);
+  const personalizedPreheaderHtml = builderStateContent.builderHtml
+    ? buildHiddenPreheaderHtml(personalize(builderStateContent.preheader || "", contact, state, sender))
+    : "";
+  const plainTextBody = isHtml ? personalizedBody : normalizePlainTextEmailBody(personalizedBody);
+  const htmlBody = isHtml
+    ? `${personalizedPreheaderHtml}${personalizedHtmlBody}`
+    : formatPlainTextToHtml(plainTextBody);
 
   const creditReferenceId = `automation:${workflow.id}:${contact.id}:step:${nodeId || stepIndex}:${Date.now()}`;
   const sendQuotaReferenceId = `automation:${workflow.id}:${contact.id}:step:${nodeId || stepIndex}:send-quota`;
@@ -1225,7 +1265,7 @@ const sendEmailForStep = async (
       to: String(contact.email || ""),
       subject: personalizedSubject,
       html: finalHtmlBody,
-      text: personalizedBody,
+      text: plainTextBody,
       messageId: generatedMessageId,
       headers,
     });
@@ -1284,7 +1324,7 @@ const sendEmailForStep = async (
       to_emails: [String(contact.email || "")],
       cc_emails: [],
       subject: personalizedSubject,
-      body: isHtml ? htmlBody : personalizedBody,
+      body: isHtml ? htmlBody : plainTextBody,
       date: sentAt,
       folder: "Sent",
       read: true,
@@ -1657,7 +1697,12 @@ const normalizeWorkflowGraph = (workflow: Record<string, unknown>) => {
         id: String(row.id || `node_${index + 1}`),
         kind,
         title: String(row.title || kind),
-        config: kind === "condition" ? normalizeGraphConditionConfig(config) : config,
+        config:
+          kind === "condition"
+            ? normalizeGraphConditionConfig(config)
+            : kind === "send_email"
+              ? normalizeGraphSendEmailConfig(config)
+              : config,
       };
     })
     .filter((node) => node.id.length > 0);

@@ -49,6 +49,7 @@ const elseIfIndexFromHandle = (handle: string) => {
 
 export const conditionLabelForHandle = (handle: string, fallbackIndex = 0) => {
   if (handle === "if") return "If";
+  if (handle === CONDITION_ELSE_HANDLE) return "Else";
   const elseIfIndex = elseIfIndexFromHandle(handle);
   if (elseIfIndex !== null) return `Else If ${elseIfIndex}`;
   return conditionLabelForClause(fallbackIndex);

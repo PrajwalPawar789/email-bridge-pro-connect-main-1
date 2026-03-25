@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { supabase } from '@/integrations/supabase/client';
 import { Button } from '@/components/ui/button';
@@ -41,6 +41,7 @@ interface FollowupStep {
   subject: string;
   body: string;
   template_id?: string;
+  template_builder_state?: string;
 }
 
 type PipelineConfigState = {
@@ -160,7 +161,26 @@ const looksLikeHtml = (value: string) => /<\s*[a-z][\w-]*(\s[^>]*)?>/i.test(valu
 const EMAIL_BUILDER_STATE_REGEX = /<!--\s*VINTRO_EMAIL_BUILDER_STATE:[\s\S]*?-->/g;
 const TRACKABLE_LINK_REGEX = /(href\s*=\s*["'](?:https?:\/\/|www\.)|(?:https?:\/\/|www\.)[^\s<>"']+)/i;
 const DEFAULT_AUTO_SENDER_DAILY_LIMIT = 100;
+const FOLLOWUP_TEMPLATE_MANUAL_VALUE = '__manual_followup_template__';
 const normalizeEmail = (value?: string | null) => (value || '').trim().toLowerCase();
+
+const extractTemplateSelection = (template: any) => {
+  const content = String(template?.content || '');
+  const builderStateMatch = content.match(/<!--\s*VINTRO_EMAIL_BUILDER_STATE:[\s\S]*?-->/);
+  return {
+    subject: String(template?.subject || ''),
+    content: content.replace(EMAIL_BUILDER_STATE_REGEX, '').replace(/\s+$/, ''),
+    builderState: builderStateMatch?.[0] || '',
+    isHtml: Boolean(template?.is_html),
+  };
+};
+
+const appendBuilderState = (content: string, builderState?: string) => {
+  const normalizedContent = String(content || '').replace(EMAIL_BUILDER_STATE_REGEX, '').trimEnd();
+  const normalizedBuilderState = String(builderState || '').trim();
+  if (!normalizedContent) return normalizedContent;
+  return normalizedBuilderState ? `${normalizedContent}\n${normalizedBuilderState}` : normalizedContent;
+};
 
 const resolveCampaignErrorMessage = (error: any) => {
   const message = String(error?.message || error?.details || '').trim();
@@ -186,6 +206,7 @@ const CampaignBuilder: React.FC<CampaignBuilderProps> = ({ emailConfigs }) => {
   });
   const [selectedConfigs, setSelectedConfigs] = useState<{ configId: string; dailyLimit: number }[]>([]);
   const [senderAssignment, setSenderAssignment] = useState<'random' | 'list'>('random');
+  const [randomSenderSelectionMode, setRandomSenderSelectionMode] = useState<'auto' | 'manual'>('manual');
   const [recipients, setRecipients] = useState<string>('');
   const [loading, setLoading] = useState(false);
   const [templates, setTemplates] = useState<any[]>([]);
@@ -221,25 +242,40 @@ const CampaignBuilder: React.FC<CampaignBuilderProps> = ({ emailConfigs }) => {
   const [userPipelines, setUserPipelines] = useState<DbPipeline[]>([]);
   const [pipelineStagesById, setPipelineStagesById] = useState<Record<string, DbPipelineStage[]>>({});
   const contentBodyRef = useRef<HTMLTextAreaElement | null>(null);
-  const activeEmailConfigs = emailConfigs.filter((config) => config.is_active !== false);
-  const selectedConfigMap = new Map(selectedConfigs.map((config) => [config.configId, config.dailyLimit]));
-  const selectedSenderPool = activeEmailConfigs
-    .filter((config) => selectedConfigMap.has(config.id))
-    .map((config) => ({
-      configId: config.id,
-      dailyLimit: selectedConfigMap.get(config.id) || DEFAULT_AUTO_SENDER_DAILY_LIMIT,
-      smtpUsername: String(config.smtp_username || ''),
-      isAutoIncluded: false,
-    }));
-  const effectiveSenderConfigs =
-    senderAssignment === 'list' && selectedSenderPool.length === 0
-      ? activeEmailConfigs.map((config) => ({
+  const activeEmailConfigs = useMemo(
+    () => emailConfigs.filter((config) => config.is_active !== false),
+    [emailConfigs]
+  );
+  const selectedConfigMap = useMemo(
+    () => new Map(selectedConfigs.map((config) => [config.configId, config.dailyLimit])),
+    [selectedConfigs]
+  );
+  const isRandomAutoSenderSelection = senderAssignment === 'random' && randomSenderSelectionMode === 'auto';
+  const autoUsesActiveSenderPool = senderAssignment === 'list' || isRandomAutoSenderSelection;
+  const manualSelectedSenderPool = useMemo(
+    () =>
+      activeEmailConfigs
+        .filter((config) => selectedConfigMap.has(config.id))
+        .map((config) => ({
           configId: config.id,
-          dailyLimit: DEFAULT_AUTO_SENDER_DAILY_LIMIT,
+          dailyLimit: selectedConfigMap.get(config.id) || DEFAULT_AUTO_SENDER_DAILY_LIMIT,
           smtpUsername: String(config.smtp_username || ''),
-          isAutoIncluded: true,
-        }))
-      : selectedSenderPool;
+          isAutoIncluded: false,
+        })),
+    [activeEmailConfigs, selectedConfigMap]
+  );
+  const effectiveSenderConfigs = useMemo(
+    () =>
+      autoUsesActiveSenderPool
+        ? activeEmailConfigs.map((config) => ({
+            configId: config.id,
+            dailyLimit: selectedConfigMap.get(config.id) || DEFAULT_AUTO_SENDER_DAILY_LIMIT,
+            smtpUsername: String(config.smtp_username || ''),
+            isAutoIncluded: true,
+          }))
+        : manualSelectedSenderPool,
+    [activeEmailConfigs, autoUsesActiveSenderPool, manualSelectedSenderPool, selectedConfigMap]
+  );
   const totalRecipients = audienceType === 'list'
     ? listCount
     : audienceType === 'segment'
@@ -268,8 +304,10 @@ const CampaignBuilder: React.FC<CampaignBuilderProps> = ({ emailConfigs }) => {
       label: 'Senders',
       value: effectiveSenderConfigs.length,
       helper:
-        senderAssignment === 'list' && selectedConfigs.length === 0 && effectiveSenderConfigs.length > 0
-          ? 'Auto-matched from sender_email column'
+        senderAssignment === 'list' && effectiveSenderConfigs.length > 0
+          ? 'Auto-selected for sender_email routing'
+          : isRandomAutoSenderSelection && effectiveSenderConfigs.length > 0
+            ? 'Auto-selected active sender pool'
           : totalDailyLimit > 0
             ? `${totalDailyLimit} / day`
             : 'No senders yet',
@@ -473,7 +511,7 @@ const CampaignBuilder: React.FC<CampaignBuilderProps> = ({ emailConfigs }) => {
     return () => {
       cancelled = true;
     };
-  }, [audienceType, emailConfigs, selectedConfigs, selectedListId, selectedSegmentId, senderAssignment]);
+  }, [audienceType, effectiveSenderConfigs, selectedListId, selectedSegmentId, senderAssignment]);
 
   const fetchTemplates = async () => {
     try {
@@ -564,17 +602,14 @@ const CampaignBuilder: React.FC<CampaignBuilderProps> = ({ emailConfigs }) => {
   const handleTemplateSelect = (templateId: string) => {
     const template = templates.find(t => t.id === templateId);
     if (template) {
-      const builderStateMatch = String(template.content || '').match(/<!--\s*VINTRO_EMAIL_BUILDER_STATE:[\s\S]*?-->/);
-      const normalizedContent = (template.content || "")
-        .replace(EMAIL_BUILDER_STATE_REGEX, '')
-        .replace(/\s+$/, "");
+      const selectedTemplateData = extractTemplateSelection(template);
       setForm(prev => ({
         ...prev,
-        subject: template.subject || '',
-        content: normalizedContent,
-        is_html: !!template.is_html
+        subject: selectedTemplateData.subject,
+        content: selectedTemplateData.content,
+        is_html: selectedTemplateData.isHtml
       }));
-      setSelectedTemplateBuilderState(builderStateMatch?.[0] || '');
+      setSelectedTemplateBuilderState(selectedTemplateData.builderState);
     } else {
       setSelectedTemplateBuilderState('');
     }
@@ -595,6 +630,7 @@ const CampaignBuilder: React.FC<CampaignBuilderProps> = ({ emailConfigs }) => {
       delay_hours: 0,
       subject: '',
       body: '',
+      template_builder_state: '',
     }]);
   };
 
@@ -611,6 +647,37 @@ const CampaignBuilder: React.FC<CampaignBuilderProps> = ({ emailConfigs }) => {
     setFollowups(newFollowups);
   };
 
+  const handleFollowupTemplateSelect = (index: number, templateValue: string) => {
+    if (templateValue === FOLLOWUP_TEMPLATE_MANUAL_VALUE) {
+      setFollowups((current) =>
+        current.map((step, stepIndex) =>
+          stepIndex === index
+            ? { ...step, template_id: undefined, template_builder_state: '' }
+            : step
+        )
+      );
+      return;
+    }
+
+    const template = templates.find((item) => item.id === templateValue);
+    if (!template) return;
+
+    const selectedTemplateData = extractTemplateSelection(template);
+    setFollowups((current) =>
+      current.map((step, stepIndex) =>
+        stepIndex === index
+          ? {
+              ...step,
+              template_id: templateValue,
+              subject: selectedTemplateData.subject,
+              body: selectedTemplateData.content,
+              template_builder_state: selectedTemplateData.builderState,
+            }
+          : step
+      )
+    );
+  };
+
   const validateStep = (step: number) => {
     switch (step) {
       case 1: // Setup
@@ -622,8 +689,10 @@ const CampaignBuilder: React.FC<CampaignBuilderProps> = ({ emailConfigs }) => {
           toast({
             title: "Missing Information",
             description:
-              senderAssignment === 'list'
-                ? "No active sender accounts are available for sender_email routing."
+              autoUsesActiveSenderPool
+                ? senderAssignment === 'list'
+                  ? "No active sender accounts are available for sender_email routing."
+                  : "No active sender accounts are available for automatic random distribution."
                 : "Please select at least one sender account.",
             variant: "destructive"
           });
@@ -699,9 +768,7 @@ const CampaignBuilder: React.FC<CampaignBuilderProps> = ({ emailConfigs }) => {
             ? (selectedSegment?.source_list_id || null)
             : null;
 
-      const campaignBody = selectedTemplateBuilderState
-        ? `${String(form.content || '').trimEnd()}\n${selectedTemplateBuilderState}`
-        : form.content;
+      const campaignBody = appendBuilderState(form.content, selectedTemplateBuilderState);
 
       // Create campaign
       const { data: campaign, error: campaignError } = await supabase
@@ -742,8 +809,8 @@ const CampaignBuilder: React.FC<CampaignBuilderProps> = ({ emailConfigs }) => {
           step_number: f.step_number,
           delay_days: f.delay_days,
           delay_hours: f.delay_hours,
-          subject: f.subject || null,
-          body: f.body,
+          subject: f.subject.trim() || null,
+          body: appendBuilderState(f.body, f.template_builder_state) || null,
           template_id: f.template_id || null
         }));
         await supabase.from('campaign_followups').insert(followupInserts);
@@ -1148,18 +1215,24 @@ const CampaignBuilder: React.FC<CampaignBuilderProps> = ({ emailConfigs }) => {
 
             <div className="space-y-4">
               <Label className="text-base font-semibold text-[var(--builder-ink)]">Sender Accounts</Label>
-              {senderAssignment === 'list' && selectedConfigs.length === 0 && activeEmailConfigs.length > 0 && (
+              {senderAssignment === 'list' && activeEmailConfigs.length > 0 && (
                 <p className="text-xs text-[var(--builder-muted)]">
                   No manual selection required. Active sender accounts will be auto-used from the `sender_email` column.
+                </p>
+              )}
+              {isRandomAutoSenderSelection && activeEmailConfigs.length > 0 && (
+                <p className="text-xs text-[var(--builder-muted)]">
+                  Random distribution will auto-include all active sender accounts.
                 </p>
               )}
               <div className="border border-[var(--builder-border)] rounded-2xl overflow-hidden bg-white/60">
               <ScrollArea className="h-[240px]">
                 <div className="p-2 space-y-2">
                   {emailConfigs.map((config) => {
-                    const isSelected = selectedConfigs.some(c => c.configId === config.id);
-                    const selectedConfig = selectedConfigs.find(c => c.configId === config.id);
                     const isAvailable = config.is_active !== false;
+                    const isSelected = autoUsesActiveSenderPool ? isAvailable : selectedConfigs.some(c => c.configId === config.id);
+                    const selectedConfig = selectedConfigs.find(c => c.configId === config.id);
+                    const resolvedDailyLimit = selectedConfigMap.get(config.id) || DEFAULT_AUTO_SENDER_DAILY_LIMIT;
                     
                     return (
                       <div 
@@ -1167,13 +1240,13 @@ const CampaignBuilder: React.FC<CampaignBuilderProps> = ({ emailConfigs }) => {
                         className={cn(
                           "flex items-center justify-between p-3 rounded-xl border transition-all",
                           !isAvailable && "cursor-not-allowed opacity-60",
-                          isAvailable && "cursor-pointer",
+                          isAvailable && !autoUsesActiveSenderPool && "cursor-pointer",
                           isSelected
                             ? "bg-white/90 border-emerald-200 shadow-sm ring-1 ring-emerald-100"
                             : "hover:bg-white/90 border-transparent hover:border-slate-200"
                         )}
                         onClick={() => {
-                            if (!isAvailable) return;
+                            if (!isAvailable || autoUsesActiveSenderPool) return;
                             if (isSelected) {
                                 setSelectedConfigs(selectedConfigs.filter(c => c.configId !== config.id));
                             } else {
@@ -1196,7 +1269,7 @@ const CampaignBuilder: React.FC<CampaignBuilderProps> = ({ emailConfigs }) => {
                             </span>
                           </div>
                         </div>
-                        {isSelected && (
+                        {isSelected && !autoUsesActiveSenderPool && (
                           <div className="flex items-center gap-2 bg-white/80 px-2 py-1 rounded-lg border border-[var(--builder-border)]" onClick={(e) => e.stopPropagation()}>
                             <span className="text-xs text-[var(--builder-muted)]">Limit:</span>
                             <Input 
@@ -1210,6 +1283,14 @@ const CampaignBuilder: React.FC<CampaignBuilderProps> = ({ emailConfigs }) => {
                                   ));
                                 }}
                             />
+                          </div>
+                        )}
+                        {isSelected && autoUsesActiveSenderPool && (
+                          <div className="flex items-center gap-2 bg-white/80 px-2 py-1 rounded-lg border border-[var(--builder-border)]">
+                            <Badge variant="outline" className="border-emerald-200 bg-emerald-50 text-emerald-700">
+                              Auto
+                            </Badge>
+                            <span className="text-xs text-[var(--builder-muted)]">{resolvedDailyLimit}/day</span>
                           </div>
                         )}
                       </div>
@@ -1238,7 +1319,7 @@ const CampaignBuilder: React.FC<CampaignBuilderProps> = ({ emailConfigs }) => {
                 >
                   <p className="text-sm font-semibold">Random distribution</p>
                   <p className="text-xs text-[var(--builder-muted)]">
-                    Rotate emails across all selected senders.
+                    Rotate emails across the random sender pool.
                   </p>
                 </button>
                 <button
@@ -1257,8 +1338,42 @@ const CampaignBuilder: React.FC<CampaignBuilderProps> = ({ emailConfigs }) => {
                   </p>
                 </button>
               </div>
+              {senderAssignment === 'random' && (
+                <div className="grid gap-3 sm:grid-cols-2">
+                  <button
+                    type="button"
+                    className={cn(
+                      "rounded-2xl border p-4 text-left transition-all",
+                      randomSenderSelectionMode === 'auto'
+                        ? "border-emerald-200 bg-emerald-50/80 text-emerald-900 shadow-[0_8px_20px_rgba(16,185,129,0.12)]"
+                        : "border-[var(--builder-border)] bg-white/80 text-[var(--builder-muted)] hover:border-slate-300"
+                    )}
+                    onClick={() => setRandomSenderSelectionMode('auto')}
+                  >
+                    <p className="text-sm font-semibold">Auto-select sender accounts</p>
+                    <p className="text-xs text-[var(--builder-muted)]">
+                      Use every active sender account automatically.
+                    </p>
+                  </button>
+                  <button
+                    type="button"
+                    className={cn(
+                      "rounded-2xl border p-4 text-left transition-all",
+                      randomSenderSelectionMode === 'manual'
+                        ? "border-emerald-200 bg-emerald-50/80 text-emerald-900 shadow-[0_8px_20px_rgba(16,185,129,0.12)]"
+                        : "border-[var(--builder-border)] bg-white/80 text-[var(--builder-muted)] hover:border-slate-300"
+                    )}
+                    onClick={() => setRandomSenderSelectionMode('manual')}
+                  >
+                    <p className="text-sm font-semibold">Manual select sender accounts</p>
+                    <p className="text-xs text-[var(--builder-muted)]">
+                      Pick which sender accounts participate in random routing.
+                    </p>
+                  </button>
+                </div>
+              )}
               <p className="text-xs text-[var(--builder-muted)]">
-                Missing or "-" sender emails fall back to random. If no sender accounts are selected, all active accounts are used automatically.
+                Missing or "-" sender emails fall back to random. <code>{'{sender_name}'}</code> and <code>{'{sender_email}'}</code> resolve from the sender account that actually sends each email.
               </p>
             </div>
           </div>
@@ -1825,6 +1940,26 @@ const CampaignBuilder: React.FC<CampaignBuilderProps> = ({ emailConfigs }) => {
 
   const renderFollowupsStep = () => (
     <div className="space-y-8 animate-in fade-in slide-in-from-right-4 duration-500 max-w-4xl mx-auto">
+      {templates.length === 0 && (
+        <div className="rounded-2xl border border-amber-200/70 bg-amber-50/80 p-4 flex items-center justify-between gap-4">
+          <div className="flex items-center gap-3">
+            <div className="bg-white/80 p-2 rounded-full border border-amber-200">
+              <Mail className="h-5 w-5 text-amber-700" />
+            </div>
+            <div>
+              <h4 className="font-semibold text-amber-900">Add a template for follow-ups</h4>
+              <p className="text-sm text-amber-700">Saved templates can be loaded into any follow-up step.</p>
+            </div>
+          </div>
+          <Button
+            variant="outline"
+            className="bg-white/80 text-amber-700 hover:bg-amber-100 border-amber-200"
+            onClick={() => navigate('/email-builder')}
+          >
+            Add template
+          </Button>
+        </div>
+      )}
       <div className="relative pl-8 space-y-12">
         {/* Vertical Line */}
         <div className="absolute left-[15px] top-4 bottom-0 w-0.5 bg-[var(--builder-border)]" />
@@ -1867,6 +2002,37 @@ const CampaignBuilder: React.FC<CampaignBuilderProps> = ({ emailConfigs }) => {
                 </div>
                 
                 <div className="space-y-4">
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    <div className="space-y-2">
+                      <Label className="text-xs text-[var(--builder-muted)]">Template</Label>
+                      <Select
+                        value={step.template_id || FOLLOWUP_TEMPLATE_MANUAL_VALUE}
+                        onValueChange={(value) => handleFollowupTemplateSelect(index, value)}
+                        disabled={templates.length === 0}
+                      >
+                        <SelectTrigger className="h-9 border-[var(--builder-border)] bg-white/90">
+                          <SelectValue placeholder="Load follow-up template..." />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value={FOLLOWUP_TEMPLATE_MANUAL_VALUE}>Custom content</SelectItem>
+                          {templates.map((template) => (
+                            <SelectItem key={template.id} value={template.id}>
+                              {template.name}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    </div>
+                    <div className="space-y-2">
+                      <Label className="text-xs text-[var(--builder-muted)]">Subject Line</Label>
+                      <Input
+                        placeholder="Leave blank to use Re: original subject"
+                        value={step.subject}
+                        onChange={(e) => updateFollowupStep(index, 'subject', e.target.value)}
+                        className="h-9 border-[var(--builder-border)] bg-white/90"
+                      />
+                    </div>
+                  </div>
                   <div className="grid grid-cols-2 gap-4">
                     <div className="space-y-2">
                       <Label className="text-xs text-[var(--builder-muted)]">Wait Days</Label>
@@ -1963,7 +2129,7 @@ const CampaignBuilder: React.FC<CampaignBuilderProps> = ({ emailConfigs }) => {
                 <div>
                   <span className="text-[var(--builder-muted)] block mb-1">Sender Accounts</span>
                   <span className="font-medium text-[var(--builder-ink)]">
-                    {effectiveSenderConfigs.length} account{effectiveSenderConfigs.length === 1 ? '' : 's'} {selectedConfigs.length === 0 && senderAssignment === 'list' ? 'auto-included' : 'selected'}
+                    {effectiveSenderConfigs.length} account{effectiveSenderConfigs.length === 1 ? '' : 's'} {autoUsesActiveSenderPool ? 'auto-included' : 'selected'}
                   </span>
                 </div>
                   <div>

@@ -32,11 +32,17 @@ services:
       - key: MAILBOX_AUTO_SYNC_MAILBOXES
         value: "true"
       - key: MAILBOX_AUTO_SYNC_INTERVAL_MINUTES
-        value: "10"
+        value: "1"
       - key: MAILBOX_AUTO_SYNC_LIMIT
         value: "50"
       - key: MAILBOX_AUTO_SYNC_CONFIG_ID
         sync: false
+      - key: AUTOMATION_RUNNER_HEARTBEAT
+        value: "true"
+      - key: AUTOMATION_RUNNER_INTERVAL_SECONDS
+        value: "30"
+      - key: AUTOMATION_RUNNER_MAX_WORKFLOWS
+        value: "40"
       - key: MAILBOX_LOG_SYNC_SAMPLES
         value: "false"
       - key: CRM_FRONTEND_URL
