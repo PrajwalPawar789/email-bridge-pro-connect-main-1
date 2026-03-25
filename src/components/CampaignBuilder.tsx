@@ -41,6 +41,7 @@ interface FollowupStep {
   subject: string;
   body: string;
   template_id?: string;
+  template_builder_state?: string;
 }
 
 type PipelineConfigState = {
@@ -160,7 +161,26 @@ const looksLikeHtml = (value: string) => /<\s*[a-z][\w-]*(\s[^>]*)?>/i.test(valu
 const EMAIL_BUILDER_STATE_REGEX = /<!--\s*VINTRO_EMAIL_BUILDER_STATE:[\s\S]*?-->/g;
 const TRACKABLE_LINK_REGEX = /(href\s*=\s*["'](?:https?:\/\/|www\.)|(?:https?:\/\/|www\.)[^\s<>"']+)/i;
 const DEFAULT_AUTO_SENDER_DAILY_LIMIT = 100;
+const FOLLOWUP_TEMPLATE_MANUAL_VALUE = '__manual_followup_template__';
 const normalizeEmail = (value?: string | null) => (value || '').trim().toLowerCase();
+
+const extractTemplateSelection = (template: any) => {
+  const content = String(template?.content || '');
+  const builderStateMatch = content.match(/<!--\s*VINTRO_EMAIL_BUILDER_STATE:[\s\S]*?-->/);
+  return {
+    subject: String(template?.subject || ''),
+    content: content.replace(EMAIL_BUILDER_STATE_REGEX, '').replace(/\s+$/, ''),
+    builderState: builderStateMatch?.[0] || '',
+    isHtml: Boolean(template?.is_html),
+  };
+};
+
+const appendBuilderState = (content: string, builderState?: string) => {
+  const normalizedContent = String(content || '').replace(EMAIL_BUILDER_STATE_REGEX, '').trimEnd();
+  const normalizedBuilderState = String(builderState || '').trim();
+  if (!normalizedContent) return normalizedContent;
+  return normalizedBuilderState ? `${normalizedContent}\n${normalizedBuilderState}` : normalizedContent;
+};
 
 const resolveCampaignErrorMessage = (error: any) => {
   const message = String(error?.message || error?.details || '').trim();
@@ -582,17 +602,14 @@ const CampaignBuilder: React.FC<CampaignBuilderProps> = ({ emailConfigs }) => {
   const handleTemplateSelect = (templateId: string) => {
     const template = templates.find(t => t.id === templateId);
     if (template) {
-      const builderStateMatch = String(template.content || '').match(/<!--\s*VINTRO_EMAIL_BUILDER_STATE:[\s\S]*?-->/);
-      const normalizedContent = (template.content || "")
-        .replace(EMAIL_BUILDER_STATE_REGEX, '')
-        .replace(/\s+$/, "");
+      const selectedTemplateData = extractTemplateSelection(template);
       setForm(prev => ({
         ...prev,
-        subject: template.subject || '',
-        content: normalizedContent,
-        is_html: !!template.is_html
+        subject: selectedTemplateData.subject,
+        content: selectedTemplateData.content,
+        is_html: selectedTemplateData.isHtml
       }));
-      setSelectedTemplateBuilderState(builderStateMatch?.[0] || '');
+      setSelectedTemplateBuilderState(selectedTemplateData.builderState);
     } else {
       setSelectedTemplateBuilderState('');
     }
@@ -613,6 +630,7 @@ const CampaignBuilder: React.FC<CampaignBuilderProps> = ({ emailConfigs }) => {
       delay_hours: 0,
       subject: '',
       body: '',
+      template_builder_state: '',
     }]);
   };
 
@@ -627,6 +645,37 @@ const CampaignBuilder: React.FC<CampaignBuilderProps> = ({ emailConfigs }) => {
     const newFollowups = [...followups];
     newFollowups[index] = { ...newFollowups[index], [field]: value };
     setFollowups(newFollowups);
+  };
+
+  const handleFollowupTemplateSelect = (index: number, templateValue: string) => {
+    if (templateValue === FOLLOWUP_TEMPLATE_MANUAL_VALUE) {
+      setFollowups((current) =>
+        current.map((step, stepIndex) =>
+          stepIndex === index
+            ? { ...step, template_id: undefined, template_builder_state: '' }
+            : step
+        )
+      );
+      return;
+    }
+
+    const template = templates.find((item) => item.id === templateValue);
+    if (!template) return;
+
+    const selectedTemplateData = extractTemplateSelection(template);
+    setFollowups((current) =>
+      current.map((step, stepIndex) =>
+        stepIndex === index
+          ? {
+              ...step,
+              template_id: templateValue,
+              subject: selectedTemplateData.subject,
+              body: selectedTemplateData.content,
+              template_builder_state: selectedTemplateData.builderState,
+            }
+          : step
+      )
+    );
   };
 
   const validateStep = (step: number) => {
@@ -719,9 +768,7 @@ const CampaignBuilder: React.FC<CampaignBuilderProps> = ({ emailConfigs }) => {
             ? (selectedSegment?.source_list_id || null)
             : null;
 
-      const campaignBody = selectedTemplateBuilderState
-        ? `${String(form.content || '').trimEnd()}\n${selectedTemplateBuilderState}`
-        : form.content;
+      const campaignBody = appendBuilderState(form.content, selectedTemplateBuilderState);
 
       // Create campaign
       const { data: campaign, error: campaignError } = await supabase
@@ -762,8 +809,8 @@ const CampaignBuilder: React.FC<CampaignBuilderProps> = ({ emailConfigs }) => {
           step_number: f.step_number,
           delay_days: f.delay_days,
           delay_hours: f.delay_hours,
-          subject: f.subject || null,
-          body: f.body,
+          subject: f.subject.trim() || null,
+          body: appendBuilderState(f.body, f.template_builder_state) || null,
           template_id: f.template_id || null
         }));
         await supabase.from('campaign_followups').insert(followupInserts);
@@ -1893,6 +1940,26 @@ const CampaignBuilder: React.FC<CampaignBuilderProps> = ({ emailConfigs }) => {
 
   const renderFollowupsStep = () => (
     <div className="space-y-8 animate-in fade-in slide-in-from-right-4 duration-500 max-w-4xl mx-auto">
+      {templates.length === 0 && (
+        <div className="rounded-2xl border border-amber-200/70 bg-amber-50/80 p-4 flex items-center justify-between gap-4">
+          <div className="flex items-center gap-3">
+            <div className="bg-white/80 p-2 rounded-full border border-amber-200">
+              <Mail className="h-5 w-5 text-amber-700" />
+            </div>
+            <div>
+              <h4 className="font-semibold text-amber-900">Add a template for follow-ups</h4>
+              <p className="text-sm text-amber-700">Saved templates can be loaded into any follow-up step.</p>
+            </div>
+          </div>
+          <Button
+            variant="outline"
+            className="bg-white/80 text-amber-700 hover:bg-amber-100 border-amber-200"
+            onClick={() => navigate('/email-builder')}
+          >
+            Add template
+          </Button>
+        </div>
+      )}
       <div className="relative pl-8 space-y-12">
         {/* Vertical Line */}
         <div className="absolute left-[15px] top-4 bottom-0 w-0.5 bg-[var(--builder-border)]" />
@@ -1935,6 +2002,37 @@ const CampaignBuilder: React.FC<CampaignBuilderProps> = ({ emailConfigs }) => {
                 </div>
                 
                 <div className="space-y-4">
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    <div className="space-y-2">
+                      <Label className="text-xs text-[var(--builder-muted)]">Template</Label>
+                      <Select
+                        value={step.template_id || FOLLOWUP_TEMPLATE_MANUAL_VALUE}
+                        onValueChange={(value) => handleFollowupTemplateSelect(index, value)}
+                        disabled={templates.length === 0}
+                      >
+                        <SelectTrigger className="h-9 border-[var(--builder-border)] bg-white/90">
+                          <SelectValue placeholder="Load follow-up template..." />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value={FOLLOWUP_TEMPLATE_MANUAL_VALUE}>Custom content</SelectItem>
+                          {templates.map((template) => (
+                            <SelectItem key={template.id} value={template.id}>
+                              {template.name}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    </div>
+                    <div className="space-y-2">
+                      <Label className="text-xs text-[var(--builder-muted)]">Subject Line</Label>
+                      <Input
+                        placeholder="Leave blank to use Re: original subject"
+                        value={step.subject}
+                        onChange={(e) => updateFollowupStep(index, 'subject', e.target.value)}
+                        className="h-9 border-[var(--builder-border)] bg-white/90"
+                      />
+                    </div>
+                  </div>
                   <div className="grid grid-cols-2 gap-4">
                     <div className="space-y-2">
                       <Label className="text-xs text-[var(--builder-muted)]">Wait Days</Label>

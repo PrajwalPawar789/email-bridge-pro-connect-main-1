@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useEffect, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import {
   Home,
@@ -14,10 +14,10 @@ import {
   ChevronLeft,
   ChevronRight,
   Inbox,
-  PlugZap,
   Kanban,
   Gift,
-  ShieldCheck
+  ShieldCheck,
+  Search
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { useWorkspace } from '@/providers/WorkspaceProvider';
@@ -34,12 +34,46 @@ interface SidebarProps {
   } | null;
 }
 
+type SidebarNavChild = {
+  id: string;
+  label: string;
+};
+
+type SidebarNavItem = {
+  id: string;
+  label: string;
+  icon: typeof Home;
+  badge?: string;
+  submenuItems?: SidebarNavChild[];
+};
+
 const Sidebar = ({ activeTab, onTabChange, isCollapsed, toggleSidebar, user }: SidebarProps) => {
   const navigate = useNavigate();
   const { workspace } = useWorkspace();
   const teamRolesEnabled = workspace ? workspace.planFeatures?.teamRoles !== false : true;
+  const [openSubmenus, setOpenSubmenus] = useState<Record<string, boolean>>({
+    settings: activeTab === 'settings' || activeTab === 'integrations',
+  });
 
-  const navSections = [
+  useEffect(() => {
+    if (activeTab === 'settings' || activeTab === 'integrations') {
+      setOpenSubmenus((prev) => ({ ...prev, settings: true }));
+    }
+  }, [activeTab]);
+
+  const handleNavigation = (itemId: string) => {
+    if (itemId === 'referrals') {
+      navigate('/referrals');
+      return;
+    }
+    if (itemId === 'team') {
+      navigate('/team');
+      return;
+    }
+    onTabChange(itemId);
+  };
+
+  const navSections: Array<{ label: string; items: SidebarNavItem[] }> = [
     {
       label: 'Core',
       items: [
@@ -53,6 +87,7 @@ const Sidebar = ({ activeTab, onTabChange, isCollapsed, toggleSidebar, user }: S
       items: [
         { id: 'automations', label: 'Automations', icon: RefreshCw },
         { id: 'contacts', label: 'Contacts', icon: Users },
+        { id: 'find', label: 'Find', icon: Search },
         { id: 'pipeline', label: 'Pipeline', icon: Kanban },
         { id: 'referrals', label: 'Referrals', icon: Gift },
         { id: 'segments', label: 'Segments', icon: Sparkles, badge: 'Beta' }
@@ -69,9 +104,16 @@ const Sidebar = ({ activeTab, onTabChange, isCollapsed, toggleSidebar, user }: S
     {
       label: 'System',
       items: [
-        { id: 'integrations', label: 'Integrations', icon: PlugZap },
         { id: 'team', label: 'Team', icon: ShieldCheck },
-        { id: 'settings', label: 'Settings', icon: Settings, hasSubmenu: true }
+        {
+          id: 'settings',
+          label: 'Settings',
+          icon: Settings,
+          submenuItems: [
+            { id: 'settings', label: 'Email settings' },
+            { id: 'integrations', label: 'Integrations' },
+          ],
+        }
       ]
     }
   ]
@@ -112,22 +154,28 @@ const Sidebar = ({ activeTab, onTabChange, isCollapsed, toggleSidebar, user }: S
             )}
             <ul className="space-y-1">
               {section.items.map((item) => {
-                const isActive = activeTab === item.id;
+                const submenuItems = item.submenuItems || [];
+                const hasSubmenu = submenuItems.length > 0;
+                const submenuActive = submenuItems.some((child) => child.id === activeTab);
+                const isActive = activeTab === item.id || submenuActive;
+                const isSubmenuOpen = Boolean(openSubmenus[item.id]);
 
                 return (
                   <li key={item.id}>
                     <button
                       type="button"
                       onClick={() => {
-                        if (item.id === 'referrals') {
-                          navigate('/referrals');
+                        if (hasSubmenu) {
+                          if (isCollapsed) {
+                            toggleSidebar();
+                          }
+                          setOpenSubmenus((prev) => ({
+                            ...prev,
+                            [item.id]: isCollapsed ? true : !prev[item.id],
+                          }));
                           return;
                         }
-                        if (item.id === 'team') {
-                          navigate('/team');
-                          return;
-                        }
-                        onTabChange(item.id);
+                        handleNavigation(item.id);
                       }}
                       className={cn(
                         "group relative w-full flex items-center rounded-xl px-3 py-2.5 text-sm font-semibold transition-all",
@@ -158,12 +206,38 @@ const Sidebar = ({ activeTab, onTabChange, isCollapsed, toggleSidebar, user }: S
                           {item.badge}
                         </span>
                       )}
-                      {!isCollapsed && item.hasSubmenu && (
-                        <svg className="w-4 h-4 text-slate-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
-                        </svg>
+                      {!isCollapsed && hasSubmenu && (
+                        <ChevronRight
+                          className={cn(
+                            "h-4 w-4 text-slate-400 transition-transform",
+                            isSubmenuOpen && "rotate-90"
+                          )}
+                        />
                       )}
                     </button>
+                    {!isCollapsed && hasSubmenu && isSubmenuOpen && (
+                      <div className="mt-1 space-y-1 pl-11 pr-2">
+                        {submenuItems.map((child) => {
+                          const childIsActive = activeTab === child.id;
+
+                          return (
+                            <button
+                              key={child.id}
+                              type="button"
+                              onClick={() => handleNavigation(child.id)}
+                              className={cn(
+                                "w-full rounded-lg px-3 py-2 text-left text-xs font-semibold transition-colors",
+                                childIsActive
+                                  ? "bg-emerald-50 text-emerald-800"
+                                  : "text-slate-500 hover:bg-white/70 hover:text-slate-800"
+                              )}
+                            >
+                              {child.label}
+                            </button>
+                          );
+                        })}
+                      </div>
+                    )}
                   </li>
                 );
               })}

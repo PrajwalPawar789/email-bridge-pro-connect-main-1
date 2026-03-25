@@ -101,6 +101,10 @@ const Dashboard = () => {
       navigate('/pipeline');
       return;
     }
+    if (tab === 'find') {
+      navigate('/find');
+      return;
+    }
     if (tab === 'referrals') {
       navigate('/referrals');
       return;

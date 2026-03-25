@@ -245,6 +245,14 @@ const escapeHtml = (value: string) =>
     .replace(/"/g, '&quot;')
     .replace(/'/g, '&#39;');
 
+const buildHiddenPreheaderHtml = (value: string) => {
+  const preheader = String(value || '').trim();
+  if (!preheader) return '';
+  return `<div style="display:none;overflow:hidden;line-height:1px;opacity:0;max-height:0;max-width:0;color:transparent;">${escapeHtml(
+    preheader
+  )}</div>`;
+};
+
 const EMAIL_BUILDER_STATE_REGEX = /<!--\s*VINTRO_EMAIL_BUILDER_STATE:([\s\S]*?)-->/;
 
 const hasMarkdownFormatting = (value: string) =>
@@ -290,6 +298,7 @@ const extractTrackingPreferences = (content: string) => {
       cleanContent: stripEmailBuilderState(String(content || '')),
       builderText: '',
       builderHtml: '',
+      preheader: '',
       clickTrackingMode: 'all' as const,
       trackedLinkUrls: [] as string[],
     };
@@ -301,6 +310,7 @@ const extractTrackingPreferences = (content: string) => {
     const parsed = JSON.parse(decoded);
     const meta = parsed?.meta && typeof parsed.meta === 'object' ? parsed.meta : {};
     const blocks = Array.isArray(parsed?.blocks) ? parsed.blocks : [];
+    const preheader = typeof meta.preheader === 'string' ? meta.preheader : '';
     const clickTrackingMode =
       meta.clickTrackingMode === 'selected' || meta.clickTrackingMode === 'none'
         ? meta.clickTrackingMode
@@ -309,6 +319,7 @@ const extractTrackingPreferences = (content: string) => {
       cleanContent,
       builderText: renderBuilderBlocksText(blocks),
       builderHtml: renderBuilderBlocksHtml(blocks),
+      preheader,
       clickTrackingMode,
       trackedLinkUrls: normalizeTrackedLinkUrls(meta.trackedLinkUrls),
     };
@@ -317,6 +328,7 @@ const extractTrackingPreferences = (content: string) => {
       cleanContent,
       builderText: '',
       builderHtml: '',
+      preheader: '',
       clickTrackingMode: 'all' as const,
       trackedLinkUrls: [] as string[],
     };
@@ -633,6 +645,13 @@ const sendEmail = async (
   const personalizedHtmlContent = stripEmailBuilderState(
     personalizeContent(sourceHtmlContent, recipient, personalizationData)
   );
+  const personalizedPreheaderHtml = trackingPreferences.builderHtml
+    ? buildHiddenPreheaderHtml(
+        stripEmailBuilderState(
+          personalizeContent(String(trackingPreferences.preheader || ''), recipient, personalizationData)
+        )
+      )
+    : '';
   console.log(`Personalizing content for recipient: ${recipient.id} (${recipient.email})`);
 
   let isHtmlContent =
@@ -645,7 +664,7 @@ const sendEmail = async (
     ? personalizedContent
     : normalizePlainTextEmailBody(personalizedContent);
   const formattedContent = isHtmlContent
-    ? personalizedHtmlContent
+    ? `${personalizedPreheaderHtml}${personalizedHtmlContent}`
     : formatPlainTextToHtml(plainTextContent);
 
   const { content: contentWithClickTracking, trackingUrls } = addTrackingToLinks(formattedContent, campaign.id, recipient.id, step, {

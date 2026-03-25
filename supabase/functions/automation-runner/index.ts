@@ -61,6 +61,14 @@ const escapeHtml = (value: string) =>
     .replace(/"/g, "&quot;")
     .replace(/'/g, "&#39;");
 
+const buildHiddenPreheaderHtml = (value: string) => {
+  const preheader = String(value || "").trim();
+  if (!preheader) return "";
+  return `<div style="display:none;overflow:hidden;line-height:1px;opacity:0;max-height:0;max-width:0;color:transparent;">${escapeHtml(
+    preheader
+  )}</div>`;
+};
+
 const EMAIL_BUILDER_STATE_REGEX = /<!--\s*VINTRO_EMAIL_BUILDER_STATE:([\s\S]*?)-->/;
 
 const fromBase64 = (value: string) => {
@@ -93,6 +101,7 @@ const extractBuilderStateContent = (content: string) => {
       cleanContent: String(content || ""),
       builderText: "",
       builderHtml: "",
+      preheader: "",
     };
   }
 
@@ -100,17 +109,20 @@ const extractBuilderStateContent = (content: string) => {
   try {
     const decoded = fromBase64(match[1]);
     const parsed = JSON.parse(decoded);
+    const meta = parsed?.meta && typeof parsed.meta === "object" ? parsed.meta : {};
     const blocks = Array.isArray(parsed?.blocks) ? parsed.blocks : [];
     return {
       cleanContent,
       builderText: renderBuilderBlocksText(blocks),
       builderHtml: renderBuilderBlocksHtml(blocks),
+      preheader: typeof meta.preheader === "string" ? meta.preheader : "",
     };
   } catch {
     return {
       cleanContent,
       builderText: "",
       builderHtml: "",
+      preheader: "",
     };
   }
 };
@@ -1086,8 +1098,13 @@ const sendEmailForStep = async (
   const personalizedSubject = personalize(subjectRaw, contact, state, sender);
   const personalizedBody = personalize(sourceTextBody, contact, state, sender);
   const personalizedHtmlBody = personalize(sourceHtmlBody, contact, state, sender);
+  const personalizedPreheaderHtml = builderStateContent.builderHtml
+    ? buildHiddenPreheaderHtml(personalize(builderStateContent.preheader || "", contact, state, sender))
+    : "";
   const plainTextBody = isHtml ? personalizedBody : normalizePlainTextEmailBody(personalizedBody);
-  const htmlBody = isHtml ? personalizedHtmlBody : formatPlainTextToHtml(plainTextBody);
+  const htmlBody = isHtml
+    ? `${personalizedPreheaderHtml}${personalizedHtmlBody}`
+    : formatPlainTextToHtml(plainTextBody);
 
   const creditReferenceId = `automation:${workflow.id}:${contact.id}:step:${nodeId || stepIndex}:${Date.now()}`;
   const sendQuotaReferenceId = `automation:${workflow.id}:${contact.id}:step:${nodeId || stepIndex}:send-quota`;
