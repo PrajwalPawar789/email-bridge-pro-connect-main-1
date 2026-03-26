@@ -1296,7 +1296,7 @@ const InboxPage: React.FC<{ user: any }> = ({ user }) => {
   // RENDER — New Matte Ceramic / Pro Tool Design
   // ═══════════════════════════════════════════════════════
   return (
-    <div className="flex h-screen flex-col overflow-hidden bg-inbox-surface">
+    <div className="flex h-[calc(100vh-4rem)] flex-col overflow-hidden bg-inbox-surface">
       {/* ── Top Header Bar ── */}
       <header className="flex items-center justify-between border-b border-inbox-border bg-inbox-surface-elevated px-6 py-3">
         <div className="flex items-center gap-4">

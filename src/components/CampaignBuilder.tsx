@@ -2245,7 +2245,7 @@ const CampaignBuilder: React.FC<CampaignBuilderProps> = ({ emailConfigs }) => {
 
   return (
     <div
-      className="relative -my-8 min-h-[calc(100vh-4rem)] bg-[var(--builder-bg)] text-[var(--builder-ink)]"
+      className="relative h-[calc(100vh-4rem)] overflow-y-auto bg-[var(--builder-bg)] text-[var(--builder-ink)]"
       style={builderStyles}
     >
       <style>{`

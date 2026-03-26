@@ -1059,7 +1059,7 @@ const EmailAnalyticsDashboard = () => {
 
   return (
     <div
-      className="relative -my-8 min-h-[calc(100vh-4rem)] bg-[var(--dash-bg)] text-[var(--dash-ink)]"
+      className="relative h-[calc(100vh-4rem)] overflow-y-auto bg-[var(--dash-bg)] text-[var(--dash-ink)]"
       style={dashboardStyles}
     >
       <style>{`

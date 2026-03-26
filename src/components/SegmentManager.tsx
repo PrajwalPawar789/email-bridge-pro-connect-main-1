@@ -445,7 +445,7 @@ const SegmentManager: React.FC = () => {
     );
   };
   return (
-    <div className="relative -my-8 min-h-[calc(100vh-4rem)] bg-[var(--shell-bg)] text-[var(--shell-ink)]">
+    <div className="relative h-[calc(100vh-4rem)] overflow-y-auto bg-[var(--shell-bg)] text-[var(--shell-ink)]">
       <div className="relative mx-auto w-full max-w-7xl space-y-6 px-5 py-6 lg:px-8 lg:py-8">
         <div className="rounded-3xl border border-[var(--shell-border)] bg-white/80 p-5 shadow-[0_20px_45px_rgba(15,23,42,0.08)]">
           <div className="flex flex-wrap items-center justify-between gap-4">

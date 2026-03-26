@@ -90,6 +90,7 @@ const Campaigns = () => {
       }}
       user={user}
       onLogout={handleLogout}
+      contentClassName={!showBuilder ? 'max-w-none p-0' : undefined}
     >
       <div className="space-y-6">
         {showBuilder ? (

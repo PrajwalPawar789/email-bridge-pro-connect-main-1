@@ -58,7 +58,7 @@ const Inbox = () => {
       }}
       user={user}
       onLogout={handleLogout}
-      contentClassName="max-w-[1400px]"
+      contentClassName="max-w-none p-0"
     >
       <InboxPage user={user} />
     </DashboardLayout>

@@ -383,6 +383,27 @@ const buildShardConfigs = (env: Record<string, string>) => {
   return shards;
 };
 
+const CATALOG_RUNTIME_TTL_MS = 60 * 1000;
+
+const isCatalogRuntimeSecretKey = (key: unknown) => {
+  const normalized = String(key || "").trim();
+  return (
+    normalized === "SHARD_COUNT" ||
+    normalized.startsWith("SEARCH_") ||
+    /^SUPABASE_(URL|SERVICE_ROLE_KEY|ANON_KEY)_\d+$/.test(normalized)
+  );
+};
+
+const buildShardClientMap = (shards: any[]) =>
+  new Map(
+    shards.map((slot: any) => [
+      slot.index,
+      createClient(slot.url, slot.key, {
+        auth: { persistSession: false },
+      }),
+    ]),
+  );
+
 const buildSelectColumns = (fieldGroups: Record<string, string[]>) => {
   const unique = new Set();
   Object.values(fieldGroups).forEach((columns) => {
@@ -592,6 +613,14 @@ const mergeAndDedupeRows = (mode: "prospects" | "companies", rows: any[]) => {
   const merged = [...map.values()];
   merged.sort(mode === "prospects" ? compareProspects : compareCompanies);
   return merged;
+};
+
+const getRowDedupeKey = (mode: "prospects" | "companies", row: any) =>
+  mode === "prospects" ? buildProspectDedupeKey(row) : buildCompanyDedupeKey(row);
+
+const filterOutSeenRows = (mode: "prospects" | "companies", rows: any[], seenKeys: Set<string>) => {
+  if (!(seenKeys instanceof Set) || seenKeys.size === 0) return rows;
+  return rows.filter((row) => !seenKeys.has(getRowDedupeKey(mode, row)));
 };
 
 const encodeCursor = (value: unknown) => encodeBase64Url(JSON.stringify(value));
@@ -918,18 +947,56 @@ const addExactTextFilter = (query: any, column: string, value: unknown) =>
 const addInFilter = (query: any, column: string, values: string[]) =>
   Array.isArray(values) && values.length > 0 ? query.in(column, values) : query;
 
-const schema = buildSchemaConfig(ENV);
-const shardSlots = buildShardConfigs(ENV);
-const activeShards = shardSlots.filter((slot: any) => slot.status === "active");
-const invalidShards = shardSlots.filter((slot: any) => slot.status === "invalid");
-const shardClients = new Map(
-  activeShards.map((slot: any) => [
-    slot.index,
-    createClient(slot.url, slot.key, {
-      auth: { persistSession: false },
-    }),
-  ]),
-);
+let schema = buildSchemaConfig(ENV);
+let shardSlots = buildShardConfigs(ENV);
+let activeShards = shardSlots.filter((slot: any) => slot.status === "active");
+let invalidShards = shardSlots.filter((slot: any) => slot.status === "invalid");
+let shardClients = buildShardClientMap(activeShards);
+let catalogRuntimeHydratedAt = 0;
+let catalogRuntimeHydrationPromise: Promise<void> | null = null;
+
+const refreshCatalogRuntime = async (force = false) => {
+  if (!admin) return;
+
+  const cacheIsFresh =
+    !force &&
+    catalogRuntimeHydratedAt > 0 &&
+    Date.now() - catalogRuntimeHydratedAt < CATALOG_RUNTIME_TTL_MS;
+
+  if (cacheIsFresh) return;
+  if (catalogRuntimeHydrationPromise) {
+    await catalogRuntimeHydrationPromise;
+    return;
+  }
+
+  catalogRuntimeHydrationPromise = (async () => {
+    const mergedEnv = { ...ENV };
+    const { data, error } = await admin.from("app_secrets").select("key, value");
+
+    if (error) {
+      console.warn("[catalog-search] Failed to load app_secrets for shard runtime:", error.message || error);
+    } else {
+      for (const row of data || []) {
+        const key = String(row?.key || "").trim();
+        if (!isCatalogRuntimeSecretKey(key)) continue;
+        mergedEnv[key] = String(row?.value ?? "");
+      }
+    }
+
+    schema = buildSchemaConfig(mergedEnv);
+    shardSlots = buildShardConfigs(mergedEnv);
+    activeShards = shardSlots.filter((slot: any) => slot.status === "active");
+    invalidShards = shardSlots.filter((slot: any) => slot.status === "invalid");
+    shardClients = buildShardClientMap(activeShards);
+    catalogRuntimeHydratedAt = Date.now();
+  })();
+
+  try {
+    await catalogRuntimeHydrationPromise;
+  } finally {
+    catalogRuntimeHydrationPromise = null;
+  }
+};
 
 const applyProspectFilters = (query: any, filters: any) => {
   let next = query;
@@ -1169,6 +1236,7 @@ const fetchShardPage = async (
   shard: any,
   payload: any,
   offsets: Record<string, number>,
+  seenKeys: Set<string>,
   estimatedCount?: number | null,
 ) => {
   const modeConfig = getModeConfig(mode);
@@ -1198,6 +1266,7 @@ const fetchShardPage = async (
     let nextOffset = offset;
     let rawRows = [];
     let groupedRows = [];
+    let availableRows = [];
     let exhausted = false;
 
     try {
@@ -1226,14 +1295,15 @@ const fetchShardPage = async (
         nextOffset += batchRows.length;
         count = Math.max(count, nextOffset);
         groupedRows = buildDerivedCompanyRows(rawRows, shard.index);
+        availableRows = filterOutSeenRows(mode, groupedRows, seenKeys);
 
         exhausted = batchRows.length < limit;
         if (exhausted) break;
 
-        if (!shouldScanExhaustively && groupedRows.length >= pageSize + 1) break;
+        if (!shouldScanExhaustively && availableRows.length >= pageSize + 1) break;
       }
 
-      const rows = (exhausted ? groupedRows : groupedRows.slice(0, pageSize + 1)).map(
+      const rows = groupedRows.map(
         ({ __companyKey, __rawCount, ...row }) => ({
           ...row,
           rowUsageByShard: {
@@ -1275,6 +1345,7 @@ const fetchShardPage = async (
     let nextOffset = offset;
     let rawRows = [];
     let mergedRows = [];
+    let availableRows = [];
     let exhausted = false;
 
     for (let batchIndex = 0; batchIndex < MAX_SEARCH_BATCHES_PER_SHARD; batchIndex += 1) {
@@ -1303,17 +1374,18 @@ const fetchShardPage = async (
       nextOffset += batchRecords.length;
       count = Math.max(count, nextOffset);
       mergedRows = mergeAndDedupeRows(mode, rawRows);
+      availableRows = filterOutSeenRows(mode, mergedRows, seenKeys);
 
       exhausted = batchRecords.length < limit;
       if (exhausted) break;
 
-      if (!shouldScanExhaustively && mergedRows.length >= pageSize + 1) break;
+      if (!shouldScanExhaustively && availableRows.length >= pageSize + 1) break;
     }
 
     return {
       status: "healthy",
       shard,
-      rows: exhausted ? mergedRows : mergedRows.slice(0, pageSize + 1),
+      rows: mergedRows,
       count,
       offset,
       exhausted,
@@ -1476,19 +1548,27 @@ const buildNextCursor = (
   selectedRows: any[],
   shardResults: any[],
   availableRowCount: number,
+  priorSeenKeys: Set<string>,
   displayTotal?: number | null,
 ) => {
   const nextOffsets = { ...(currentOffsets || {}) };
   const perShardConsumed = new Map();
+  const nextSeenKeys = new Set(priorSeenKeys instanceof Set ? [...priorSeenKeys] : []);
+  selectedRows.forEach((row) => nextSeenKeys.add(getRowDedupeKey(mode, row)));
 
-  selectedRows.forEach((row) => {
-    const rowUsageByShard = normalizeRowUsageByShard(row);
-    Object.entries(rowUsageByShard).forEach(([shardIndex, usage]) => {
-      const shardKey = Number(shardIndex);
-      const current = perShardConsumed.get(shardKey) || 0;
-      perShardConsumed.set(shardKey, current + Number(usage || 0));
+  shardResults
+    .filter((entry) => entry.status === "healthy")
+    .forEach((entry) => {
+      entry.rows.forEach((row: any) => {
+        if (!nextSeenKeys.has(getRowDedupeKey(mode, row))) return;
+        const rowUsageByShard = normalizeRowUsageByShard(row);
+        Object.entries(rowUsageByShard).forEach(([shardIndex, usage]) => {
+          const shardKey = Number(shardIndex);
+          const current = perShardConsumed.get(shardKey) || 0;
+          perShardConsumed.set(shardKey, current + Number(usage || 0));
+        });
+      });
     });
-  });
 
   shardResults
     .filter((entry) => entry.status === "healthy")
@@ -1508,6 +1588,7 @@ const buildNextCursor = (
     ? encodeCursor({
         mode,
         offsets: nextOffsets,
+        seenKeys: [...nextSeenKeys],
         ...(Number.isFinite(Number(displayTotal)) ? { displayTotal: Number(displayTotal) } : {}),
       })
     : null;
@@ -1562,6 +1643,10 @@ const runSearch = async (mode: "prospects" | "companies", payload: Record<string
   }
   const offsets =
     cursor?.mode === mode && cursor?.offsets && typeof cursor.offsets === "object" ? cursor.offsets : {};
+  const priorSeenKeys =
+    cursor?.mode === mode && Array.isArray(cursor?.seenKeys)
+      ? new Set(cursor.seenKeys.map((value: unknown) => String(value || "")))
+      : new Set<string>();
   const displayTotalFromCursor =
     cursor?.mode === mode && Number.isFinite(Number(cursor?.displayTotal ?? cursor?.totalExact))
       ? Number(cursor.displayTotal ?? cursor.totalExact)
@@ -1576,7 +1661,7 @@ const runSearch = async (mode: "prospects" | "companies", payload: Record<string
 
   const shardResults = await Promise.all(
     activeShards.map((shard: any) =>
-      fetchShardPage(mode, shard, searchPayload, offsets, estimatedCountByShard.get(shard.index) ?? null),
+      fetchShardPage(mode, shard, searchPayload, offsets, priorSeenKeys, estimatedCountByShard.get(shard.index) ?? null),
     ),
   );
   const shardStatus = buildShardStatus(shardResults);
@@ -1590,7 +1675,8 @@ const runSearch = async (mode: "prospects" | "companies", payload: Record<string
     mode,
     healthyResults.flatMap((entry) => entry.rows),
   );
-  const items = mergedRows.slice(0, searchPayload.pageSize);
+  const availableRows = filterOutSeenRows(mode, mergedRows, priorSeenKeys);
+  const items = availableRows.slice(0, searchPayload.pageSize);
   const totalExact = healthyResults.every((entry) => entry.exhausted) ? mergedRows.length : null;
   const estimatedTotal =
     Array.isArray(estimatedCounts) && estimatedCounts.some((value) => Number.isFinite(Number(value)))
@@ -1604,15 +1690,7 @@ const runSearch = async (mode: "prospects" | "companies", payload: Record<string
 
   return {
     items: items.map(({ rowUsageByShard, ...row }) => row),
-    nextCursor:
-      totalExact !== null && items.length < mergedRows.length
-        ? encodeCursor({
-            mode,
-            pagination: "exhaustive",
-            offset: searchPayload.pageSize,
-            displayTotal: totalExact,
-          })
-        : buildNextCursor(mode, offsets, items, shardResults, mergedRows.length, totalApprox),
+    nextCursor: buildNextCursor(mode, offsets, items, shardResults, availableRows.length, priorSeenKeys, totalApprox),
     totalApprox,
     totalIsExact: totalExact !== null,
     shardStatus,
@@ -1917,6 +1995,7 @@ const saveProspectsToList = async ({
 
 const handleCatalogAction = async (_req: Request, user: any, authHeader: string, payload: Record<string, unknown>) => {
   const action = String(payload.action || "").trim();
+  await refreshCatalogRuntime();
 
   if (action === "filter-options") {
     const mode = payload.mode === "companies" ? "companies" : "prospects";
