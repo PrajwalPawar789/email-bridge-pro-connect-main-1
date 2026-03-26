@@ -13,11 +13,19 @@ const corsHeaders = {
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL") ?? "";
 const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? "";
 
-if (!SUPABASE_URL || !SUPABASE_SERVICE_ROLE_KEY) {
-  throw new Error("Missing SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY env");
-}
+let adminClient: ReturnType<typeof createClient> | null = null;
 
-const admin = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
+const getAdmin = () => {
+  if (!SUPABASE_URL || !SUPABASE_SERVICE_ROLE_KEY) {
+    throw new Error("Missing SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY env");
+  }
+
+  if (!adminClient) {
+    adminClient = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
+  }
+
+  return adminClient;
+};
 
 const EMAIL_BUILDER_STATE_REGEX = /<!--\s*VINTRO_EMAIL_BUILDER_STATE:([\s\S]*?)-->/;
 
@@ -142,7 +150,7 @@ const resolveUserId = async (req: Request) => {
     throw new Error("Missing bearer token.");
   }
 
-  const { data, error } = await admin.auth.getUser(token);
+  const { data, error } = await getAdmin().auth.getUser(token);
   if (error || !data?.user?.id) {
     throw new Error("Invalid user session.");
   }
@@ -156,7 +164,7 @@ const loadEmailConfig = async (userId: string, senderConfigId: string) => {
     throw new Error("Choose a sender account before sending a test email.");
   }
 
-  const { data, error } = await admin
+  const { data, error } = await getAdmin()
     .from("email_configs")
     .select("id, smtp_host, smtp_port, smtp_username, smtp_password, security, sender_name")
     .eq("id", normalizedId)
@@ -173,7 +181,7 @@ const loadTemplateIfNeeded = async (userId: string, templateId?: string | null) 
   const normalizedId = String(templateId || "").trim();
   if (!normalizedId) return null;
 
-  const { data, error } = await admin
+  const { data, error } = await getAdmin()
     .from("email_templates")
     .select("id, subject, content, is_html")
     .eq("id", normalizedId)
