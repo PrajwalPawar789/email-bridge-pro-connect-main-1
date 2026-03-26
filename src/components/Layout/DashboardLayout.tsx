@@ -58,7 +58,7 @@ const DashboardLayout = ({
   } as React.CSSProperties;
 
   return (
-    <div className="min-h-screen bg-[var(--shell-bg)] text-[var(--shell-ink)]" style={layoutStyles}>
+    <div className="h-screen overflow-hidden bg-[var(--shell-bg)] text-[var(--shell-ink)]" style={layoutStyles}>
       <style>{`
         @import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=Sora:wght@500;600;700&display=swap');
       `}</style>
@@ -77,10 +77,10 @@ const DashboardLayout = ({
       </div>
       
       <main className={cn(
-        "pt-16 min-h-screen transition-all duration-300",
+        "mt-16 h-[calc(100vh-4rem)] overflow-y-auto overflow-x-hidden transition-all duration-300",
         isSidebarCollapsed ? "pl-20" : "pl-64"
       )}>
-        <div className={cn("p-8 max-w-7xl mx-auto", contentClassName)}>
+        <div className={cn("mx-auto min-h-[calc(100vh-4rem)] max-w-7xl p-8", contentClassName)}>
           {children}
         </div>
       </main>

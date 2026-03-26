@@ -1093,14 +1093,15 @@ const Automations = () => {
         await supabase.auth.signOut();
         navigate("/auth");
       }}
-      contentClassName="max-w-[1440px]"
+      contentClassName="max-w-none p-0"
     >
       {initializing ? (
         <div className="flex min-h-[60vh] items-center justify-center">
           <Loader2 className="h-8 w-8 animate-spin text-primary" />
         </div>
       ) : (
-        <div className="space-y-6">
+        <div className="h-[calc(100vh-4rem)] overflow-y-auto">
+          <div className="mx-auto max-w-[1440px] space-y-6 px-8 py-8">
           <div className="flex items-center justify-between border-b border-border pb-4">
             <div className="flex items-center gap-3">
               <div className="rounded-lg bg-primary/10 p-2">
@@ -1307,6 +1308,7 @@ const Automations = () => {
               </Card>
             </TabsContent>
           </Tabs>
+          </div>
         </div>
       )}
 

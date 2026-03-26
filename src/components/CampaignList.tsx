@@ -753,7 +753,7 @@ const CampaignList = ({ onCreateCampaign }: CampaignListProps) => {
 
   return (
     <div
-      className="relative -my-8 min-h-[calc(100vh-4rem)] bg-[var(--camp-bg)] text-[var(--camp-ink)]"
+      className="relative h-[calc(100vh-4rem)] overflow-y-auto bg-[var(--camp-bg)] text-[var(--camp-ink)]"
       style={campaignStyles}
     >
       <style>{`

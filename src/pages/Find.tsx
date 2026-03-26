@@ -676,6 +676,8 @@ const Find = () => {
       return PROSPECT_MULTI_FIELDS.reduce((sum, f) => sum + prospectFilters[f].length, 0) +
         (prospectFilters.jobTitle ? 1 : 0) +
         (prospectFilters.companyName ? 1 : 0) +
+        (prospectFilters.exactCompanyName ? 1 : 0) +
+        (prospectFilters.companyDomain ? 1 : 0) +
         (prospectFilters.naics ? 1 : 0);
     }
     return COMPANY_MULTI_FIELDS.reduce((sum, f) => sum + companyFilters[f].length, 0) +
@@ -757,6 +759,20 @@ const Find = () => {
         chips.push({ key: "jobTitle", label: "Job title", value: prospectFilters.jobTitle, remove: () => updateProspectFilters({ jobTitle: "" }) });
       if (prospectFilters.companyName)
         chips.push({ key: "companyName", label: "Company", value: prospectFilters.companyName, remove: () => updateProspectFilters({ companyName: "" }) });
+      if (prospectFilters.exactCompanyName)
+        chips.push({
+          key: "exactCompanyName",
+          label: "Company (exact)",
+          value: prospectFilters.exactCompanyName,
+          remove: () => updateProspectFilters({ exactCompanyName: "" }),
+        });
+      if (prospectFilters.companyDomain)
+        chips.push({
+          key: "companyDomain",
+          label: "Company domain",
+          value: prospectFilters.companyDomain,
+          remove: () => updateProspectFilters({ companyDomain: "" }),
+        });
       if (prospectFilters.naics)
         chips.push({ key: "naics", label: "NAICS", value: prospectFilters.naics, remove: () => updateProspectFilters({ naics: "" }) });
       PROSPECT_MULTI_FIELDS.forEach((field) => {
@@ -795,15 +811,16 @@ const Find = () => {
   const detailItem = detailState?.summary || null;
 
   const openProspectViewFromCompany = (company: CompanySearchRow) => {
+    const domainScoped = Boolean(company.domain);
     updateUrlState(
       {
         mode: "prospects",
         prospectFilters: {
           ...DEFAULT_PROSPECT_FILTERS,
-          companyName: company.companyName || "",
-          exactCompanyName: company.companyName || "",
+          companyName: domainScoped ? "" : company.companyName || "",
+          exactCompanyName: domainScoped ? "" : company.companyName || "",
           companyDomain: company.domain || "",
-          country: company.domain ? [] : company.country ? [company.country] : [],
+          country: domainScoped ? [] : company.country ? [company.country] : [],
         },
         cursor: null,
         cursorTrail: [],

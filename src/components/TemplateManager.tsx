@@ -185,7 +185,7 @@ const renderPlainTextPreviewHtml = (value: string) => {
 };
 
 const TemplateShell = ({ children }: { children: React.ReactNode }) => (
-  <div className="relative -my-8 min-h-[calc(100vh-4rem)] bg-[var(--shell-bg)] text-[var(--shell-ink)]">
+  <div className="relative h-[calc(100vh-4rem)] overflow-y-auto bg-[var(--shell-bg)] text-[var(--shell-ink)]">
     <style>{`
       @keyframes template-rise {
         from { opacity: 0; transform: translateY(14px); }

@@ -113,7 +113,134 @@ const getFunctionErrorMessage = async (error: { message?: string; context?: unkn
   return message;
 };
 
+const DEFAULT_LOCAL_SEARCH_SERVICE_URL = "http://localhost:8788";
+const LOCAL_SEARCH_PROBE_TTL_MS = 15 * 1000;
+const LOCAL_SEARCH_SERVICE_URL = String(import.meta.env.VITE_SEARCH_SERVICE_URL || "").trim();
+let localSearchServiceProbeCache:
+  | {
+      checkedAt: number;
+      url: string | null;
+    }
+  | null = null;
+
+const getLocalSearchServiceBaseUrl = () => {
+  const candidate = LOCAL_SEARCH_SERVICE_URL || DEFAULT_LOCAL_SEARCH_SERVICE_URL;
+  if (!candidate) return "";
+  if (typeof window === "undefined") return "";
+
+  const hostname = window.location.hostname;
+  const isLocalHost = hostname === "localhost" || hostname === "127.0.0.1";
+  return isLocalHost ? candidate.replace(/\/+$/, "") : "";
+};
+
+const probeLocalSearchService = async () => {
+  const baseUrl = getLocalSearchServiceBaseUrl();
+  if (!baseUrl) return null;
+
+  if (
+    localSearchServiceProbeCache &&
+    Date.now() - localSearchServiceProbeCache.checkedAt < LOCAL_SEARCH_PROBE_TTL_MS
+  ) {
+    return localSearchServiceProbeCache.url;
+  }
+
+  try {
+    const response = await fetch(`${baseUrl}/healthz`, {
+      method: "GET",
+      cache: "no-store",
+    });
+
+    if (!response.ok) {
+      localSearchServiceProbeCache = { checkedAt: Date.now(), url: null };
+      return null;
+    }
+
+    localSearchServiceProbeCache = { checkedAt: Date.now(), url: baseUrl };
+    return baseUrl;
+  } catch {
+    localSearchServiceProbeCache = { checkedAt: Date.now(), url: null };
+    return null;
+  }
+};
+
+const invokeLocalSearchService = async <T>(body: Record<string, unknown>): Promise<T | null> => {
+  if (body.action === "import-selection") {
+    return null;
+  }
+
+  const baseUrl = await probeLocalSearchService();
+  if (!baseUrl) return null;
+
+  const {
+    data: { session },
+  } = await supabase.auth.getSession();
+  const accessToken = session?.access_token;
+  if (!accessToken) return null;
+
+  let url = "";
+  let method: "GET" | "POST" = "POST";
+  let requestBody: Record<string, unknown> | undefined;
+
+  switch (String(body.action || "")) {
+    case "filter-options":
+      method = "GET";
+      url = `${baseUrl}/api/search/filter-options?mode=${encodeURIComponent(String(body.mode || "prospects"))}`;
+      break;
+    case "search-prospects":
+      url = `${baseUrl}/api/search/prospects`;
+      requestBody = {
+        filters: body.filters,
+        cursor: body.cursor,
+        pageSize: body.pageSize,
+      };
+      break;
+    case "search-companies":
+      url = `${baseUrl}/api/search/companies`;
+      requestBody = {
+        filters: body.filters,
+        cursor: body.cursor,
+        pageSize: body.pageSize,
+      };
+      break;
+    case "detail-prospect":
+      method = "GET";
+      url = `${baseUrl}/api/catalog/prospects/${encodeURIComponent(String(body.catalogRef || ""))}`;
+      break;
+    case "detail-company":
+      method = "GET";
+      url = `${baseUrl}/api/catalog/companies/${encodeURIComponent(String(body.catalogRef || ""))}`;
+      break;
+    default:
+      return null;
+  }
+
+  const response = await fetch(url, {
+    method,
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${accessToken}`,
+    },
+    body: method === "POST" ? JSON.stringify(requestBody || {}) : undefined,
+  });
+
+  const payload = await response.json().catch(() => null);
+  if (!response.ok) {
+    throw new Error(String(payload?.error || "Local search service request failed."));
+  }
+
+  return payload as T;
+};
+
 const invokeCatalogSearch = async <T>(body: Record<string, unknown>): Promise<T> => {
+  try {
+    const localResponse = await invokeLocalSearchService<T>(body);
+    if (localResponse !== null) {
+      return localResponse;
+    }
+  } catch (error) {
+    console.warn("[findApi] Local search service failed; falling back to catalog-search.", error);
+  }
+
   const { data, error } = await supabase.functions.invoke("catalog-search", {
     body,
   });
