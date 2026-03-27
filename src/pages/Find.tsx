@@ -265,6 +265,27 @@ const getInitials = (name: string | null | undefined) =>
     .toUpperCase()
     .slice(0, 2) || "UN";
 
+const humanizeShardWarning = (warning: string) => {
+  const match = String(warning || "").match(/^Shard\s+(\d+):\s*(.+)$/i);
+  const shardLabel = match ? `Shard ${match[1]}` : "A search shard";
+  const message = String(match?.[2] || warning || "").trim().toLowerCase();
+
+  if (message.includes("statement timeout")) {
+    return `${shardLabel} timed out while searching this filter.`;
+  }
+  if (message.includes("504")) {
+    return `${shardLabel} timed out while responding.`;
+  }
+  if (message.includes("503")) {
+    return `${shardLabel} is temporarily unavailable.`;
+  }
+  if (message.includes("502")) {
+    return `${shardLabel} returned a bad gateway response.`;
+  }
+
+  return warning;
+};
+
 const AVATAR_GRADIENTS = [
   { from: "hsl(271, 91%, 65%)", to: "hsl(280, 87%, 53%)" },
   { from: "hsl(199, 89%, 58%)", to: "hsl(217, 91%, 60%)" },
@@ -623,8 +644,12 @@ const Find = () => {
 
   const currentOptions = filterOptionsQuery.data?.options || {};
   const searchData = searchQuery.data;
+  const shardWarnings = useMemo(
+    () => ((searchData?.shardStatus?.warnings || []) as string[]).map(humanizeShardWarning),
+    [searchData?.shardStatus?.warnings],
+  );
   const resultCount = Number(searchData?.totalApprox || 0);
-  const totalIsExact = searchData?.totalIsExact === true;
+  const totalIsExact = searchData?.totalIsExact === true && shardWarnings.length === 0;
   const canManageContacts = !workspaceLoading && (hasPermission("manage_contacts") || hasPermission("manage_workspace"));
   const pageNumber = cursorTrail.length + 1;
 
@@ -1139,14 +1164,14 @@ const Find = () => {
             </AnimatePresence>
 
             {/* Shard warnings */}
-            {searchData?.shardStatus?.warnings?.length ? (
+            {shardWarnings.length ? (
               <div className="shrink-0 border-b border-amber-200 bg-amber-50 px-5 py-2.5">
                 <div className="flex items-start gap-3 text-sm text-amber-800">
                   <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
                   <div>
                     <p className="font-semibold">Partial shard failure — results from healthy shards only</p>
                     <div className="mt-1 flex flex-wrap gap-1.5">
-                      {searchData.shardStatus.warnings.map((w) => (
+                      {shardWarnings.map((w) => (
                         <Badge key={w} variant="outline" className="border-amber-200 bg-white/80 text-amber-700 text-[10px]">
                           {w}
                         </Badge>

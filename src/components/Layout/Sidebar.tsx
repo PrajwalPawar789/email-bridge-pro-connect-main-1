@@ -17,7 +17,8 @@ import {
   Kanban,
   Gift,
   ShieldCheck,
-  Search
+  Search,
+  LifeBuoy
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { useWorkspace } from '@/providers/WorkspaceProvider';
@@ -105,6 +106,7 @@ const Sidebar = ({ activeTab, onTabChange, isCollapsed, toggleSidebar, user }: S
       label: 'System',
       items: [
         { id: 'team', label: 'Team', icon: ShieldCheck },
+        { id: 'support', label: 'Support', icon: LifeBuoy },
         {
           id: 'settings',
           label: 'Settings',

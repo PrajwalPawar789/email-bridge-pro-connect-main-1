@@ -96,6 +96,9 @@ const args = parseArgs(process.argv.slice(2));
 const baseEnvPath = args["base-env"] || ".env";
 const envPath = args.env || ".env.16shards";
 const pageSize = Math.max(1, Number.parseInt(String(args["page-size"] || "5"), 10) || 5);
+const executionTarget = String(args.target || "module")
+  .trim()
+  .toLowerCase();
 const filterOptionsCache = new Map();
 
 dotenv.config({ path: baseEnvPath });
@@ -104,6 +107,12 @@ if (envPath && envPath !== baseEnvPath) {
 }
 
 const ENV = process.env;
+const isFunctionTarget = executionTarget === "function";
+if (!["module", "function"].includes(executionTarget)) {
+  console.error(`Unsupported --target value "${executionTarget}". Use "module" or "function".`);
+  process.exit(1);
+}
+
 const schema = buildSchemaConfig(ENV);
 const shardSlots = buildShardConfigs(ENV);
 const activeShards = shardSlots.filter((slot) => slot.status === "active");
@@ -116,11 +125,20 @@ const shardClients = new Map(
     }),
   ]),
 );
+const functionBaseUrl = String(args["function-base-url"] || ENV.SUPABASE_URL || "").trim().replace(/\/+$/, "");
+const functionServiceRoleKey = String(args["function-service-role-key"] || ENV.SUPABASE_SERVICE_ROLE_KEY || "").trim();
+const functionApiKey = String(args["function-api-key"] || functionServiceRoleKey || ENV.SUPABASE_ANON_KEY || "").trim();
+const functionAuthToken = String(args["function-auth-token"] || functionServiceRoleKey || ENV.FIND_TEST_ACCESS_TOKEN || "").trim();
+const functionUrl = functionBaseUrl ? `${functionBaseUrl}/functions/v1/catalog-search` : "";
+const timeoutRegressionPageSize = Math.max(pageSize, 25);
 
 const summary = {
   envPath,
   baseEnvPath,
+  target: executionTarget,
   pageSize,
+  timeoutRegressionPageSize,
+  functionUrl: isFunctionTarget ? functionUrl : null,
   shards: {
     requestedSlots: shardSlots.length,
     active: activeShards.length,
@@ -130,36 +148,61 @@ const summary = {
   checks: [],
 };
 
-if (activeShards.length === 0) {
+if (!isFunctionTarget && activeShards.length === 0) {
   console.error("No active search shards were resolved from the environment.");
   process.exit(1);
 }
 
-logSection("Config", `Loaded ${activeShards.length} active shard(s) from ${envPath}.`);
+if (isFunctionTarget && (!functionUrl || !functionApiKey || !(functionAuthToken || functionApiKey === functionServiceRoleKey))) {
+  console.error("Function target requires SUPABASE_URL and a usable API key/token in the environment or CLI flags.");
+  process.exit(1);
+}
+
+const configSummary = isFunctionTarget
+  ? `Target=function using ${functionUrl}`
+  : `Target=module with ${activeShards.length} active shard(s) from ${envPath}`;
+logSection("Config", configSummary);
 if (invalidShards.length > 0) {
   invalidShards.forEach((slot) => {
     logInfo(`Shard ${slot.index} is invalid: ${slot.reason}`);
   });
 }
 
-const prospectModeConfig = getModeConfig("prospects");
-
 let firstProspectPage = null;
 let secondProspectPage = null;
 let firstCompanyPage = null;
+let firstTimeoutRegressionPage = null;
+let sampleProspectRef = null;
+let sampleCompanyRef = null;
 
-await runCheck("Shard connectivity", async () => {
-  const shardChecks = await Promise.all(activeShards.map((shard) => inspectShard(shard, prospectModeConfig)));
-  const healthy = shardChecks.filter((entry) => entry.sampleCount > 0).length;
-  assert.ok(healthy > 0, "No shard returned sample prospect rows.");
-  return `${healthy}/${activeShards.length} active shard(s) returned sample rows`;
-});
+if (isFunctionTarget) {
+  await runCheck("Catalog function health", async () => {
+    const health = await getCatalogHealth();
+    assert.equal(health.ok, true, "Catalog function health did not return ok=true.");
+    assert.ok(Number(health.activeShards || 0) > 0, "Catalog function did not report any active shards.");
+    return `${health.activeShards} active shard(s), ${health.invalidShards} invalid`;
+  });
+} else {
+  const prospectModeConfig = getModeConfig("prospects");
+  await runCheck("Shard connectivity", async () => {
+    const shardChecks = await Promise.all(activeShards.map((shard) => inspectShard(shard, prospectModeConfig)));
+    const healthy = shardChecks.filter((entry) => entry.sampleCount > 0).length;
+    assert.ok(healthy > 0, "No shard returned sample prospect rows.");
+    return `${healthy}/${activeShards.length} active shard(s) returned sample rows`;
+  });
+}
 
 await runCheck("Prospect search page 1", async () => {
   firstProspectPage = await searchPage("prospects", DEFAULT_PROSPECT_FILTERS, pageSize);
   assert.ok(firstProspectPage.items.length > 0, "Prospect search returned no rows.");
   assert.ok(firstProspectPage.items.every((row) => row.catalogRef && row.sourceShard), "Prospect rows are missing catalog metadata.");
-  return `${firstProspectPage.items.length} prospect rows loaded`;
+  assert.ok(
+    firstProspectPage.items.every((row) => !("raw" in row) && !("rowUsageByShard" in row)),
+    "Prospect search exposed internal source payload fields.",
+  );
+  assert.equal(firstProspectPage.shardFailures.length, 0, `Prospect search reported shard failures: ${firstProspectPage.shardFailures.join("; ")}`);
+  sampleProspectRef = firstProspectPage.items[0]?.catalogRef || null;
+  return `${firstProspectPage.items.length} prospect rows loaded in ${firstProspectPage.durationMs}ms`;
 });
 
 await runCheck("Prospect pagination", async () => {
@@ -170,19 +213,55 @@ await runCheck("Prospect pagination", async () => {
 
   secondProspectPage = await searchPage("prospects", DEFAULT_PROSPECT_FILTERS, pageSize, firstProspectPage.nextCursor);
   assert.ok(secondProspectPage.items.length > 0, "Prospect page 2 returned no rows.");
+  assert.equal(secondProspectPage.shardFailures.length, 0, `Prospect page 2 reported shard failures: ${secondProspectPage.shardFailures.join("; ")}`);
 
   const firstRefs = new Set(firstProspectPage.items.map((row) => row.catalogRef));
   const duplicateRefs = secondProspectPage.items.filter((row) => firstRefs.has(row.catalogRef)).map((row) => row.catalogRef);
   assert.equal(duplicateRefs.length, 0, `Found duplicate prospect rows across pages: ${duplicateRefs.join(", ")}`);
 
-  return `${secondProspectPage.items.length} page-2 prospect rows with no duplicates across pages`;
+  return `${secondProspectPage.items.length} page-2 prospect rows with no duplicates across pages in ${secondProspectPage.durationMs}ms`;
+});
+
+await runCheck("Broad text timeout regression", async () => {
+  const timeoutFilters = {
+    ...DEFAULT_PROSPECT_FILTERS,
+    jobTitle: "ceo",
+  };
+  const timings = [];
+
+  for (let runIndex = 0; runIndex < 3; runIndex += 1) {
+    const page = await searchPage("prospects", timeoutFilters, timeoutRegressionPageSize);
+    assert.ok(page.items.length > 0, "Broad text search returned no rows.");
+    assert.equal(page.shardFailures.length, 0, `Broad text search reported shard failures: ${page.shardFailures.join("; ")}`);
+    timings.push(page.durationMs);
+    if (!firstTimeoutRegressionPage) {
+      firstTimeoutRegressionPage = page;
+    }
+  }
+
+  assert.ok(firstTimeoutRegressionPage?.nextCursor, "Broad text search did not return a next cursor.");
+  const pageTwo = await searchPage("prospects", timeoutFilters, timeoutRegressionPageSize, firstTimeoutRegressionPage.nextCursor);
+  assert.ok(pageTwo.items.length > 0, "Broad text page 2 returned no rows.");
+  assert.equal(pageTwo.shardFailures.length, 0, `Broad text page 2 reported shard failures: ${pageTwo.shardFailures.join("; ")}`);
+
+  const pageOneRefs = new Set(firstTimeoutRegressionPage.items.map((row) => row.catalogRef));
+  const duplicateRefs = pageTwo.items.filter((row) => pageOneRefs.has(row.catalogRef)).map((row) => row.catalogRef);
+  assert.equal(duplicateRefs.length, 0, `Broad text page 2 duplicated page 1 refs: ${duplicateRefs.join(", ")}`);
+
+  return `jobTitle=ceo passed 3x (${timings.join(", ")}ms) plus page 2 in ${pageTwo.durationMs}ms`;
 });
 
 await runCheck("Company search page 1", async () => {
   firstCompanyPage = await searchPage("companies", DEFAULT_COMPANY_FILTERS, pageSize);
   assert.ok(firstCompanyPage.items.length > 0, "Company search returned no rows.");
   assert.ok(firstCompanyPage.items.every((row) => Number(row.prospectCount) > 0), "Company search returned rows without grouped prospect counts.");
-  return `${firstCompanyPage.items.length} company rows loaded`;
+  assert.ok(
+    firstCompanyPage.items.every((row) => !("raw" in row) && !("rowUsageByShard" in row)),
+    "Company search exposed internal source payload fields.",
+  );
+  assert.equal(firstCompanyPage.shardFailures.length, 0, `Company search reported shard failures: ${firstCompanyPage.shardFailures.join("; ")}`);
+  sampleCompanyRef = firstCompanyPage.items[0]?.catalogRef || null;
+  return `${firstCompanyPage.items.length} company rows loaded in ${firstCompanyPage.durationMs}ms`;
 });
 
 await runCheck("Company drill-down parity", async () => {
@@ -201,6 +280,7 @@ await runCheck("Company drill-down parity", async () => {
 
   const drilldownPage = await searchPage("prospects", drilldownFilters, pageSize);
   assert.ok(drilldownPage.items.length > 0, "Company drill-down returned no prospect rows.");
+  assert.equal(drilldownPage.shardFailures.length, 0, `Company drill-down reported shard failures: ${drilldownPage.shardFailures.join("; ")}`);
 
   if (sampleCompany.domain) {
     const mismatched = drilldownPage.items.filter(
@@ -214,7 +294,7 @@ await runCheck("Company drill-down parity", async () => {
     assert.equal(mismatched.length, 0, "Company drill-down returned prospects from a different company name.");
   }
 
-  return `${drilldownPage.items.length} prospects matched the drill-down company filter`;
+  return `${drilldownPage.items.length} prospects matched the drill-down company filter in ${drilldownPage.durationMs}ms`;
 });
 
 await runCheck("Filter option sampling", async () => {
@@ -235,6 +315,20 @@ await runCheck("Filter option sampling", async () => {
   }
 
   return `prospects:${prospectFieldWithValues[0]} companies:${companyFieldWithValues[0]}`;
+});
+
+await runCheck("Prospect detail", async () => {
+  assert.ok(sampleProspectRef, "Prospect detail requires a catalogRef from search results.");
+  const detail = await getDetail("prospects", sampleProspectRef);
+  assert.equal(detail.item?.catalogRef, sampleProspectRef, "Prospect detail did not return the expected catalogRef.");
+  return `${detail.item?.fullName || sampleProspectRef} loaded in ${detail.durationMs}ms`;
+});
+
+await runCheck("Company detail", async () => {
+  assert.ok(sampleCompanyRef, "Company detail requires a catalogRef from search results.");
+  const detail = await getDetail("companies", sampleCompanyRef);
+  assert.equal(detail.item?.catalogRef, sampleCompanyRef, "Company detail did not return the expected catalogRef.");
+  return `${detail.item?.companyName || sampleCompanyRef} loaded in ${detail.durationMs}ms`;
 });
 
 await runCheck("Selection state simulation", async () => {
@@ -577,6 +671,39 @@ function normalizeText(value) {
   return String(value || "").trim().toLowerCase();
 }
 
+function getRawErrorMessage(error) {
+  if (error instanceof Error) return error.message;
+  if (typeof error === "string") return error;
+  try {
+    return JSON.stringify(error);
+  } catch {
+    return "Unknown error";
+  }
+}
+
+function getQueryResultError(result) {
+  return result && typeof result === "object" && "error" in result ? result.error : null;
+}
+
+function isStatementTimeoutMessage(message) {
+  return String(message || "").toLowerCase().includes("statement timeout");
+}
+
+function hasBroadTextFilters(mode, filters = {}) {
+  const getTextValue = (key) => String(filters?.[key] || "").trim();
+  if (mode === "prospects") {
+    return Boolean(getTextValue("jobTitle") || getTextValue("companyName") || getTextValue("naics"));
+  }
+  return Boolean(getTextValue("companyName") || getTextValue("naics"));
+}
+
+function getShardBatchLimit(mode, modeConfig, requestedPageSize, filters = {}) {
+  if (modeConfig.derivedFromProspects) {
+    return hasBroadTextFilters(mode, filters) ? Math.min(requestedPageSize * 3, 120) : Math.min(requestedPageSize * 12, 400);
+  }
+  return hasBroadTextFilters(mode, filters) ? Math.min(requestedPageSize + 5, 60) : Math.min(requestedPageSize * 4, 200);
+}
+
 function normalizeProspectRow(record, shardIndex) {
   const sourceId = String(record?.[schema.prospectIdColumn] ?? "");
   const fullNameValue = pickFirstValue(record, schema.prospectFields.fullName);
@@ -822,6 +949,25 @@ function encodeCursor(value) {
   return encodeBase64Url(JSON.stringify(value));
 }
 
+function decodeCursor(value) {
+  if (!value) return null;
+  try {
+    return JSON.parse(decodeBase64Url(value));
+  } catch {
+    return null;
+  }
+}
+
+function parseCatalogRef(value) {
+  const match = String(value || "").match(/^s(\d+):(prospect|company):(.+)$/);
+  if (!match) return null;
+  return {
+    shardIndex: Number.parseInt(match[1], 10),
+    entity: match[2],
+    sourceId: match[3],
+  };
+}
+
 function buildDerivedCompanyKey(row) {
   const domain = normalizeText(row.companyDomain);
   if (domain) return `domain:${domain}`;
@@ -949,19 +1095,88 @@ async function inspectShard(shard, modeConfig) {
   };
 }
 
-async function runShardQuery({ client, modeConfig, filters, offset, limit }) {
+async function runShardQuery({ client, modeConfig, filters, offset, limit, sortColumns }) {
   let query = client.from(modeConfig.source).select(modeConfig.selectColumns);
   query = modeConfig.applyFilters(query, filters);
-  for (const column of modeConfig.defaultSort) {
+  for (const column of sortColumns || modeConfig.defaultSort) {
     query = query.order(column, { ascending: true, nullsFirst: false });
   }
   return query.range(offset, offset + limit - 1);
 }
 
+async function runShardPageQueryWithFallback({ client, modeConfig, filters, offset, limit }) {
+  try {
+    const result = await runShardQuery({
+      client,
+      modeConfig,
+      filters,
+      offset,
+      limit,
+    });
+    const queryError = getQueryResultError(result);
+    if (queryError) throw queryError;
+    return result;
+  } catch (error) {
+    if (!isStatementTimeoutMessage(getRawErrorMessage(error))) {
+      throw error;
+    }
+
+    const minimumFallbackLimit = Math.min(limit, 10);
+    const fallbackLimits = [];
+    let nextLimit = Math.max(minimumFallbackLimit, Math.ceil(limit / 2));
+
+    while (nextLimit < limit) {
+      fallbackLimits.push(nextLimit);
+      if (nextLimit === minimumFallbackLimit) break;
+      nextLimit = Math.max(minimumFallbackLimit, Math.ceil(nextLimit / 2));
+    }
+
+    for (const fallbackLimit of fallbackLimits) {
+      try {
+        const result = await runShardQuery({
+          client,
+          modeConfig,
+          filters,
+          offset,
+          limit: fallbackLimit,
+          sortColumns: modeConfig.defaultSort,
+        });
+        const queryError = getQueryResultError(result);
+        if (queryError) throw queryError;
+        return result;
+      } catch (reducedError) {
+        if (!isStatementTimeoutMessage(getRawErrorMessage(reducedError))) {
+          throw reducedError;
+        }
+      }
+    }
+
+    for (const fallbackLimit of fallbackLimits.length > 0 ? fallbackLimits : [minimumFallbackLimit]) {
+      try {
+        const result = await runShardQuery({
+          client,
+          modeConfig,
+          filters,
+          offset,
+          limit: Math.max(minimumFallbackLimit, Math.min(fallbackLimit, 25)),
+          sortColumns: [modeConfig.idColumn],
+        });
+        const queryError = getQueryResultError(result);
+        if (queryError) throw queryError;
+        return result;
+      } catch (idFallbackError) {
+        if (!isStatementTimeoutMessage(getRawErrorMessage(idFallbackError))) {
+          throw idFallbackError;
+        }
+      }
+    }
+  }
+}
+
 async function fetchShardPage(mode, shard, filters, requestedPageSize, offsets = {}, seenKeys = new Set()) {
   const modeConfig = getModeConfig(mode);
   const client = shardClients.get(shard.index);
-  const pageLimit = modeConfig.derivedFromProspects ? Math.min(requestedPageSize * 12, 400) : Math.min(requestedPageSize * 4, 200);
+  const pageLimit = getShardBatchLimit(mode, modeConfig, requestedPageSize, filters);
   const offset = Number(offsets?.[String(shard.index)] || 0);
 
   if (!client) {
@@ -986,7 +1201,7 @@ async function fetchShardPage(mode, shard, filters, requestedPageSize, offsets =
 
     try {
       for (let batchIndex = 0; batchIndex < MAX_SEARCH_BATCHES_PER_SHARD; batchIndex += 1) {
-        const { data, error } = await runShardQuery({
+        const { data, error } = await runShardPageQueryWithFallback({
           client,
           modeConfig,
           filters,
@@ -1048,7 +1263,7 @@ async function fetchShardPage(mode, shard, filters, requestedPageSize, offsets =
 
   try {
     for (let batchIndex = 0; batchIndex < MAX_SEARCH_BATCHES_PER_SHARD; batchIndex += 1) {
-      const { data, error } = await runShardQuery({
+      const { data, error } = await runShardPageQueryWithFallback({
         client,
         modeConfig,
         filters,
@@ -1129,7 +1344,29 @@ function buildNextState(mode, currentOffsets, selectedRows, shardResults, priorS
   };
 }
 
+function stripSearchResultRow(row) {
+  const { rowUsageByShard, raw, ...rest } = row || {};
+  return rest;
+}
+
 async function searchPage(mode, filters, requestedPageSize, cursorState = null) {
+  if (isFunctionTarget) {
+    const action = mode === "prospects" ? "search-prospects" : "search-companies";
+    const startedAt = Date.now();
+    const payload = await invokeCatalogSearchAction({
+      action,
+      filters,
+      pageSize: requestedPageSize,
+      ...(cursorState ? { cursor: cursorState } : {}),
+    });
+    return {
+      ...payload,
+      durationMs: Date.now() - startedAt,
+      shardFailures: Array.isArray(payload?.shardStatus?.warnings) ? payload.shardStatus.warnings : [],
+    };
+  }
+
+  const startedAt = Date.now();
   const offsets = cursorState?.offsets || {};
   const priorSeenKeys = cursorState?.seenKeys instanceof Set ? cursorState.seenKeys : new Set();
   const shardResults = await Promise.all(
@@ -1151,13 +1388,26 @@ async function searchPage(mode, filters, requestedPageSize, cursorState = null) 
   const nextCursor = hasMore ? buildNextState(mode, offsets, items, shardResults, priorSeenKeys) : null;
 
   return {
-    items,
+    items: items.map((row) => stripSearchResultRow(row)),
     nextCursor,
     shardFailures: failures.map((entry) => `Shard ${entry.shard.index}: ${entry.reason}`),
+    durationMs: Date.now() - startedAt,
   };
 }
 
 async function loadFilterOptions(mode) {
+  if (isFunctionTarget) {
+    const startedAt = Date.now();
+    const payload = await invokeCatalogSearchAction({
+      action: "filter-options",
+      mode,
+    });
+    return {
+      ...payload,
+      durationMs: Date.now() - startedAt,
+    };
+  }
+
   const cacheKey = `filter-options:${mode}`;
   const cached = filterOptionsCache.get(cacheKey);
   if (cached && Date.now() - cached.createdAt < FILTER_OPTIONS_TTL_MS) {
@@ -1231,6 +1481,122 @@ async function loadFilterOptions(mode) {
   });
 
   return value;
+}
+
+async function invokeCatalogSearchAction(body, { authToken = functionAuthToken, apiKey = functionApiKey } = {}) {
+  const authorizationToken = authToken || apiKey;
+  const response = await fetch(functionUrl, {
+    method: "POST",
+    headers: {
+      ...(authorizationToken ? { authorization: `Bearer ${authorizationToken}` } : {}),
+      ...(apiKey ? { apikey: apiKey } : {}),
+      "content-type": "application/json",
+    },
+    body: JSON.stringify(body),
+  });
+
+  const payload = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    throw new Error(payload?.error || `catalog-search action "${body.action}" failed with ${response.status}`);
+  }
+
+  return payload;
+}
+
+async function getCatalogHealth() {
+  if (!isFunctionTarget) {
+    return {
+      ok: true,
+      service: "module-search",
+      activeShards: activeShards.length,
+      invalidShards: invalidShards.length,
+    };
+  }
+
+  return invokeCatalogSearchAction({ action: "health" });
+}
+
+async function getDetail(mode, catalogRef) {
+  if (isFunctionTarget) {
+    const startedAt = Date.now();
+    const payload = await invokeCatalogSearchAction({
+      action: mode === "prospects" ? "detail-prospect" : "detail-company",
+      catalogRef,
+    });
+    return {
+      ...payload,
+      durationMs: Date.now() - startedAt,
+    };
+  }
+
+  const startedAt = Date.now();
+  const parsed = parseCatalogRef(catalogRef);
+  assert.ok(parsed, "Invalid catalogRef.");
+
+  const shard = activeShards.find((entry) => entry.index === parsed.shardIndex);
+  assert.ok(shard, `Shard ${parsed?.shardIndex ?? "?"} is not active.`);
+
+  const normalizedMode = mode === "prospects" ? "prospects" : "companies";
+  const modeConfig = getModeConfig(normalizedMode);
+  const client = shardClients.get(shard.index);
+  assert.ok(client, `Shard ${shard.index} client is not available.`);
+
+  if (normalizedMode === "companies" && modeConfig.derivedFromProspects) {
+    const decoded = decodeCursor(parsed.sourceId);
+    assert.ok(decoded && typeof decoded === "object", "Invalid derived company reference.");
+
+    let query = client.from(modeConfig.source).select("*").limit(25);
+    if (decoded.companyName) {
+      query = query.ilike(schema.prospectFilters.companyName, `%${String(decoded.companyName).trim()}%`);
+    }
+    const companyDomainColumn = schema.prospectFields.companyDomain?.[0] || "";
+    if (decoded.domain && companyDomainColumn) {
+      query = query.eq(companyDomainColumn, decoded.domain);
+    }
+    if (decoded.country) {
+      query = query.eq(schema.prospectFilters.country, decoded.country);
+    }
+
+    const { data, error } = await query;
+    assert.ifError(error);
+    assert.ok(Array.isArray(data) && data.length > 0, "Catalog company detail returned no rows.");
+
+    const [item] = buildDerivedCompanyRows(data, shard.index).map(({ __rawCount, ...row }) => row);
+    assert.ok(item, "Catalog company detail returned no normalized row.");
+
+    return {
+      item,
+      raw: data,
+      shard: {
+        index: shard.index,
+        projectRef: shard.projectRef,
+      },
+      durationMs: Date.now() - startedAt,
+    };
+  }
+
+  const { data, error } = await client
+    .from(modeConfig.source)
+    .select("*")
+    .eq(modeConfig.idColumn, parsed.sourceId)
+    .limit(2);
+
+  assert.ifError(error);
+  assert.ok(Array.isArray(data) && data.length > 0, "Catalog detail returned no rows.");
+
+  const [record] = data;
+  return {
+    item:
+      normalizedMode === "prospects"
+        ? normalizeProspectRow(record, shard.index)
+        : normalizeCompanyRow(record, shard.index),
+    raw: data,
+    shard: {
+      index: shard.index,
+      projectRef: shard.projectRef,
+    },
+    durationMs: Date.now() - startedAt,
+  };
 }
 
 function toggleRowSelection(current, row, checked) {

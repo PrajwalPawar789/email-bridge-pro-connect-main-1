@@ -7,6 +7,8 @@ import {
   decodeCursor,
   encodeCursor,
   mergeAndDedupeRows,
+  normalizeCompanyRow,
+  normalizeProspectRow,
   parseCatalogRef,
 } from "../search/lib.js";
 
@@ -133,4 +135,99 @@ test("mergeAndDedupeRows keeps the higher quality prospect match", () => {
     "1": 2,
     "2": 1,
   });
+});
+
+test("normalizeProspectRow repairs mojibake display text and linkedin urls", () => {
+  const schema = {
+    prospectIdColumn: "sr_no",
+    prospectFields: {
+      fullName: ["full_name"],
+      firstName: ["first_name"],
+      lastName: ["last_name"],
+      email: ["email_address"],
+      phone: ["phone_number"],
+      headline: ["job_title"],
+      jobTitle: ["job_title"],
+      jobLevel: ["job_level"],
+      jobFunction: ["job_function"],
+      companyName: ["company_name"],
+      companyDomain: ["domain"],
+      country: ["country"],
+      region: ["region"],
+      industry: ["industry_type"],
+      subIndustry: ["sub_industry"],
+      employeeSize: ["employee_size"],
+      naics: ["naics_code"],
+      linkedin: ["contact_link"],
+    },
+  };
+
+  const row = normalizeProspectRow(
+    {
+      sr_no: 7360843,
+      first_name: "Joan",
+      last_name: "Andrs",
+      email_address: "joan@laasesoria.net",
+      phone_number: 34974474385,
+      job_title: "CEO",
+      job_level: "C Level",
+      job_function: "Operations",
+      company_name: "\"La Asesoria\"\u00c2\u20ac\u2039 Pous-Buis\u00e3\u00a1N Asesores, S.L. |Asesores En Fraga Y Lleida",
+      domain: "laasesoria.net",
+      country: "Spain",
+      region: "Europe",
+      industry_type: "Banking/Accounting/Financial",
+      sub_industry: "Accounting",
+      employee_size: "1-10 employees",
+      naics_code: "-",
+      contact_link: "http://www.https://www.linkedin.com/in/joanpous",
+    },
+    1,
+    schema,
+  );
+
+  assert.equal(row.companyName, "\"La Asesoria\" Pous-Buis\u00e1n Asesores, S.L. | Asesores En Fraga Y Lleida");
+  assert.equal(row.linkedin, "https://www.linkedin.com/in/joanpous");
+});
+
+test("normalizeCompanyRow trims decorative prefixes and repairs mojibake", () => {
+  const schema = {
+    companyIdColumn: "company_id",
+    companyFields: {
+      name: ["company_name"],
+      domain: ["domain"],
+      country: ["country"],
+      region: ["region"],
+      industry: ["industry_type"],
+      subIndustry: ["sub_industry"],
+      employeeSize: ["employee_size"],
+      naics: ["naics_code"],
+      prospectCount: ["prospect_count"],
+    },
+  };
+
+  const prefixed = normalizeCompanyRow(
+    {
+      company_id: "1",
+      company_name: "|= Eedi",
+      domain: "eedi.com",
+      prospect_count: 7,
+    },
+    1,
+    schema,
+  );
+
+  const mojibake = normalizeCompanyRow(
+    {
+      company_id: "2",
+      company_name: "\u00c3\u00a0Bac Consultors Del Vall\u00e3\u00a8S, Slu",
+      domain: "abac-consultors.com",
+      prospect_count: 3,
+    },
+    2,
+    schema,
+  );
+
+  assert.equal(prefixed.companyName, "Eedi");
+  assert.equal(mojibake.companyName, "\u00e0Bac Consultors Del Vall\u00e8s, Slu");
 });
