@@ -2,6 +2,7 @@ import { supabase } from '@/integrations/supabase/client';
 import { PIPELINE_TEMPLATES, getLargestCurrencyValue } from '@/lib/pipeline';
 
 const DEFAULT_TEMPLATE = PIPELINE_TEMPLATES[0];
+const db = supabase as any;
 
 export type DbPipeline = {
   id: string;
@@ -47,6 +48,10 @@ export type DbOpportunity = {
   owner: string | null;
   next_step: string | null;
   last_activity_at: string;
+  expected_close_date: string | null;
+  forecast_category: string | null;
+  forecast_probability: number | null;
+  closed_at?: string | null;
   created_at?: string | null;
   updated_at?: string | null;
   campaigns?: { name: string } | null;
@@ -354,22 +359,28 @@ export const updatePipelineWithStages = async (payload: {
     const fallback = resolvedStages[0];
     if (fallback) {
       const fallbackStatus = fallback.is_won ? 'won' : fallback.is_lost ? 'lost' : 'open';
-      const { error: moveError } = await supabase
+      const { error: moveError } = await db
         .from('opportunities')
         .update({
           stage_id: fallback.id,
           status: fallbackStatus,
+          forecast_category: fallback.is_won ? 'closed' : fallback.is_lost ? 'not_forecasted' : 'pipeline',
+          forecast_probability: fallback.is_won ? 100 : fallback.is_lost ? 0 : 50,
+          closed_at: fallbackStatus === 'open' ? null : now,
           updated_at: now,
         })
         .eq('pipeline_id', payload.pipelineId)
         .in('stage_id', removedStageIds);
       if (moveError) throw moveError;
     } else {
-      const { error: clearError } = await supabase
+      const { error: clearError } = await db
         .from('opportunities')
         .update({
           stage_id: null,
           status: 'open',
+          forecast_category: 'pipeline',
+          forecast_probability: 50,
+          closed_at: null,
           updated_at: now,
         })
         .eq('pipeline_id', payload.pipelineId)
@@ -387,9 +398,15 @@ export const updatePipelineWithStages = async (payload: {
 
   for (const stage of resolvedStages) {
     const status = stage.is_won ? 'won' : stage.is_lost ? 'lost' : 'open';
-    const { error: statusError } = await supabase
+    const { error: statusError } = await db
       .from('opportunities')
-      .update({ status, updated_at: now })
+      .update({
+        status,
+        forecast_category: stage.is_won ? 'closed' : stage.is_lost ? 'not_forecasted' : 'pipeline',
+        forecast_probability: stage.is_won ? 100 : stage.is_lost ? 0 : 50,
+        closed_at: status === 'open' ? null : now,
+        updated_at: now,
+      })
       .eq('pipeline_id', payload.pipelineId)
       .eq('stage_id', stage.id);
     if (statusError) throw statusError;
@@ -494,7 +511,7 @@ export const fetchOpportunities = async (params: {
   pipelineId?: string | null;
   campaignId?: string | null;
 }) => {
-  let query = supabase
+  let query = db
     .from('opportunities')
     .select('*, campaigns(name)')
     .eq('user_id', params.userId);
@@ -523,14 +540,30 @@ export const createOpportunity = async (payload: {
   owner?: string | null;
   nextStep?: string | null;
   campaignId?: string | null;
+  expectedCloseDate?: string | null;
+  forecastCategory?: string | null;
+  forecastProbability?: number | null;
 }) => {
-  const { data, error } = await supabase
+  const normalizedStatus = payload.status;
+  const normalizedCategory =
+    payload.forecastCategory ||
+    (normalizedStatus === 'won' ? 'closed' : normalizedStatus === 'lost' ? 'not_forecasted' : 'pipeline');
+  const normalizedProbability =
+    typeof payload.forecastProbability === 'number'
+      ? Math.max(0, Math.min(100, Math.round(payload.forecastProbability)))
+      : normalizedStatus === 'won'
+        ? 100
+        : normalizedStatus === 'lost'
+          ? 0
+          : 50;
+
+  const { data, error } = await db
     .from('opportunities')
     .insert({
       user_id: payload.userId,
       pipeline_id: payload.pipelineId,
       stage_id: payload.stageId,
-      status: payload.status,
+      status: normalizedStatus,
       contact_name: payload.contactName,
       contact_email: payload.contactEmail,
       company: payload.company,
@@ -538,6 +571,10 @@ export const createOpportunity = async (payload: {
       owner: payload.owner,
       next_step: payload.nextStep,
       campaign_id: payload.campaignId,
+      expected_close_date: payload.expectedCloseDate || null,
+      forecast_category: normalizedCategory,
+      forecast_probability: normalizedProbability,
+      closed_at: normalizedStatus === 'won' || normalizedStatus === 'lost' ? new Date().toISOString() : null,
       last_activity_at: new Date().toISOString(),
     })
     .select('*, campaigns(name)')
@@ -555,17 +592,46 @@ export const updateOpportunity = async (opportunityId: string, payload: Partial<
   campaignId: string | null;
   nextStep: string | null;
   lastActivityAt: string;
+  expectedCloseDate: string | null;
+  forecastCategory: string | null;
+  forecastProbability: number | null;
+  closedAt: string | null;
 }>) => {
-  const { data, error } = await supabase
+  const nextStatus = payload.status;
+  const nextProbability =
+    typeof payload.forecastProbability === 'number'
+      ? Math.max(0, Math.min(100, Math.round(payload.forecastProbability)))
+      : payload.forecastProbability;
+  const nextCategory =
+    payload.forecastCategory !== undefined
+      ? payload.forecastCategory
+      : nextStatus === 'won'
+        ? 'closed'
+        : nextStatus === 'lost'
+          ? 'not_forecasted'
+          : undefined;
+
+  const { data, error } = await db
     .from('opportunities')
     .update({
       stage_id: payload.stageId,
-      status: payload.status,
+      status: nextStatus,
       owner: payload.owner,
       value: payload.value,
       campaign_id: payload.campaignId,
       next_step: payload.nextStep,
       last_activity_at: payload.lastActivityAt ?? new Date().toISOString(),
+      expected_close_date: payload.expectedCloseDate,
+      forecast_category: nextCategory,
+      forecast_probability: nextProbability,
+      closed_at:
+        payload.closedAt !== undefined
+          ? payload.closedAt
+          : nextStatus === 'won' || nextStatus === 'lost'
+            ? new Date().toISOString()
+            : nextStatus === 'open'
+              ? null
+              : undefined,
     })
     .eq('id', opportunityId)
     .select('*, campaigns(name)')
@@ -581,7 +647,7 @@ export const deleteOpportunity = async (opportunityId: string) => {
 };
 
 export const findOpportunityByEmail = async (pipelineId: string, email: string) => {
-  const { data, error } = await supabase
+  const { data, error } = await db
     .from('opportunities')
     .select('*, campaigns(name)')
     .eq('pipeline_id', pipelineId)

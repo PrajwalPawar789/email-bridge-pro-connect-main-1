@@ -24,6 +24,7 @@ import Billing from "./pages/Billing";
 import Spending from "./pages/Spending";
 import Referrals from "./pages/Referrals";
 import Team from "./pages/Team";
+import Support from "./pages/Support";
 import NotFound from "./pages/NotFound";
 import { AuthProvider } from "./providers/AuthProvider";
 import { WorkspaceProvider } from "./providers/WorkspaceProvider";
@@ -59,6 +60,7 @@ const App = () => (
                 <Route path="/landing-pages" element={<LandingPages />} />
                 <Route path="/site-connector" element={<SiteConnector />} />
                 <Route path="/team" element={<Team />} />
+                <Route path="/support" element={<Support />} />
                 <Route path="/referrals" element={<Referrals />} />
                 <Route path="/campaign/:id" element={<CampaignTracker />} />
                 <Route element={<WorkspaceBillingGuard />}>

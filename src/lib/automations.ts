@@ -843,9 +843,60 @@ export type AutomationTestEmailRequest = {
   previewData?: Record<string, unknown>;
 };
 
+const parseJsonSafely = async (response: Response) => {
+  const contentType = response.headers.get("content-type") || "";
+  if (contentType.includes("application/json")) {
+    return response.json();
+  }
+
+  const text = await response.text();
+  try {
+    return JSON.parse(text);
+  } catch {
+    return { error: text || `Request failed with ${response.status}` };
+  }
+};
+
+const sendAutomationTestEmailViaProxy = async (
+  payload: AutomationTestEmailRequest
+) => {
+  const {
+    data: { session },
+  } = await supabase.auth.getSession();
+
+  const response = await fetch("/api/automation-test-email", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      apikey: import.meta.env.VITE_SUPABASE_ANON_KEY,
+      ...(session?.access_token
+        ? { Authorization: `Bearer ${session.access_token}` }
+        : {}),
+    },
+    body: JSON.stringify(payload),
+  });
+
+  const result = await parseJsonSafely(response);
+  if (!response.ok) {
+    const message =
+      typeof result?.error === "string"
+        ? result.error
+        : typeof result?.message === "string"
+          ? result.message
+          : `Request failed with ${response.status}`;
+    throw new Error(message);
+  }
+
+  return result;
+};
+
 export const sendAutomationTestEmail = async (
   payload: AutomationTestEmailRequest
 ) => {
+  if (import.meta.env.PROD) {
+    return sendAutomationTestEmailViaProxy(payload);
+  }
+
   const { data, error } = await supabase.functions.invoke("automation-test-email", {
     body: payload,
   });

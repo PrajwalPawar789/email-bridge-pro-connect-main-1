@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { Gift, User, LogOut, Search, Settings, CreditCard, Clock, Crown, ChevronRight } from 'lucide-react';
+import { Gift, User, LogOut, Search, Settings, CreditCard, Clock, Crown, ChevronRight, LifeBuoy } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import {
@@ -164,6 +164,7 @@ const Header = ({ user, onLogout, activeTab }: HeaderProps) => {
     connect: 'Connect',
     integrations: 'Integrations',
     team: 'Team',
+    support: 'Support',
     settings: 'Settings',
     subscription: 'Subscription',
     billing: 'Billing',
@@ -199,7 +200,18 @@ const Header = ({ user, onLogout, activeTab }: HeaderProps) => {
 
         <Button
           variant="outline"
-          className="h-9 rounded-full border-[var(--shell-border)] bg-white/80 text-[var(--shell-ink)] font-semibold gap-2 hover:bg-white"
+          className="hidden lg:inline-flex h-9 rounded-full border-[var(--shell-border)] bg-white/80 text-[var(--shell-ink)] font-semibold gap-2 hover:bg-white"
+          asChild
+        >
+          <Link to="/support">
+            <LifeBuoy className="h-4 w-4" />
+            Support
+          </Link>
+        </Button>
+
+        <Button
+          variant="outline"
+          className="hidden xl:inline-flex h-9 rounded-full border-[var(--shell-border)] bg-white/80 text-[var(--shell-ink)] font-semibold gap-2 hover:bg-white"
           asChild
         >
           <Link to="/referrals">
@@ -326,6 +338,19 @@ const Header = ({ user, onLogout, activeTab }: HeaderProps) => {
                     <div className="min-w-0 flex-1">
                       <p className="text-sm font-medium text-slate-800">Account settings</p>
                       <p className="truncate text-[11px] text-slate-500">Profile, security and preferences</p>
+                    </div>
+                    <ChevronRight className="h-4 w-4 shrink-0 text-slate-400 transition-colors group-hover:text-slate-500" />
+                  </Link>
+                </DropdownMenuItem>
+
+                <DropdownMenuItem asChild className="group h-auto rounded-lg px-2 py-2.5 focus:bg-slate-100">
+                  <Link to="/support" className="flex w-full items-center gap-3">
+                    <div className="flex h-8 w-8 items-center justify-center rounded-md border border-slate-200 bg-white text-slate-600">
+                      <LifeBuoy className="h-4 w-4" />
+                    </div>
+                    <div className="min-w-0 flex-1">
+                      <p className="text-sm font-medium text-slate-800">Support center</p>
+                      <p className="truncate text-[11px] text-slate-500">Help articles, request history, and escalation</p>
                     </div>
                     <ChevronRight className="h-4 w-4 shrink-0 text-slate-400 transition-colors group-hover:text-slate-500" />
                   </Link>

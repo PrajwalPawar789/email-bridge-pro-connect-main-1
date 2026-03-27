@@ -116,6 +116,8 @@ const getFunctionErrorMessage = async (error: { message?: string; context?: unkn
 const DEFAULT_LOCAL_SEARCH_SERVICE_URL = "http://localhost:8788";
 const LOCAL_SEARCH_PROBE_TTL_MS = 15 * 1000;
 const LOCAL_SEARCH_SERVICE_URL = String(import.meta.env.VITE_SEARCH_SERVICE_URL || "").trim();
+const USE_LOCAL_SEARCH_SERVICE =
+  String(import.meta.env.VITE_USE_LOCAL_SEARCH_SERVICE || "false").trim().toLowerCase() === "true";
 let localSearchServiceProbeCache:
   | {
       checkedAt: number;
@@ -124,6 +126,7 @@ let localSearchServiceProbeCache:
   | null = null;
 
 const getLocalSearchServiceBaseUrl = () => {
+  if (!USE_LOCAL_SEARCH_SERVICE) return "";
   const candidate = LOCAL_SEARCH_SERVICE_URL || DEFAULT_LOCAL_SEARCH_SERVICE_URL;
   if (!candidate) return "";
   if (typeof window === "undefined") return "";
@@ -131,6 +134,20 @@ const getLocalSearchServiceBaseUrl = () => {
   const hostname = window.location.hostname;
   const isLocalHost = hostname === "localhost" || hostname === "127.0.0.1";
   return isLocalHost ? candidate.replace(/\/+$/, "") : "";
+};
+
+const hasShardFailures = (payload: unknown) => {
+  if (!payload || typeof payload !== "object") return false;
+  const shardStatus =
+    "shardStatus" in (payload as Record<string, unknown>)
+      ? (payload as Record<string, unknown>).shardStatus
+      : null;
+  if (!shardStatus || typeof shardStatus !== "object") return false;
+  const failedCount = Number((shardStatus as Record<string, unknown>).failed || 0);
+  const warnings = Array.isArray((shardStatus as Record<string, unknown>).warnings)
+    ? (shardStatus as Record<string, unknown>).warnings
+    : [];
+  return failedCount > 0 || warnings.length > 0;
 };
 
 const probeLocalSearchService = async () => {
@@ -226,6 +243,10 @@ const invokeLocalSearchService = async <T>(body: Record<string, unknown>): Promi
   const payload = await response.json().catch(() => null);
   if (!response.ok) {
     throw new Error(String(payload?.error || "Local search service request failed."));
+  }
+
+  if (hasShardFailures(payload)) {
+    throw new Error("Local search service returned partial shard results.");
   }
 
   return payload as T;

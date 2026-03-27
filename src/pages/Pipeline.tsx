@@ -65,6 +65,10 @@ import {
   PipelineStage,
   STALE_DAYS,
 } from "@/lib/pipeline";
+import {
+  FORECAST_CATEGORY_OPTIONS,
+  getStageForecastDefaults,
+} from "@/lib/pipelineForecasting";
 import { supabase } from "@/integrations/supabase/client";
 import {
   Command as CommandIcon,
@@ -102,6 +106,9 @@ type NewOpportunityDraft = {
   value: string;
   owner: string;
   stageId: string;
+  expectedCloseDate: string;
+  forecastCategory: string;
+  forecastProbability: string;
   nextStep: string;
   campaignId: string;
 };
@@ -329,6 +336,9 @@ const Pipeline = () => {
     value: "",
     owner: "",
     stageId: "",
+    expectedCloseDate: "",
+    forecastCategory: "pipeline",
+    forecastProbability: "50",
     nextStep: "",
     campaignId: "",
   });
@@ -405,6 +415,22 @@ const Pipeline = () => {
     [stageRows]
   );
 
+  const getStatusForStage = useCallback(
+    (stageId: string) => {
+      const stage = mappedStages.find((item) => item.id === stageId);
+      if (!stage) return "open" as PipelineOpportunity["status"];
+      if (stage.isWon) return "won" as PipelineOpportunity["status"];
+      if (stage.isLost) return "lost" as PipelineOpportunity["status"];
+      return "open" as PipelineOpportunity["status"];
+    },
+    [mappedStages]
+  );
+
+  const getForecastDefaultsForStage = useCallback(
+    (stageId: string) => getStageForecastDefaults(stageId, mappedStages),
+    [mappedStages]
+  );
+
   const mappedOpportunities: PipelineOpportunity[] = useMemo(
     () =>
       (opportunitiesQuery.data || []).map((opp: DbOpportunity) => ({
@@ -421,6 +447,15 @@ const Pipeline = () => {
         campaignId: opp.campaign_id || null,
         sourceCampaign: opp.campaigns?.name || undefined,
         tags: tagsById[opp.id] || [],
+        expectedCloseDate: opp.expected_close_date || null,
+        forecastCategory: (opp.forecast_category as PipelineOpportunity["forecastCategory"]) || undefined,
+        forecastProbability:
+          typeof opp.forecast_probability === "number"
+            ? opp.forecast_probability
+            : opp.forecast_probability
+              ? Number(opp.forecast_probability)
+              : undefined,
+        closedAt: opp.closed_at || null,
       })),
     [opportunitiesQuery.data, tagsById]
   );
@@ -679,6 +714,13 @@ const Pipeline = () => {
                   value: payload.value ?? opp.value,
                   next_step: payload.nextStep ?? opp.next_step,
                   last_activity_at: payload.lastActivityAt ?? opp.last_activity_at,
+                  expected_close_date:
+                    payload.expectedCloseDate !== undefined ? payload.expectedCloseDate : opp.expected_close_date,
+                  forecast_category:
+                    payload.forecastCategory !== undefined ? payload.forecastCategory : opp.forecast_category,
+                  forecast_probability:
+                    payload.forecastProbability !== undefined ? payload.forecastProbability : opp.forecast_probability,
+                  closed_at: payload.closedAt !== undefined ? payload.closedAt : opp.closed_at,
                 }
               : opp
           )
@@ -872,6 +914,7 @@ const Pipeline = () => {
     if (!stage) return;
 
     const status = stage.isWon ? "won" : stage.isLost ? "lost" : "open";
+    const defaults = getForecastDefaultsForStage(stageId);
     // Peak-End rule + user control: confirm the move and always offer undo.
     updateOpportunityMutation.mutate(
       {
@@ -879,6 +922,9 @@ const Pipeline = () => {
         payload: {
           stageId,
           status,
+          forecastCategory: defaults.category,
+          forecastProbability: defaults.probability,
+          closedAt: status === "open" ? null : new Date().toISOString(),
           lastActivityAt: new Date().toISOString(),
         },
       },
@@ -896,6 +942,9 @@ const Pipeline = () => {
                     payload: {
                       stageId: previousStageId,
                       status: opportunity.status,
+                      forecastCategory: opportunity.forecastCategory || null,
+                      forecastProbability: opportunity.forecastProbability ?? null,
+                      closedAt: opportunity.closedAt || null,
                       lastActivityAt: new Date().toISOString(),
                     },
                   })
@@ -994,9 +1043,13 @@ const Pipeline = () => {
   const partiallySelected = selectedIds.size > 0 && !allSelected;
 
   const handleNewOpportunity = () => {
+    const stageId = mappedStages[0]?.id || "";
+    const defaults = stageId ? getForecastDefaultsForStage(stageId) : { category: "pipeline", probability: 50 };
     setNewOpportunityDraft((prev) => ({
       ...prev,
-      stageId: prev.stageId || (mappedStages[0]?.id || ""),
+      stageId: prev.stageId || stageId,
+      forecastCategory: prev.forecastCategory || defaults.category,
+      forecastProbability: prev.forecastProbability || String(defaults.probability),
     }));
     setNewOpportunityOpen(true);
   };
@@ -1006,6 +1059,7 @@ const Pipeline = () => {
     const selectedStage = mappedStages.find((stage) => stage.id === newOpportunityDraft.stageId);
     if (!selectedStage) return;
     const status = selectedStage.isWon ? "won" : selectedStage.isLost ? "lost" : "open";
+    const defaults = getForecastDefaultsForStage(newOpportunityDraft.stageId);
 
     await createOpportunityMutation.mutateAsync({
       userId: user.id,
@@ -1019,6 +1073,11 @@ const Pipeline = () => {
       owner: newOpportunityDraft.owner || null,
       nextStep: newOpportunityDraft.nextStep || null,
       campaignId: newOpportunityDraft.campaignId || null,
+      expectedCloseDate: newOpportunityDraft.expectedCloseDate || null,
+      forecastCategory: newOpportunityDraft.forecastCategory || defaults.category,
+      forecastProbability: newOpportunityDraft.forecastProbability
+        ? Number(newOpportunityDraft.forecastProbability)
+        : defaults.probability,
     });
 
     setNewOpportunityOpen(false);
@@ -1029,6 +1088,9 @@ const Pipeline = () => {
       value: "",
       owner: "",
       stageId: selectedStage.id,
+      expectedCloseDate: "",
+      forecastCategory: defaults.category,
+      forecastProbability: String(defaults.probability),
       nextStep: "",
       campaignId: "",
     });
@@ -1334,6 +1396,52 @@ const Pipeline = () => {
     setCommandOpen(false);
   };
 
+  const handleOpportunityPanelUpdate = (payload: Partial<PipelineOpportunity>) => {
+    if (!selectedOpportunity) return;
+
+    const nextPayload: Parameters<typeof updateOpportunity>[1] = {
+      owner:
+        payload.owner !== undefined
+          ? (payload.owner || "").trim()
+            ? payload.owner
+            : null
+          : undefined,
+      value: payload.value !== undefined ? payload.value ?? null : undefined,
+      nextStep:
+        payload.nextStep !== undefined
+          ? (payload.nextStep || "").trim()
+            ? payload.nextStep
+            : null
+          : undefined,
+      expectedCloseDate:
+        payload.expectedCloseDate !== undefined ? payload.expectedCloseDate ?? null : undefined,
+      forecastCategory:
+        payload.forecastCategory !== undefined ? payload.forecastCategory ?? null : undefined,
+      forecastProbability:
+        payload.forecastProbability !== undefined ? payload.forecastProbability ?? null : undefined,
+      lastActivityAt: new Date().toISOString(),
+    };
+
+    if (payload.stageId && payload.stageId !== selectedOpportunity.stageId) {
+      const status = getStatusForStage(payload.stageId);
+      const defaults = getForecastDefaultsForStage(payload.stageId);
+      nextPayload.stageId = payload.stageId;
+      nextPayload.status = status;
+      if (payload.forecastCategory === undefined) {
+        nextPayload.forecastCategory = defaults.category;
+      }
+      if (payload.forecastProbability === undefined) {
+        nextPayload.forecastProbability = defaults.probability;
+      }
+      nextPayload.closedAt = status === "open" ? null : new Date().toISOString();
+    }
+
+    updateOpportunityMutation.mutate({
+      id: selectedOpportunity.id,
+      payload: nextPayload,
+    });
+  };
+
   return (
     <DashboardLayout
       activeTab="pipeline"
@@ -1481,7 +1589,13 @@ const Pipeline = () => {
                       collapsedStageIds={collapsedStageIds}
                       onToggleCollapse={toggleCollapse}
                       onAddOpportunity={(stageId) => {
-                        setNewOpportunityDraft((prev) => ({ ...prev, stageId }));
+                        const defaults = getForecastDefaultsForStage(stageId);
+                        setNewOpportunityDraft((prev) => ({
+                          ...prev,
+                          stageId,
+                          forecastCategory: defaults.category,
+                          forecastProbability: String(defaults.probability),
+                        }));
                         setNewOpportunityOpen(true);
                       }}
                       onSelectOpportunity={handleSelectOpportunity}
@@ -1513,19 +1627,7 @@ const Pipeline = () => {
               opportunity={selectedOpportunity}
               stages={mappedStages.map((stage) => ({ id: stage.id, name: stage.name }))}
               activity={activityEntries}
-              onUpdate={(payload) => {
-                if (!selectedOpportunity) return;
-                updateOpportunityMutation.mutate({
-                  id: selectedOpportunity.id,
-                  payload: {
-                    stageId: payload.stageId,
-                    owner: payload.owner ?? null,
-                    value: payload.value ?? null,
-                    nextStep: payload.nextStep ?? null,
-                    lastActivityAt: new Date().toISOString(),
-                  },
-                });
-              }}
+              onUpdate={handleOpportunityPanelUpdate}
               onViewInbox={() => navigate("/inbox")}
               isMobile={false}
               focusField={detailsFocusField}
@@ -1542,19 +1644,7 @@ const Pipeline = () => {
           opportunity={selectedOpportunity}
           stages={mappedStages.map((stage) => ({ id: stage.id, name: stage.name }))}
           activity={activityEntries}
-          onUpdate={(payload) => {
-            if (!selectedOpportunity) return;
-            updateOpportunityMutation.mutate({
-              id: selectedOpportunity.id,
-              payload: {
-                stageId: payload.stageId,
-                owner: payload.owner ?? null,
-                value: payload.value ?? null,
-                nextStep: payload.nextStep ?? null,
-                lastActivityAt: new Date().toISOString(),
-              },
-            });
-          }}
+          onUpdate={handleOpportunityPanelUpdate}
           onViewInbox={() => navigate("/inbox")}
           isMobile={isMobile}
           focusField={detailsFocusField}
@@ -1626,7 +1716,15 @@ const Pipeline = () => {
                 <Label>Stage</Label>
                 <Select
                   value={newOpportunityDraft.stageId}
-                  onValueChange={(value) => setNewOpportunityDraft((prev) => ({ ...prev, stageId: value }))}
+                  onValueChange={(value) => {
+                    const defaults = getForecastDefaultsForStage(value);
+                    setNewOpportunityDraft((prev) => ({
+                      ...prev,
+                      stageId: value,
+                      forecastCategory: defaults.category,
+                      forecastProbability: String(defaults.probability),
+                    }));
+                  }}
                 >
                   <SelectTrigger className="h-10">
                     <SelectValue placeholder="Select stage" />
@@ -1639,6 +1737,51 @@ const Pipeline = () => {
                     ))}
                   </SelectContent>
                 </Select>
+              </div>
+            </div>
+            <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
+              <div className="grid gap-2">
+                <Label>Expected close date</Label>
+                <Input
+                  type="date"
+                  value={newOpportunityDraft.expectedCloseDate}
+                  onChange={(event) =>
+                    setNewOpportunityDraft((prev) => ({ ...prev, expectedCloseDate: event.target.value }))
+                  }
+                />
+              </div>
+              <div className="grid gap-2">
+                <Label>Forecast category</Label>
+                <Select
+                  value={newOpportunityDraft.forecastCategory}
+                  onValueChange={(value) =>
+                    setNewOpportunityDraft((prev) => ({ ...prev, forecastCategory: value }))
+                  }
+                >
+                  <SelectTrigger className="h-10">
+                    <SelectValue placeholder="Select category" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {FORECAST_CATEGORY_OPTIONS.map((option) => (
+                      <SelectItem key={option.value} value={option.value}>
+                        {option.label}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="grid gap-2">
+                <Label>Confidence %</Label>
+                <Input
+                  type="number"
+                  min={0}
+                  max={100}
+                  value={newOpportunityDraft.forecastProbability}
+                  onChange={(event) =>
+                    setNewOpportunityDraft((prev) => ({ ...prev, forecastProbability: event.target.value }))
+                  }
+                  placeholder="70"
+                />
               </div>
             </div>
             <div className="grid gap-2">

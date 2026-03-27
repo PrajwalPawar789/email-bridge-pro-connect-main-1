@@ -116,6 +116,10 @@ const sanitizeShardErrorMessage = (message) => {
   const raw = String(message || "").trim();
   if (!raw) return "Unknown error";
 
+  if (raw.toLowerCase().includes("statement timeout")) {
+    return "Search shard timed out while scanning this filter.";
+  }
+
   if (/<(?:!DOCTYPE|html|body|head)\b/i.test(raw) || /cloudflare/i.test(raw)) {
     const plainText = raw.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim();
     if (/502|bad gateway/i.test(plainText)) {
@@ -245,7 +249,11 @@ const addTextFilter = (query, column, value) =>
   value ? query.ilike(column, `%${String(value).trim()}%`) : query;
 
 const addInFilter = (query, column, values) =>
-  Array.isArray(values) && values.length > 0 ? query.in(column, values) : query;
+  Array.isArray(values) && values.length > 0
+    ? values.length === 1
+      ? query.eq(column, values[0])
+      : query.in(column, values)
+    : query;
 
 const applyProspectFilters = (query, filters) => {
   let next = query;
@@ -436,13 +444,327 @@ const hasActiveFilters = (filters = {}) =>
     Array.isArray(value) ? value.length > 0 : String(value || "").trim().length > 0,
   );
 
-const runShardQuery = async ({ client, modeConfig, filters, offset, limit, includeCount }) => {
+const getQueryResultError = (result) => (result && typeof result === "object" && "error" in result ? result.error : null);
+
+const hasFiniteNumericValue = (value) =>
+  value !== null && value !== undefined && String(value).trim() !== "" && Number.isFinite(Number(value));
+
+const hasBroadTextFilters = (mode, filters = {}) => {
+  const getTextValue = (key) => String(filters?.[key] || "").trim();
+
+  if (mode === "prospects") {
+    return Boolean(getTextValue("jobTitle") || getTextValue("companyName") || getTextValue("naics"));
+  }
+
+  return Boolean(getTextValue("companyName") || getTextValue("naics"));
+};
+
+const hasActiveFilterValue = (value) =>
+  Array.isArray(value) ? value.length > 0 : String(value || "").trim().length > 0;
+
+const pickProspectFilterSubset = (filters = {}, keys = []) => {
+  const allowed = new Set(keys);
+  return {
+    jobTitle: allowed.has("jobTitle") ? String(filters.jobTitle || "").trim() : "",
+    companyName: allowed.has("companyName") ? String(filters.companyName || "").trim() : "",
+    exactCompanyName: allowed.has("exactCompanyName") ? String(filters.exactCompanyName || "").trim() : "",
+    companyDomain: allowed.has("companyDomain") ? String(filters.companyDomain || "").trim() : "",
+    naics: allowed.has("naics") ? String(filters.naics || "").trim() : "",
+    jobLevel: allowed.has("jobLevel") ? normalizeList(filters.jobLevel) : [],
+    jobFunction: allowed.has("jobFunction") ? normalizeList(filters.jobFunction) : [],
+    country: allowed.has("country") ? normalizeList(filters.country) : [],
+    industry: allowed.has("industry") ? normalizeList(filters.industry) : [],
+    subIndustry: allowed.has("subIndustry") ? normalizeList(filters.subIndustry) : [],
+    employeeSize: allowed.has("employeeSize") ? normalizeList(filters.employeeSize) : [],
+    region: allowed.has("region") ? normalizeList(filters.region) : [],
+  };
+};
+
+const buildProspectAdaptiveFilterPlans = (filters = {}) => {
+  const exactKeys = ["exactCompanyName", "companyDomain"].filter((key) => hasActiveFilterValue(filters[key]));
+  const broadTextKeys = ["jobTitle", "companyName", "naics"].filter((key) => hasActiveFilterValue(filters[key]));
+  const listKeys = [
+    "jobLevel",
+    "jobFunction",
+    "country",
+    "industry",
+    "subIndustry",
+    "employeeSize",
+    "region",
+  ].filter((key) => hasActiveFilterValue(filters[key]));
+  const plans = [];
+  const seen = new Set();
+
+  const pushPlan = (label, keys) => {
+    const activeKeys = [...new Set(keys.filter((key) => hasActiveFilterValue(filters[key])))].sort();
+    if (activeKeys.length === 0) return;
+    const signature = activeKeys.join("|");
+    if (seen.has(signature)) return;
+    seen.add(signature);
+    plans.push({
+      label,
+      sqlFilters: pickProspectFilterSubset(filters, activeKeys),
+    });
+  };
+
+  if (broadTextKeys.length > 0 && listKeys.length > 0) {
+    pushPlan("broad-text-sql", [...exactKeys, ...broadTextKeys]);
+    broadTextKeys.forEach((key) => {
+      pushPlan(`single-text-${key}`, [...exactKeys, key]);
+    });
+    pushPlan("structured-sql", [...exactKeys, ...listKeys]);
+  }
+
+  if (exactKeys.length > 0 && (broadTextKeys.length > 0 || listKeys.length > 0)) {
+    pushPlan("exact-only", exactKeys);
+  }
+
+  return plans;
+};
+
+const containsFilterText = (value, filterValue) => {
+  const needle = String(filterValue || "").trim().toLowerCase();
+  if (!needle) return true;
+  return String(value || "").toLowerCase().includes(needle);
+};
+
+const matchesExactFilterText = (value, filterValue) => {
+  const needle = String(filterValue || "").trim();
+  if (!needle) return true;
+  return String(value || "") === needle;
+};
+
+const matchesFilterListValue = (value, allowedValues) => {
+  const values = Array.isArray(allowedValues) ? allowedValues : [];
+  if (values.length === 0) return true;
+  return values.includes(String(value || ""));
+};
+
+const prospectRowMatchesFilters = (row, filters = {}) => {
+  if (!containsFilterText(row.jobTitle, filters.jobTitle)) return false;
+  if (String(filters.exactCompanyName || "").trim()) {
+    if (!matchesExactFilterText(row.companyName, filters.exactCompanyName)) return false;
+  } else if (!containsFilterText(row.companyName, filters.companyName)) {
+    return false;
+  }
+  if (!matchesExactFilterText(row.companyDomain, filters.companyDomain)) return false;
+  if (!containsFilterText(row.naics, filters.naics)) return false;
+  if (!matchesFilterListValue(row.jobLevel, filters.jobLevel)) return false;
+  if (!matchesFilterListValue(row.jobFunction, filters.jobFunction)) return false;
+  if (!matchesFilterListValue(row.country, filters.country)) return false;
+  if (!matchesFilterListValue(row.industry, filters.industry)) return false;
+  if (!matchesFilterListValue(row.subIndustry, filters.subIndustry)) return false;
+  if (!matchesFilterListValue(row.employeeSize, filters.employeeSize)) return false;
+  if (!matchesFilterListValue(row.region, filters.region)) return false;
+  return true;
+};
+
+const getShardBatchLimit = (mode, modeConfig, pageSize, filters = {}) => {
+  if (modeConfig.derivedFromProspects) {
+    return hasBroadTextFilters(mode, filters) ? Math.min(pageSize * 3, 120) : Math.min(pageSize * 12, 400);
+  }
+
+  return hasBroadTextFilters(mode, filters) ? Math.min(pageSize + 5, 60) : Math.min(pageSize * 4, 200);
+};
+
+const shouldSkipCountEstimate = (mode, filters = {}) => hasBroadTextFilters(mode, filters);
+
+const runShardQuery = async ({ client, modeConfig, filters, offset, limit, includeCount, sortColumns }) => {
   let query = client.from(modeConfig.source).select(modeConfig.selectColumns, includeCount ? { count: "planned" } : undefined);
   query = modeConfig.applyFilters(query, filters);
-  for (const column of modeConfig.defaultSort) {
+  for (const column of sortColumns || modeConfig.defaultSort) {
     query = query.order(column, { ascending: true, nullsFirst: false });
   }
   return query.range(offset, offset + limit - 1);
+};
+
+const runShardPageQuery = async ({ client, modeConfig, filters, offset, limit, sortColumns, maxRetries = 2 }) => {
+  const result = await executeShardOperation(
+    () =>
+      runShardQuery({
+        client,
+        modeConfig,
+        filters,
+        offset,
+        limit,
+        includeCount: false,
+        sortColumns,
+      }),
+    maxRetries,
+  );
+  const error = getQueryResultError(result);
+  if (error) throw error;
+  return result;
+};
+
+const runShardPageQueryWithFallback = async ({ client, modeConfig, filters, offset, limit }) => {
+  try {
+    return await runShardPageQuery({
+      client,
+      modeConfig,
+      filters,
+      offset,
+      limit,
+    });
+  } catch (error) {
+    if (String(getRawErrorMessage(error)).toLowerCase().includes("statement timeout")) {
+      const minimumFallbackLimit = Math.min(limit, 10);
+      const fallbackLimits = [];
+      let nextLimit = Math.max(minimumFallbackLimit, Math.ceil(limit / 2));
+
+      while (nextLimit < limit) {
+        fallbackLimits.push(nextLimit);
+        if (nextLimit === minimumFallbackLimit) break;
+        nextLimit = Math.max(minimumFallbackLimit, Math.ceil(nextLimit / 2));
+      }
+
+      for (const fallbackLimit of fallbackLimits) {
+        try {
+          return await runShardPageQuery({
+            client,
+            modeConfig,
+            filters,
+            offset,
+            limit: fallbackLimit,
+            sortColumns: modeConfig.defaultSort,
+            maxRetries: 0,
+          });
+        } catch (reducedError) {
+          if (!String(getRawErrorMessage(reducedError)).toLowerCase().includes("statement timeout")) {
+            throw reducedError;
+          }
+        }
+      }
+
+      for (const fallbackLimit of fallbackLimits.length > 0 ? fallbackLimits : [minimumFallbackLimit]) {
+        try {
+          return await runShardPageQuery({
+            client,
+            modeConfig,
+            filters,
+            offset,
+            limit: fallbackLimit,
+            sortColumns: [],
+            maxRetries: 0,
+          });
+        } catch (unorderedFallbackError) {
+          if (!String(getRawErrorMessage(unorderedFallbackError)).toLowerCase().includes("statement timeout")) {
+            throw unorderedFallbackError;
+          }
+        }
+      }
+
+      if (modeConfig.idColumn) {
+        for (const fallbackLimit of fallbackLimits.length > 0 ? fallbackLimits : [minimumFallbackLimit]) {
+          const idLimit = Math.max(minimumFallbackLimit, Math.min(fallbackLimit, 25));
+          try {
+            return await runShardPageQuery({
+              client,
+              modeConfig,
+              filters,
+              offset,
+              limit: idLimit,
+              sortColumns: [modeConfig.idColumn],
+              maxRetries: 0,
+            });
+          } catch (idFallbackError) {
+            if (!String(getRawErrorMessage(idFallbackError)).toLowerCase().includes("statement timeout")) {
+              throw idFallbackError;
+            }
+          }
+        }
+      }
+    }
+    throw error;
+  }
+};
+
+const fetchProspectPageWithAdaptiveFilters = async ({
+  shard,
+  client,
+  modeConfig,
+  payload,
+  offset,
+  seenKeys,
+}) => {
+  const pageSize = clampPageSize(payload.pageSize);
+  const plans = buildProspectAdaptiveFilterPlans(payload.filters);
+
+  for (const plan of plans) {
+    const limit = getShardBatchLimit("prospects", modeConfig, pageSize, plan.sqlFilters);
+    let nextOffset = offset;
+    let exhausted = false;
+    let scannedCount = offset;
+    let consumedBase = offset;
+    const matchedRows = [];
+    const localSeenKeys = new Set(seenKeys instanceof Set ? [...seenKeys] : []);
+
+    try {
+      for (let batchIndex = 0; batchIndex < MAX_SEARCH_BATCHES_PER_SHARD; batchIndex += 1) {
+        const result = await runShardPageQueryWithFallback({
+          client,
+          modeConfig,
+          filters: plan.sqlFilters,
+          offset: nextOffset,
+          limit,
+        });
+
+        const { data, error } = result;
+        if (error) throw error;
+
+        const batchRows = Array.isArray(data) ? data : [];
+        if (batchRows.length === 0) {
+          exhausted = true;
+          break;
+        }
+
+        for (let index = 0; index < batchRows.length; index += 1) {
+          const normalized = modeConfig.normalize(batchRows[index], shard.index);
+          const rowKey = getRowDedupeKey("prospects", normalized);
+          if (localSeenKeys.has(rowKey)) continue;
+          if (!prospectRowMatchesFilters(normalized, payload.filters)) continue;
+
+          matchedRows.push({
+            ...normalized,
+            rowUsageByShard: {
+              [String(shard.index)]: nextOffset + index + 1 - consumedBase,
+            },
+          });
+          localSeenKeys.add(rowKey);
+          consumedBase = nextOffset + index + 1;
+
+          if (matchedRows.length >= pageSize + 1) {
+            break;
+          }
+        }
+
+        nextOffset += batchRows.length;
+        scannedCount = Math.max(scannedCount, nextOffset);
+        exhausted = batchRows.length < limit;
+
+        if (matchedRows.length >= pageSize + 1 || exhausted) {
+          break;
+        }
+      }
+
+      return {
+        status: "healthy",
+        shard,
+        rows: matchedRows,
+        count: scannedCount,
+        offset,
+        exhausted,
+        emptyConsumed: matchedRows.length === 0 ? Math.max(0, scannedCount - offset) : 0,
+        fallbackPlan: plan.label,
+      };
+    } catch (error) {
+      if (!String(getRawErrorMessage(error)).toLowerCase().includes("statement timeout")) {
+        throw error;
+      }
+    }
+  }
+
+  return null;
 };
 
 const runShardCountEstimateQuery = async ({ client, modeConfig, filters }) => {
@@ -455,6 +777,7 @@ const fetchShardCountEstimate = async (mode, shard, filters) => {
   const modeConfig = getModeConfig(mode);
   const client = shardClients.get(shard.index);
   if (!client) return null;
+  if (shouldSkipCountEstimate(mode, filters)) return null;
 
   try {
     const { count, error } = await executeShardOperation(() =>
@@ -471,19 +794,19 @@ const fetchShardCountEstimate = async (mode, shard, filters) => {
   }
 };
 
-const fetchShardPage = async (mode, shard, payload, offsets, estimatedCount = null) => {
+const fetchShardPage = async (mode, shard, payload, offsets, seenKeys, estimatedCount = null) => {
   const modeConfig = getModeConfig(mode);
   const client = shardClients.get(shard.index);
   const pageSize = clampPageSize(payload.pageSize);
   const offset = Number(offsets?.[String(shard.index)] || 0);
 
   if (modeConfig.derivedFromProspects) {
-    const limit = Math.min(pageSize * 12, 400);
+    const limit = getShardBatchLimit(mode, modeConfig, pageSize, payload.filters);
     let count = 0;
     const shouldScanExhaustively =
       offset === 0 &&
       hasActiveFilters(payload.filters) &&
-      Number.isFinite(Number(estimatedCount)) &&
+      hasFiniteNumericValue(estimatedCount) &&
       Number(estimatedCount) <= EXHAUSTIVE_SCAN_ESTIMATE_THRESHOLD;
     let nextOffset = offset;
     let rawRows = [];
@@ -492,16 +815,13 @@ const fetchShardPage = async (mode, shard, payload, offsets, estimatedCount = nu
 
     try {
       for (let batchIndex = 0; batchIndex < MAX_SEARCH_BATCHES_PER_SHARD; batchIndex += 1) {
-        const result = await executeShardOperation(() =>
-          runShardQuery({
-            client,
-            modeConfig,
-            filters: payload.filters,
-            offset: nextOffset,
-            limit,
-            includeCount: false,
-          }),
-        );
+        const result = await runShardPageQueryWithFallback({
+          client,
+          modeConfig,
+          filters: payload.filters,
+          offset: nextOffset,
+          limit,
+        });
 
         const { data, error } = await result;
         if (error) throw error;
@@ -549,14 +869,14 @@ const fetchShardPage = async (mode, shard, payload, offsets, estimatedCount = nu
     }
   }
 
-  const limit = Math.min(pageSize * 4, 200);
+  const limit = getShardBatchLimit(mode, modeConfig, pageSize, payload.filters);
 
   try {
     let count = 0;
     const shouldScanExhaustively =
       offset === 0 &&
       hasActiveFilters(payload.filters) &&
-      Number.isFinite(Number(estimatedCount)) &&
+      hasFiniteNumericValue(estimatedCount) &&
       Number(estimatedCount) <= EXHAUSTIVE_SCAN_ESTIMATE_THRESHOLD;
     let nextOffset = offset;
     let rawRows = [];
@@ -564,16 +884,13 @@ const fetchShardPage = async (mode, shard, payload, offsets, estimatedCount = nu
     let exhausted = false;
 
     for (let batchIndex = 0; batchIndex < MAX_SEARCH_BATCHES_PER_SHARD; batchIndex += 1) {
-      const result = await executeShardOperation(() =>
-        runShardQuery({
-          client,
-          modeConfig,
-          filters: payload.filters,
-          offset: nextOffset,
-          limit,
-          includeCount: false,
-        }),
-      );
+      const result = await runShardPageQueryWithFallback({
+        client,
+        modeConfig,
+        filters: payload.filters,
+        offset: nextOffset,
+        limit,
+      });
 
       const { data, error } = await result;
       if (error) throw error;
@@ -604,6 +921,20 @@ const fetchShardPage = async (mode, shard, payload, offsets, estimatedCount = nu
       exhausted,
     };
   } catch (error) {
+    if (mode === "prospects" && String(getRawErrorMessage(error)).toLowerCase().includes("statement timeout")) {
+      const adaptiveResult = await fetchProspectPageWithAdaptiveFilters({
+        shard,
+        client,
+        modeConfig,
+        payload,
+        offset,
+        seenKeys,
+      });
+      if (adaptiveResult) {
+        return adaptiveResult;
+      }
+    }
+
     return {
       status: "failed",
       shard,
@@ -633,7 +964,9 @@ const buildNextCursor = (mode, pageSize, currentOffsets, selectedRows, shardResu
     .forEach((entry) => {
       const current = Number(currentOffsets?.[String(entry.shard.index)] || 0);
       const consumed = perShardConsumed.get(entry.shard.index) || 0;
-      nextOffsets[String(entry.shard.index)] = current + consumed;
+      const fallbackConsumed =
+        consumed > 0 ? 0 : Math.max(0, Number(entry.emptyConsumed || 0));
+      nextOffsets[String(entry.shard.index)] = current + consumed + fallbackConsumed;
     });
 
   const hasMore =
@@ -661,7 +994,7 @@ const runSearch = async (mode, payload) => {
   const cursor = decodeCursor(searchPayload.cursor);
   const offsets = cursor?.mode === mode && cursor?.offsets && typeof cursor.offsets === "object" ? cursor.offsets : {};
   const displayTotalFromCursor =
-    cursor?.mode === mode && Number.isFinite(Number(cursor?.displayTotal ?? cursor?.totalExact))
+    cursor?.mode === mode && hasFiniteNumericValue(cursor?.displayTotal ?? cursor?.totalExact)
       ? Number(cursor.displayTotal ?? cursor.totalExact)
       : null;
   const estimatedCounts =
@@ -672,7 +1005,9 @@ const runSearch = async (mode, payload) => {
     activeShards.map((shard, index) => [shard.index, Array.isArray(estimatedCounts) ? estimatedCounts[index] : null]),
   );
   const shardResults = await Promise.all(
-    activeShards.map((shard) => fetchShardPage(mode, shard, searchPayload, offsets, estimatedCountByShard.get(shard.index) ?? null)),
+    activeShards.map((shard) =>
+      fetchShardPage(mode, shard, searchPayload, offsets, new Set(), estimatedCountByShard.get(shard.index) ?? null),
+    ),
   );
   const shardStatus = buildShardStatus(shardResults);
   const healthyResults = shardResults.filter((entry) => entry.status === "healthy");
@@ -687,8 +1022,9 @@ const runSearch = async (mode, payload) => {
   );
   const items = mergedRows.slice(0, searchPayload.pageSize);
   const totalExact = healthyResults.every((entry) => entry.exhausted) ? mergedRows.length : null;
+  const hasShardFailures = shardResults.some((entry) => entry.status !== "healthy");
   const estimatedTotal =
-    Array.isArray(estimatedCounts) && estimatedCounts.some((value) => Number.isFinite(Number(value)))
+    Array.isArray(estimatedCounts) && estimatedCounts.some((value) => hasFiniteNumericValue(value))
       ? estimatedCounts.reduce((sum, value) => sum + Number(value || 0), 0)
       : null;
   const totalApprox =
@@ -697,9 +1033,10 @@ const runSearch = async (mode, payload) => {
     estimatedTotal ??
     shardResults.reduce((sum, entry) => sum + Number(entry.count || 0), 0);
   return {
-    items: items.map(({ rowUsageByShard, ...row }) => row),
+    items: items.map(({ rowUsageByShard, raw, ...row }) => row),
     nextCursor: buildNextCursor(mode, searchPayload.pageSize, offsets, items, shardResults, mergedRows.length, totalApprox),
     totalApprox,
+    totalIsExact: totalExact !== null && !hasShardFailures,
     shardStatus,
   };
 };

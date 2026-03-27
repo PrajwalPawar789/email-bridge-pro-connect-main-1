@@ -18,6 +18,7 @@ export type PipelineTemplate = {
 };
 
 export type PipelineOpportunityStatus = 'open' | 'won' | 'lost';
+export type PipelineForecastCategory = 'not_forecasted' | 'pipeline' | 'best_case' | 'commit' | 'closed';
 
 export type PipelineOpportunity = {
   id: string;
@@ -33,6 +34,10 @@ export type PipelineOpportunity = {
   campaignId?: string | null;
   sourceCampaign?: string;
   tags?: string[];
+  expectedCloseDate?: string | null;
+  forecastCategory?: PipelineForecastCategory;
+  forecastProbability?: number | null;
+  closedAt?: string | null;
 };
 
 export const STALE_DAYS = 14;
@@ -351,6 +356,8 @@ export const formatCurrency = (value: number) => (
     maximumFractionDigits: 0,
   }).format(value)
 );
+
+export const formatPercent = (value: number) => `${Math.round(value)}%`;
 
 const CURRENCY_REGEX = /(?:\$|usd|us\$|eur|€|£|gbp|inr|₹)\s*([0-9][0-9,]*(?:\.[0-9]{1,2})?)\s*(k|m|b)?/gi;
 

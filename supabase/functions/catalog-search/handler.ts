@@ -111,9 +111,16 @@ const getRawErrorMessage = (error: unknown) => {
   }
 };
 
+const isStatementTimeoutMessage = (message: unknown) =>
+  String(message || "").toLowerCase().includes("statement timeout");
+
 const sanitizeShardErrorMessage = (message: unknown) => {
   const raw = String(message || "").trim();
   if (!raw) return "Unknown error";
+
+  if (isStatementTimeoutMessage(raw)) {
+    return "Search shard timed out while scanning this filter.";
+  }
 
   if (/<(?:!DOCTYPE|html|body|head)\b/i.test(raw) || /cloudflare/i.test(raw)) {
     const plainText = raw.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim();
@@ -427,6 +434,221 @@ const normalizeText = (value: unknown) =>
     .trim()
     .toLowerCase();
 
+const WINDOWS_1252_EXTRA_BYTES_BY_CHAR = new Map<string, number>([
+  ["€", 0x80],
+  ["‚", 0x82],
+  ["ƒ", 0x83],
+  ["„", 0x84],
+  ["…", 0x85],
+  ["†", 0x86],
+  ["‡", 0x87],
+  ["ˆ", 0x88],
+  ["‰", 0x89],
+  ["Š", 0x8a],
+  ["‹", 0x8b],
+  ["Œ", 0x8c],
+  ["Ž", 0x8e],
+  ["‘", 0x91],
+  ["’", 0x92],
+  ["“", 0x93],
+  ["”", 0x94],
+  ["•", 0x95],
+  ["–", 0x96],
+  ["—", 0x97],
+  ["˜", 0x98],
+  ["™", 0x99],
+  ["š", 0x9a],
+  ["›", 0x9b],
+  ["œ", 0x9c],
+  ["ž", 0x9e],
+  ["Ÿ", 0x9f],
+]);
+
+const MOJIBAKE_ARTIFACT_PATTERN = /(?:Â€‹|â€‹|â€\u008b|\u200b|\ufeff)/g;
+const MOJIBAKE_HINT_PATTERN = /(?:Ã.|Â.|â.|ã.)/;
+
+const WINDOWS_1252_EXTRA_BYTES_BY_CHAR_REPAIRED = new Map<string, number>([
+  ["\u20ac", 0x80],
+  ["\u201a", 0x82],
+  ["\u0192", 0x83],
+  ["\u201e", 0x84],
+  ["\u2026", 0x85],
+  ["\u2020", 0x86],
+  ["\u2021", 0x87],
+  ["\u02c6", 0x88],
+  ["\u2030", 0x89],
+  ["\u0160", 0x8a],
+  ["\u2039", 0x8b],
+  ["\u0152", 0x8c],
+  ["\u017d", 0x8e],
+  ["\u2018", 0x91],
+  ["\u2019", 0x92],
+  ["\u201c", 0x93],
+  ["\u201d", 0x94],
+  ["\u2022", 0x95],
+  ["\u2013", 0x96],
+  ["\u2014", 0x97],
+  ["\u02dc", 0x98],
+  ["\u2122", 0x99],
+  ["\u0161", 0x9a],
+  ["\u203a", 0x9b],
+  ["\u0153", 0x9c],
+  ["\u017e", 0x9e],
+  ["\u0178", 0x9f],
+]);
+const MOJIBAKE_ARTIFACT_PATTERN_REPAIRED =
+  /(?:\u00c2\u20ac\u2039|\u00e2\u20ac\u2039|\u00c3\u201a\u00e2\u201a\u00ac\u00e2\u20ac\u2039|\u00c3\u00a2\u201a\u00ac\u00e2\u20ac\u2039|\u00c3\u00a2\u201a\u00ac\u008b|\u200b|\ufeff)/gu;
+const MOJIBAKE_HINT_PATTERN_REPAIRED = /(?:[\u00c2\u00c3\u00e2].|[\u00e3\u00e5\u00e6][\u00a0-\u00bf])/u;
+const LOWERCASE_UTF8_LEAD_PATTERN = /\u00e3(?=[\u00a0-\u00bf])/gu;
+
+const encodeWindows1252Bytes = (value: unknown) => {
+  const bytes: number[] = [];
+  for (const char of String(value || "")) {
+    const mappedByte = WINDOWS_1252_EXTRA_BYTES_BY_CHAR_REPAIRED.get(char);
+    if (mappedByte !== undefined) {
+      bytes.push(mappedByte);
+      continue;
+    }
+
+    const code = char.charCodeAt(0);
+    if (code <= 0xff) {
+      bytes.push(code);
+      continue;
+    }
+
+    return null;
+  }
+
+  return Uint8Array.from(bytes);
+};
+
+const countMojibakeHints = (value: unknown) => {
+  const text = String(value || "");
+  const explicitMatches = text.match(/(?:Ã.|Â.|â.|ã.)/g) || [];
+  const replacementMatches = text.match(/\uFFFD/g) || [];
+  return explicitMatches.length + replacementMatches.length * 4;
+};
+
+const repairMojibake = (value: unknown) => {
+  const raw = String(value || "");
+  if (!MOJIBAKE_HINT_PATTERN.test(raw)) {
+    return raw;
+  }
+
+  const bytes = encodeWindows1252Bytes(raw);
+  if (!bytes) {
+    return raw;
+  }
+
+  try {
+    const decoded = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+    return countMojibakeHints(decoded) < countMojibakeHints(raw) ? decoded : raw;
+  } catch {
+    return raw;
+  }
+};
+
+const normalizeDisplayTextValue = (value: unknown) => {
+  if (value === null || value === undefined) return null;
+
+  const cleaned = repairMojibake(String(value).replace(MOJIBAKE_ARTIFACT_PATTERN, ""))
+    .replace(/[\u0000-\u001F\u007F-\u009F]/g, " ")
+    .replace(/\u00A0/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+
+  return cleaned || null;
+};
+
+const normalizeCompanyDisplayName = (value: unknown) => {
+  const cleaned = normalizeDisplayTextValue(value);
+  if (!cleaned) return null;
+
+  return (
+    cleaned
+      .replace(/^[|=+*~<>•·]+\s*/, "")
+      .replace(/\s*\|\s*/g, " | ")
+      .replace(/\s+/g, " ")
+      .trim() || null
+  );
+};
+
+const countMojibakeHintsRepaired = (value: unknown) => {
+  const text = String(value || "");
+  const explicitMatches = text.match(/(?:[\u00c2\u00c3\u00e2].|[\u00e3\u00e5\u00e6][\u00a0-\u00bf])/gu) || [];
+  const replacementMatches = text.match(/\uFFFD/g) || [];
+  return explicitMatches.length + replacementMatches.length * 4;
+};
+
+const repairMojibakeRepaired = (value: unknown) => {
+  const raw = String(value || "");
+  const normalizedRaw = raw.replace(LOWERCASE_UTF8_LEAD_PATTERN, "\u00c3");
+  if (!MOJIBAKE_HINT_PATTERN_REPAIRED.test(normalizedRaw)) {
+    return raw;
+  }
+
+  const bytes = encodeWindows1252Bytes(normalizedRaw);
+  if (!bytes) {
+    return raw;
+  }
+
+  try {
+    const decoded = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+    return countMojibakeHintsRepaired(decoded) < countMojibakeHintsRepaired(normalizedRaw) ? decoded : raw;
+  } catch {
+    return raw;
+  }
+};
+
+const normalizeDisplayTextValueRepaired = (value: unknown) => {
+  if (value === null || value === undefined) return null;
+
+  const cleaned = repairMojibakeRepaired(String(value).replace(MOJIBAKE_ARTIFACT_PATTERN_REPAIRED, ""))
+    .replace(/[\u0000-\u001F\u007F-\u009F]/g, " ")
+    .replace(/\u00A0/g, " ")
+    .replace(/\s+/g, " ")
+    .replace(/([\u00e0-\u00ff])([A-Z])(?=[\s,.;:|]|$)/g, (_, prefix, suffix) => `${prefix}${suffix.toLowerCase()}`)
+    .trim();
+
+  return cleaned || null;
+};
+
+const normalizeCompanyDisplayNameRepaired = (value: unknown) => {
+  const cleaned = normalizeDisplayTextValueRepaired(value);
+  if (!cleaned) return null;
+
+  return (
+    cleaned
+      .replace(/^[|=+*~<>\u2022\u00b7]+\s*/, "")
+      .replace(/\s*\|\s*/g, " | ")
+      .replace(/\s+/g, " ")
+      .trim() || null
+  );
+};
+
+const normalizeLinkedinUrl = (value: unknown) => {
+  const raw = String(value || "").trim();
+  if (!raw || raw === "-" || raw === "0") return null;
+
+  const embeddedUrl =
+    raw.match(/https?:\/\/(?:www\.)?linkedin\.com\/[^\s"']+/i)?.[0] ||
+    raw.match(/(?:www\.)?linkedin\.com\/[^\s"']+/i)?.[0] ||
+    raw;
+
+  const cleaned = /^https?:\/\//i.test(embeddedUrl) ? embeddedUrl : `https://${embeddedUrl.replace(/^\/+/, "")}`;
+
+  try {
+    const url = new URL(cleaned);
+    if (!/(^|\.)linkedin\.com$/i.test(url.hostname)) {
+      return raw;
+    }
+    url.protocol = "https:";
+    return url.toString();
+  } catch {
+    return cleaned;
+  }
+};
+
 const buildCatalogRef = (shardIndex: number, entity: string, sourceId: string) => `s${shardIndex}:${entity}:${sourceId}`;
 
 const parseCatalogRef = (value: unknown) => {
@@ -444,28 +666,28 @@ const normalizeProspectRow = (record: Record<string, unknown>, shardIndex: numbe
   const fullNameValue = pickFirstValue(record, schema.prospectFields.fullName);
   const firstName = pickFirstValue(record, schema.prospectFields.firstName);
   const lastName = pickFirstValue(record, schema.prospectFields.lastName);
-  const combinedName = [firstName, lastName].filter(Boolean).join(" ").trim();
+  const combinedName = normalizeDisplayTextValueRepaired([firstName, lastName].filter(Boolean).join(" ").trim());
 
   return {
     catalogRef: buildCatalogRef(shardIndex, "prospect", sourceId),
     sourceShard: shardIndex,
     sourceRecordId: sourceId,
-    fullName: String(fullNameValue || combinedName || ""),
+    fullName: normalizeDisplayTextValueRepaired(fullNameValue || combinedName || "") || "",
     email: pickFirstValue(record, schema.prospectFields.email),
     phone: pickFirstValue(record, schema.prospectFields.phone),
-    headline: pickFirstValue(record, schema.prospectFields.headline),
-    jobTitle: pickFirstValue(record, schema.prospectFields.jobTitle),
-    jobLevel: pickFirstValue(record, schema.prospectFields.jobLevel),
-    jobFunction: pickFirstValue(record, schema.prospectFields.jobFunction),
-    companyName: pickFirstValue(record, schema.prospectFields.companyName),
+    headline: normalizeDisplayTextValueRepaired(pickFirstValue(record, schema.prospectFields.headline)),
+    jobTitle: normalizeDisplayTextValueRepaired(pickFirstValue(record, schema.prospectFields.jobTitle)),
+    jobLevel: normalizeDisplayTextValueRepaired(pickFirstValue(record, schema.prospectFields.jobLevel)),
+    jobFunction: normalizeDisplayTextValueRepaired(pickFirstValue(record, schema.prospectFields.jobFunction)),
+    companyName: normalizeCompanyDisplayNameRepaired(pickFirstValue(record, schema.prospectFields.companyName)),
     companyDomain: pickFirstValue(record, schema.prospectFields.companyDomain),
-    country: pickFirstValue(record, schema.prospectFields.country),
-    region: pickFirstValue(record, schema.prospectFields.region),
-    industry: pickFirstValue(record, schema.prospectFields.industry),
-    subIndustry: pickFirstValue(record, schema.prospectFields.subIndustry),
-    employeeSize: pickFirstValue(record, schema.prospectFields.employeeSize),
-    naics: pickFirstValue(record, schema.prospectFields.naics),
-    linkedin: pickFirstValue(record, schema.prospectFields.linkedin),
+    country: normalizeDisplayTextValueRepaired(pickFirstValue(record, schema.prospectFields.country)),
+    region: normalizeDisplayTextValueRepaired(pickFirstValue(record, schema.prospectFields.region)),
+    industry: normalizeDisplayTextValueRepaired(pickFirstValue(record, schema.prospectFields.industry)),
+    subIndustry: normalizeDisplayTextValueRepaired(pickFirstValue(record, schema.prospectFields.subIndustry)),
+    employeeSize: normalizeDisplayTextValueRepaired(pickFirstValue(record, schema.prospectFields.employeeSize)),
+    naics: normalizeDisplayTextValueRepaired(pickFirstValue(record, schema.prospectFields.naics)),
+    linkedin: normalizeLinkedinUrl(pickFirstValue(record, schema.prospectFields.linkedin)),
     raw: record,
   };
 };
@@ -476,17 +698,22 @@ const normalizeCompanyRow = (record: Record<string, unknown>, shardIndex: number
     catalogRef: buildCatalogRef(shardIndex, "company", sourceId),
     sourceShard: shardIndex,
     sourceRecordId: sourceId,
-    companyName: String(pickFirstValue(record, schema.companyFields.name) || ""),
+    companyName: normalizeCompanyDisplayNameRepaired(pickFirstValue(record, schema.companyFields.name)) || "",
     domain: pickFirstValue(record, schema.companyFields.domain),
-    country: pickFirstValue(record, schema.companyFields.country),
-    region: pickFirstValue(record, schema.companyFields.region),
-    industry: pickFirstValue(record, schema.companyFields.industry),
-    subIndustry: pickFirstValue(record, schema.companyFields.subIndustry),
-    employeeSize: pickFirstValue(record, schema.companyFields.employeeSize),
-    naics: pickFirstValue(record, schema.companyFields.naics),
+    country: normalizeDisplayTextValueRepaired(pickFirstValue(record, schema.companyFields.country)),
+    region: normalizeDisplayTextValueRepaired(pickFirstValue(record, schema.companyFields.region)),
+    industry: normalizeDisplayTextValueRepaired(pickFirstValue(record, schema.companyFields.industry)),
+    subIndustry: normalizeDisplayTextValueRepaired(pickFirstValue(record, schema.companyFields.subIndustry)),
+    employeeSize: normalizeDisplayTextValueRepaired(pickFirstValue(record, schema.companyFields.employeeSize)),
+    naics: normalizeDisplayTextValueRepaired(pickFirstValue(record, schema.companyFields.naics)),
     prospectCount: Number(pickFirstValue(record, schema.companyFields.prospectCount) || 0),
     raw: record,
   };
+};
+
+const stripSearchResultRow = (row: Record<string, unknown>) => {
+  const { rowUsageByShard, raw, ...rest } = row as Record<string, unknown>;
+  return rest;
 };
 
 const buildProspectDedupeKey = (row: any) => {
@@ -945,7 +1172,11 @@ const addExactTextFilter = (query: any, column: string, value: unknown) =>
   value ? query.eq(column, String(value).trim()) : query;
 
 const addInFilter = (query: any, column: string, values: string[]) =>
-  Array.isArray(values) && values.length > 0 ? query.in(column, values) : query;
+  Array.isArray(values) && values.length > 0
+    ? values.length === 1
+      ? query.eq(column, values[0])
+      : query.in(column, values)
+    : query;
 
 let schema = buildSchemaConfig(ENV);
 let shardSlots = buildShardConfigs(ENV);
@@ -1173,6 +1404,138 @@ const buildShardStatus = (runtimeResults: any[]) => {
   };
 };
 
+const getQueryResultError = (result: any) =>
+  result && typeof result === "object" && "error" in result ? result.error : null;
+
+const hasFiniteNumericValue = (value: unknown) =>
+  value !== null && value !== undefined && String(value).trim() !== "" && Number.isFinite(Number(value));
+
+const hasBroadTextFilters = (mode: "prospects" | "companies", filters: Record<string, unknown> = {}) => {
+  const getTextValue = (key: string) => String(filters?.[key] || "").trim();
+
+  if (mode === "prospects") {
+    return Boolean(getTextValue("jobTitle") || getTextValue("companyName") || getTextValue("naics"));
+  }
+
+  return Boolean(getTextValue("companyName") || getTextValue("naics"));
+};
+
+const hasActiveFilterValue = (value: unknown) =>
+  Array.isArray(value) ? value.length > 0 : String(value || "").trim().length > 0;
+
+const pickProspectFilterSubset = (filters: Record<string, unknown> = {}, keys: string[] = []) => {
+  const allowed = new Set(keys);
+  return {
+    jobTitle: allowed.has("jobTitle") ? String(filters.jobTitle || "").trim() : "",
+    companyName: allowed.has("companyName") ? String(filters.companyName || "").trim() : "",
+    exactCompanyName: allowed.has("exactCompanyName") ? String(filters.exactCompanyName || "").trim() : "",
+    companyDomain: allowed.has("companyDomain") ? String(filters.companyDomain || "").trim() : "",
+    naics: allowed.has("naics") ? String(filters.naics || "").trim() : "",
+    jobLevel: allowed.has("jobLevel") ? normalizeList(filters.jobLevel) : [],
+    jobFunction: allowed.has("jobFunction") ? normalizeList(filters.jobFunction) : [],
+    country: allowed.has("country") ? normalizeList(filters.country) : [],
+    industry: allowed.has("industry") ? normalizeList(filters.industry) : [],
+    subIndustry: allowed.has("subIndustry") ? normalizeList(filters.subIndustry) : [],
+    employeeSize: allowed.has("employeeSize") ? normalizeList(filters.employeeSize) : [],
+    region: allowed.has("region") ? normalizeList(filters.region) : [],
+  };
+};
+
+const buildProspectAdaptiveFilterPlans = (filters: Record<string, unknown> = {}) => {
+  const exactKeys = ["exactCompanyName", "companyDomain"].filter((key) => hasActiveFilterValue(filters[key]));
+  const broadTextKeys = ["jobTitle", "companyName", "naics"].filter((key) => hasActiveFilterValue(filters[key]));
+  const listKeys = [
+    "jobLevel",
+    "jobFunction",
+    "country",
+    "industry",
+    "subIndustry",
+    "employeeSize",
+    "region",
+  ].filter((key) => hasActiveFilterValue(filters[key]));
+  const plans: { label: string; sqlFilters: Record<string, unknown> }[] = [];
+  const seen = new Set<string>();
+
+  const pushPlan = (label: string, keys: string[]) => {
+    const activeKeys = [...new Set(keys.filter((key) => hasActiveFilterValue(filters[key])))].sort();
+    if (activeKeys.length === 0) return;
+    const signature = activeKeys.join("|");
+    if (seen.has(signature)) return;
+    seen.add(signature);
+    plans.push({
+      label,
+      sqlFilters: pickProspectFilterSubset(filters, activeKeys),
+    });
+  };
+
+  if (broadTextKeys.length > 0 && listKeys.length > 0) {
+    pushPlan("broad-text-sql", [...exactKeys, ...broadTextKeys]);
+    broadTextKeys.forEach((key) => {
+      pushPlan(`single-text-${key}`, [...exactKeys, key]);
+    });
+    pushPlan("structured-sql", [...exactKeys, ...listKeys]);
+  }
+
+  if (exactKeys.length > 0 && (broadTextKeys.length > 0 || listKeys.length > 0)) {
+    pushPlan("exact-only", exactKeys);
+  }
+
+  return plans;
+};
+
+const containsFilterText = (value: unknown, filterValue: unknown) => {
+  const needle = String(filterValue || "").trim().toLowerCase();
+  if (!needle) return true;
+  return String(value || "").toLowerCase().includes(needle);
+};
+
+const matchesExactFilterText = (value: unknown, filterValue: unknown) => {
+  const needle = String(filterValue || "").trim();
+  if (!needle) return true;
+  return String(value || "") === needle;
+};
+
+const matchesFilterListValue = (value: unknown, allowedValues: unknown) => {
+  const values = Array.isArray(allowedValues) ? allowedValues : [];
+  if (values.length === 0) return true;
+  return values.includes(String(value || ""));
+};
+
+const prospectRowMatchesFilters = (row: Record<string, unknown>, filters: Record<string, unknown> = {}) => {
+  if (!containsFilterText(row.jobTitle, filters.jobTitle)) return false;
+  if (String(filters.exactCompanyName || "").trim()) {
+    if (!matchesExactFilterText(row.companyName, filters.exactCompanyName)) return false;
+  } else if (!containsFilterText(row.companyName, filters.companyName)) {
+    return false;
+  }
+  if (!matchesExactFilterText(row.companyDomain, filters.companyDomain)) return false;
+  if (!containsFilterText(row.naics, filters.naics)) return false;
+  if (!matchesFilterListValue(row.jobLevel, filters.jobLevel)) return false;
+  if (!matchesFilterListValue(row.jobFunction, filters.jobFunction)) return false;
+  if (!matchesFilterListValue(row.country, filters.country)) return false;
+  if (!matchesFilterListValue(row.industry, filters.industry)) return false;
+  if (!matchesFilterListValue(row.subIndustry, filters.subIndustry)) return false;
+  if (!matchesFilterListValue(row.employeeSize, filters.employeeSize)) return false;
+  if (!matchesFilterListValue(row.region, filters.region)) return false;
+  return true;
+};
+
+const getShardBatchLimit = (
+  mode: "prospects" | "companies",
+  modeConfig: any,
+  pageSize: number,
+  filters: Record<string, unknown> = {},
+) => {
+  if (modeConfig.derivedFromProspects) {
+    return hasBroadTextFilters(mode, filters) ? Math.min(pageSize * 3, 120) : Math.min(pageSize * 12, 400);
+  }
+
+  return hasBroadTextFilters(mode, filters) ? Math.min(pageSize + 5, 60) : Math.min(pageSize * 4, 200);
+};
+
+const shouldSkipCountEstimate = (mode: "prospects" | "companies", filters: Record<string, unknown> = {}) =>
+  hasBroadTextFilters(mode, filters);
+
 const runShardQuery = async ({
   client,
   modeConfig,
@@ -1180,6 +1543,7 @@ const runShardQuery = async ({
   offset,
   limit,
   includeCount,
+  sortColumns,
 }: {
   client: any;
   modeConfig: any;
@@ -1187,13 +1551,238 @@ const runShardQuery = async ({
   offset: number;
   limit: number;
   includeCount: boolean;
+  sortColumns?: string[];
 }) => {
   let query = client.from(modeConfig.source).select(modeConfig.selectColumns, includeCount ? { count: "planned" } : undefined);
   query = modeConfig.applyFilters(query, filters);
-  for (const column of modeConfig.defaultSort) {
+  for (const column of sortColumns || modeConfig.defaultSort) {
     query = query.order(column, { ascending: true, nullsFirst: false });
   }
   return query.range(offset, offset + limit - 1);
+};
+
+const runShardPageQuery = async ({
+  client,
+  modeConfig,
+  filters,
+  offset,
+  limit,
+  sortColumns,
+  maxRetries = 2,
+}: {
+  client: any;
+  modeConfig: any;
+  filters: any;
+  offset: number;
+  limit: number;
+  sortColumns?: string[];
+  maxRetries?: number;
+}) => {
+  const result = await executeShardOperation(
+    () =>
+      runShardQuery({
+        client,
+        modeConfig,
+        filters,
+        offset,
+        limit,
+        includeCount: false,
+        sortColumns,
+      }),
+    maxRetries,
+  );
+  const error = getQueryResultError(result);
+  if (error) throw error;
+  return result;
+};
+
+const runShardPageQueryWithFallback = async ({
+  client,
+  modeConfig,
+  filters,
+  offset,
+  limit,
+}: {
+  client: any;
+  modeConfig: any;
+  filters: any;
+  offset: number;
+  limit: number;
+}) => {
+  try {
+    return await runShardPageQuery({
+      client,
+      modeConfig,
+      filters,
+      offset,
+      limit,
+    });
+  } catch (error) {
+    if (isStatementTimeoutMessage(getRawErrorMessage(error))) {
+      const minimumFallbackLimit = Math.min(limit, 10);
+      const fallbackLimits: number[] = [];
+      let nextLimit = Math.max(minimumFallbackLimit, Math.ceil(limit / 2));
+
+      while (nextLimit < limit) {
+        fallbackLimits.push(nextLimit);
+        if (nextLimit === minimumFallbackLimit) break;
+        nextLimit = Math.max(minimumFallbackLimit, Math.ceil(nextLimit / 2));
+      }
+
+      for (const fallbackLimit of fallbackLimits) {
+        try {
+          return await runShardPageQuery({
+            client,
+            modeConfig,
+            filters,
+            offset,
+            limit: fallbackLimit,
+            sortColumns: modeConfig.defaultSort,
+            maxRetries: 0,
+          });
+        } catch (reducedError) {
+          if (!isStatementTimeoutMessage(getRawErrorMessage(reducedError))) {
+            throw reducedError;
+          }
+        }
+      }
+
+      for (const fallbackLimit of fallbackLimits.length > 0 ? fallbackLimits : [minimumFallbackLimit]) {
+        try {
+          return await runShardPageQuery({
+            client,
+            modeConfig,
+            filters,
+            offset,
+            limit: fallbackLimit,
+            sortColumns: [],
+            maxRetries: 0,
+          });
+        } catch (unorderedFallbackError) {
+          if (!isStatementTimeoutMessage(getRawErrorMessage(unorderedFallbackError))) {
+            throw unorderedFallbackError;
+          }
+        }
+      }
+
+      if (modeConfig.idColumn) {
+        for (const fallbackLimit of fallbackLimits.length > 0 ? fallbackLimits : [minimumFallbackLimit]) {
+          try {
+            return await runShardPageQuery({
+              client,
+              modeConfig,
+              filters,
+              offset,
+              limit: Math.max(minimumFallbackLimit, Math.min(fallbackLimit, DEFAULT_SEARCH_PAGE_SIZE)),
+              sortColumns: [modeConfig.idColumn],
+              maxRetries: 0,
+            });
+          } catch (idFallbackError) {
+            if (!isStatementTimeoutMessage(getRawErrorMessage(idFallbackError))) {
+              throw idFallbackError;
+            }
+          }
+        }
+      }
+    }
+
+    throw error;
+  }
+};
+
+const fetchProspectPageWithAdaptiveFilters = async ({
+  shard,
+  client,
+  modeConfig,
+  payload,
+  offset,
+  seenKeys,
+}: {
+  shard: any;
+  client: any;
+  modeConfig: any;
+  payload: any;
+  offset: number;
+  seenKeys: Set<string>;
+}) => {
+  const pageSize = clampPageSize(payload.pageSize);
+  const plans = buildProspectAdaptiveFilterPlans(payload.filters);
+
+  for (const plan of plans) {
+    const limit = getShardBatchLimit("prospects", modeConfig, pageSize, plan.sqlFilters);
+    let nextOffset = offset;
+    let exhausted = false;
+    let scannedCount = offset;
+    let consumedBase = offset;
+    const matchedRows = [];
+    const localSeenKeys = new Set(seenKeys instanceof Set ? [...seenKeys] : []);
+
+    try {
+      for (let batchIndex = 0; batchIndex < MAX_SEARCH_BATCHES_PER_SHARD; batchIndex += 1) {
+        const result = await runShardPageQueryWithFallback({
+          client,
+          modeConfig,
+          filters: plan.sqlFilters,
+          offset: nextOffset,
+          limit,
+        });
+
+        const { data, error } = result;
+        if (error) throw error;
+
+        const batchRows = Array.isArray(data) ? data : [];
+        if (batchRows.length === 0) {
+          exhausted = true;
+          break;
+        }
+
+        for (let index = 0; index < batchRows.length; index += 1) {
+          const normalized = modeConfig.normalize(batchRows[index], shard.index);
+          const rowKey = getRowDedupeKey("prospects", normalized);
+          if (localSeenKeys.has(rowKey)) continue;
+          if (!prospectRowMatchesFilters(normalized, payload.filters)) continue;
+
+          matchedRows.push({
+            ...normalized,
+            rowUsageByShard: {
+              [String(shard.index)]: nextOffset + index + 1 - consumedBase,
+            },
+          });
+          localSeenKeys.add(rowKey);
+          consumedBase = nextOffset + index + 1;
+
+          if (matchedRows.length >= pageSize + 1) {
+            break;
+          }
+        }
+
+        nextOffset += batchRows.length;
+        scannedCount = Math.max(scannedCount, nextOffset);
+        exhausted = batchRows.length < limit;
+
+        if (matchedRows.length >= pageSize + 1 || exhausted) {
+          break;
+        }
+      }
+
+      return {
+        status: "healthy",
+        shard,
+        rows: matchedRows,
+        count: scannedCount,
+        offset,
+        exhausted,
+        emptyConsumed: matchedRows.length === 0 ? Math.max(0, scannedCount - offset) : 0,
+        fallbackPlan: plan.label,
+      };
+    } catch (error) {
+      if (!isStatementTimeoutMessage(getRawErrorMessage(error))) {
+        throw error;
+      }
+    }
+  }
+
+  return null;
 };
 
 const runShardCountEstimateQuery = async ({
@@ -1214,7 +1803,7 @@ const fetchShardCountEstimate = async (mode: "prospects" | "companies", shard: a
   const modeConfig = getModeConfig(mode);
   const client = shardClients.get(shard.index);
 
-  if (!client) return null;
+  if (!client || shouldSkipCountEstimate(mode, filters)) return null;
 
   try {
     const { count, error } = await executeShardOperation(() =>
@@ -1256,12 +1845,12 @@ const fetchShardPage = async (
   }
 
   if (modeConfig.derivedFromProspects) {
-    const limit = Math.min(pageSize * 12, 400);
+    const limit = getShardBatchLimit(mode, modeConfig, pageSize, payload.filters);
     let count = 0;
     const shouldScanExhaustively =
       offset === 0 &&
       hasActiveFilters(payload.filters) &&
-      Number.isFinite(Number(estimatedCount)) &&
+      hasFiniteNumericValue(estimatedCount) &&
       Number(estimatedCount) <= EXHAUSTIVE_SCAN_ESTIMATE_THRESHOLD;
     let nextOffset = offset;
     let rawRows = [];
@@ -1271,16 +1860,13 @@ const fetchShardPage = async (
 
     try {
       for (let batchIndex = 0; batchIndex < MAX_SEARCH_BATCHES_PER_SHARD; batchIndex += 1) {
-        const result = await executeShardOperation(() =>
-          runShardQuery({
-            client,
-            modeConfig,
-            filters: payload.filters,
-            offset: nextOffset,
-            limit,
-            includeCount: false,
-          }),
-        );
+        const result = await runShardPageQueryWithFallback({
+          client,
+          modeConfig,
+          filters: payload.filters,
+          offset: nextOffset,
+          limit,
+        });
 
         const { data, error } = result;
         if (error) throw error;
@@ -1333,14 +1919,14 @@ const fetchShardPage = async (
     }
   }
 
-  const limit = Math.min(pageSize * 4, 200);
+  const limit = getShardBatchLimit(mode, modeConfig, pageSize, payload.filters);
 
   try {
     let count = 0;
     const shouldScanExhaustively =
       offset === 0 &&
       hasActiveFilters(payload.filters) &&
-      Number.isFinite(Number(estimatedCount)) &&
+      hasFiniteNumericValue(estimatedCount) &&
       Number(estimatedCount) <= EXHAUSTIVE_SCAN_ESTIMATE_THRESHOLD;
     let nextOffset = offset;
     let rawRows = [];
@@ -1349,16 +1935,13 @@ const fetchShardPage = async (
     let exhausted = false;
 
     for (let batchIndex = 0; batchIndex < MAX_SEARCH_BATCHES_PER_SHARD; batchIndex += 1) {
-      const result = await executeShardOperation(() =>
-        runShardQuery({
-          client,
-          modeConfig,
-          filters: payload.filters,
-          offset: nextOffset,
-          limit,
-          includeCount: false,
-        }),
-      );
+      const result = await runShardPageQueryWithFallback({
+        client,
+        modeConfig,
+        filters: payload.filters,
+        offset: nextOffset,
+        limit,
+      });
 
       const { data, error } = result;
       if (error) throw error;
@@ -1391,6 +1974,20 @@ const fetchShardPage = async (
       exhausted,
     };
   } catch (error) {
+    if (mode === "prospects" && isStatementTimeoutMessage(getRawErrorMessage(error))) {
+      const adaptiveResult = await fetchProspectPageWithAdaptiveFilters({
+        shard,
+        client,
+        modeConfig,
+        payload,
+        offset,
+        seenKeys,
+      });
+      if (adaptiveResult) {
+        return adaptiveResult;
+      }
+    }
+
     return {
       status: "failed",
       shard,
@@ -1425,7 +2022,7 @@ const fetchShardAllRows = async (
   }
 
   if (modeConfig.derivedFromProspects) {
-    const limit = Math.min(pageSize * 12, 400);
+    const limit = getShardBatchLimit(mode, modeConfig, pageSize, payload.filters);
     let nextOffset = 0;
     let rawRows = [];
     let groupedRows = [];
@@ -1433,16 +2030,13 @@ const fetchShardAllRows = async (
 
     try {
       for (let batchIndex = 0; batchIndex < MAX_SEARCH_BATCHES_PER_SHARD; batchIndex += 1) {
-        const result = await executeShardOperation(() =>
-          runShardQuery({
-            client,
-            modeConfig,
-            filters: payload.filters,
-            offset: nextOffset,
-            limit,
-            includeCount: false,
-          }),
-        );
+        const result = await runShardPageQueryWithFallback({
+          client,
+          modeConfig,
+          filters: payload.filters,
+          offset: nextOffset,
+          limit,
+        });
 
         const { data, error } = result;
         if (error) throw error;
@@ -1487,23 +2081,20 @@ const fetchShardAllRows = async (
     }
   }
 
-  const limit = Math.min(pageSize * 4, 200);
+  const limit = getShardBatchLimit(mode, modeConfig, pageSize, payload.filters);
   let nextOffset = 0;
   let rawRows = [];
   let exhausted = false;
 
   try {
     for (let batchIndex = 0; batchIndex < MAX_SEARCH_BATCHES_PER_SHARD; batchIndex += 1) {
-      const result = await executeShardOperation(() =>
-        runShardQuery({
-          client,
-          modeConfig,
-          filters: payload.filters,
-          offset: nextOffset,
-          limit,
-          includeCount: false,
-        }),
-      );
+      const result = await runShardPageQueryWithFallback({
+        client,
+        modeConfig,
+        filters: payload.filters,
+        offset: nextOffset,
+        limit,
+      });
 
       const { data, error } = result;
       if (error) throw error;
@@ -1575,7 +2166,9 @@ const buildNextCursor = (
     .forEach((entry) => {
       const current = Number(currentOffsets?.[String(entry.shard.index)] || 0);
       const consumed = perShardConsumed.get(entry.shard.index) || 0;
-      nextOffsets[String(entry.shard.index)] = current + consumed;
+      const fallbackConsumed =
+        consumed > 0 ? 0 : Math.max(0, Number(entry.emptyConsumed || 0));
+      nextOffsets[String(entry.shard.index)] = current + consumed + fallbackConsumed;
     });
 
   const hasMore =
@@ -1610,6 +2203,7 @@ const runSearch = async (mode: "prospects" | "companies", payload: Record<string
       activeShards.map((shard: any) => fetchShardAllRows(mode, shard, searchPayload)),
     );
     const shardStatus = buildShardStatus(shardResults);
+    const hasShardFailures = shardResults.some((entry) => entry.status !== "healthy");
     const healthyResults = shardResults.filter((entry) => entry.status === "healthy");
 
     if (healthyResults.length === 0) {
@@ -1626,7 +2220,7 @@ const runSearch = async (mode: "prospects" | "companies", payload: Record<string
     const totalDisplay = totalExact ?? Number(cursor?.displayTotal || mergedRows.length);
 
     return {
-      items: items.map(({ rowUsageByShard, ...row }) => row),
+      items: items.map((row) => stripSearchResultRow(row)),
       nextCursor:
         totalExact !== null && nextOffset < mergedRows.length
           ? encodeCursor({
@@ -1637,7 +2231,7 @@ const runSearch = async (mode: "prospects" | "companies", payload: Record<string
             })
           : null,
       totalApprox: totalDisplay,
-      totalIsExact: totalExact !== null,
+      totalIsExact: totalExact !== null && !hasShardFailures,
       shardStatus,
     };
   }
@@ -1648,7 +2242,7 @@ const runSearch = async (mode: "prospects" | "companies", payload: Record<string
       ? new Set(cursor.seenKeys.map((value: unknown) => String(value || "")))
       : new Set<string>();
   const displayTotalFromCursor =
-    cursor?.mode === mode && Number.isFinite(Number(cursor?.displayTotal ?? cursor?.totalExact))
+    cursor?.mode === mode && hasFiniteNumericValue(cursor?.displayTotal ?? cursor?.totalExact)
       ? Number(cursor.displayTotal ?? cursor.totalExact)
       : null;
   const estimatedCounts =
@@ -1665,6 +2259,7 @@ const runSearch = async (mode: "prospects" | "companies", payload: Record<string
     ),
   );
   const shardStatus = buildShardStatus(shardResults);
+  const hasShardFailures = shardResults.some((entry) => entry.status !== "healthy");
   const healthyResults = shardResults.filter((entry) => entry.status === "healthy");
 
   if (healthyResults.length === 0) {
@@ -1679,7 +2274,7 @@ const runSearch = async (mode: "prospects" | "companies", payload: Record<string
   const items = availableRows.slice(0, searchPayload.pageSize);
   const totalExact = healthyResults.every((entry) => entry.exhausted) ? mergedRows.length : null;
   const estimatedTotal =
-    Array.isArray(estimatedCounts) && estimatedCounts.some((value) => Number.isFinite(Number(value)))
+    Array.isArray(estimatedCounts) && estimatedCounts.some((value) => hasFiniteNumericValue(value))
       ? estimatedCounts.reduce((sum, value) => sum + Number(value || 0), 0)
       : null;
   const totalApprox =
@@ -1689,10 +2284,10 @@ const runSearch = async (mode: "prospects" | "companies", payload: Record<string
     shardResults.reduce((sum, entry) => sum + Number(entry.count || 0), 0);
 
   return {
-    items: items.map(({ rowUsageByShard, ...row }) => row),
+    items: items.map((row) => stripSearchResultRow(row)),
     nextCursor: buildNextCursor(mode, offsets, items, shardResults, availableRows.length, priorSeenKeys, totalApprox),
     totalApprox,
-    totalIsExact: totalExact !== null,
+    totalIsExact: totalExact !== null && !hasShardFailures,
     shardStatus,
   };
 };

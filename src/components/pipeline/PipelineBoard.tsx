@@ -19,7 +19,7 @@ import {
   AlertDialogTitle,
 } from '@/components/ui/alert-dialog';
 import { cn } from '@/lib/utils';
-import { formatDistanceToNow } from 'date-fns';
+import { format, formatDistanceToNow, parseISO } from 'date-fns';
 import {
   CalendarClock,
   ChevronDown,
@@ -35,6 +35,11 @@ import {
   formatCurrency,
   isOpportunityStale,
 } from '@/lib/pipeline';
+import {
+  FORECAST_CATEGORY_META,
+  getForecastCategoryLabel,
+  isOpportunityCloseDateOverdue,
+} from '@/lib/pipelineForecasting';
 
 const toneClasses: Record<PipelineStage['tone'], string> = {
   emerald: 'border-emerald-200 text-emerald-700 bg-emerald-50',
@@ -329,6 +334,9 @@ const PipelineCardRow = ({ index, style, data }: any) => {
   const isFocused = data.focusedOpportunityId === opportunity.id;
   const hasTags = opportunity.tags && opportunity.tags.length > 0;
   const isHighValue = typeof opportunity.value === 'number' && opportunity.value >= 25000;
+  const isCloseDateOverdue = isOpportunityCloseDateOverdue(opportunity);
+  const forecastCategory = opportunity.forecastCategory || 'pipeline';
+  const forecastTone = FORECAST_CATEGORY_META[forecastCategory];
 
   return (
     <div style={style} className="px-1">
@@ -386,6 +394,11 @@ const PipelineCardRow = ({ index, style, data }: any) => {
                   High value
                 </Badge>
               )}
+              {isCloseDateOverdue && (
+                <Badge variant="secondary" className="bg-rose-50 text-rose-700 text-[10px] uppercase">
+                  Past due
+                </Badge>
+              )}
             </div>
             {data.onRemoveOpportunity && (
               <DropdownMenu>
@@ -416,6 +429,20 @@ const PipelineCardRow = ({ index, style, data }: any) => {
         <div className="mt-2 space-y-2 text-xs text-[var(--shell-muted)]">
           <div className="font-semibold text-[var(--shell-ink)]">
             {typeof opportunity.value === 'number' ? formatCurrency(opportunity.value) : 'Set value'}
+          </div>
+          <div className="flex flex-wrap items-center gap-2">
+            <Badge variant="outline" className={cn('text-[10px] uppercase', forecastTone.tone)}>
+              {getForecastCategoryLabel(forecastCategory)}
+            </Badge>
+            {typeof opportunity.forecastProbability === 'number' && (
+              <Badge variant="outline" className="border-slate-200 bg-white text-[10px] uppercase text-slate-600">
+                {Math.round(opportunity.forecastProbability)}%
+              </Badge>
+            )}
+          </div>
+          <div>
+            <span className="font-semibold text-[var(--shell-ink)]">Close:</span>{' '}
+            {opportunity.expectedCloseDate ? format(parseISO(opportunity.expectedCloseDate), 'MMM d') : 'Not set'}
           </div>
           <div>
             <span className="font-semibold text-[var(--shell-ink)]">Next:</span>{' '}

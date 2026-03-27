@@ -16,6 +16,11 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 import { formatDistanceToNow } from "date-fns";
 import { Mail, X } from "lucide-react";
 import type { PipelineOpportunity } from "@/lib/pipeline";
+import {
+  FORECAST_CATEGORY_META,
+  FORECAST_CATEGORY_OPTIONS,
+  getForecastCategoryLabel,
+} from "@/lib/pipelineForecasting";
 
 export type ActivityEntry = {
   id: string;
@@ -83,6 +88,17 @@ const PanelBody: React.FC<
         <div className="mt-2 flex flex-wrap items-center gap-2 text-xs text-slate-500">
           <span>Last activity {formatDistanceToNow(new Date(opportunity.lastActivityAt), { addSuffix: true })}</span>
           {opportunity.value && <span>· ${opportunity.value.toLocaleString()}</span>}
+          {opportunity.forecastCategory && (
+            <Badge
+              variant="outline"
+              className={FORECAST_CATEGORY_META[opportunity.forecastCategory].tone}
+            >
+              {getForecastCategoryLabel(opportunity.forecastCategory)}
+            </Badge>
+          )}
+          {typeof opportunity.forecastProbability === "number" && (
+            <span>· {Math.round(opportunity.forecastProbability)}% confidence</span>
+          )}
         </div>
       </div>
 
@@ -129,6 +145,49 @@ const PanelBody: React.FC<
                 onChange={(event) => onUpdate({ value: Number(event.target.value) || undefined })}
                 placeholder="12000"
               />
+            </div>
+            <div className="grid gap-2">
+              <Label className="text-xs text-slate-500">Expected close date</Label>
+              <Input
+                type="date"
+                value={opportunity.expectedCloseDate || ""}
+                onChange={(event) => onUpdate({ expectedCloseDate: event.target.value || null })}
+              />
+            </div>
+            <div className="grid gap-2 md:grid-cols-2">
+              <div className="grid gap-2">
+                <Label className="text-xs text-slate-500">Forecast category</Label>
+                <Select
+                  value={opportunity.forecastCategory || "pipeline"}
+                  onValueChange={(value) => onUpdate({ forecastCategory: value as PipelineOpportunity["forecastCategory"] })}
+                >
+                  <SelectTrigger className="h-9 bg-white">
+                    <SelectValue placeholder="Select category" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {FORECAST_CATEGORY_OPTIONS.map((option) => (
+                      <SelectItem key={option.value} value={option.value}>
+                        {option.label}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="grid gap-2">
+                <Label className="text-xs text-slate-500">Confidence %</Label>
+                <Input
+                  type="number"
+                  min={0}
+                  max={100}
+                  value={typeof opportunity.forecastProbability === "number" ? String(opportunity.forecastProbability) : ""}
+                  onChange={(event) =>
+                    onUpdate({
+                      forecastProbability: event.target.value === "" ? null : Number(event.target.value),
+                    })
+                  }
+                  placeholder="70"
+                />
+              </div>
             </div>
             <div className="grid gap-2">
               <Label className="text-xs text-slate-500">Next step</Label>
