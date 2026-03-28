@@ -116,8 +116,10 @@ const getFunctionErrorMessage = async (error: { message?: string; context?: unkn
 const DEFAULT_LOCAL_SEARCH_SERVICE_URL = "http://localhost:8788";
 const LOCAL_SEARCH_PROBE_TTL_MS = 15 * 1000;
 const LOCAL_SEARCH_SERVICE_URL = String(import.meta.env.VITE_SEARCH_SERVICE_URL || "").trim();
+const LOCAL_SEARCH_SERVICE_MODE = String(import.meta.env.VITE_USE_LOCAL_SEARCH_SERVICE || "").trim().toLowerCase();
 const USE_LOCAL_SEARCH_SERVICE =
-  String(import.meta.env.VITE_USE_LOCAL_SEARCH_SERVICE || "false").trim().toLowerCase() === "true";
+  LOCAL_SEARCH_SERVICE_MODE === "true" ||
+  (LOCAL_SEARCH_SERVICE_MODE !== "false" && Boolean(import.meta.env.DEV));
 let localSearchServiceProbeCache:
   | {
       checkedAt: number;

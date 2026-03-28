@@ -534,15 +534,31 @@ const rankCompany = (row) => {
   return score;
 };
 
+const compareSortIdentifier = (left, right) => {
+  const leftText = String(left || "").trim();
+  const rightText = String(right || "").trim();
+  const leftNumeric = /^-?\d+(?:\.\d+)?$/.test(leftText) ? Number(leftText) : null;
+  const rightNumeric = /^-?\d+(?:\.\d+)?$/.test(rightText) ? Number(rightText) : null;
+
+  if (leftNumeric !== null && rightNumeric !== null) {
+    return leftNumeric - rightNumeric;
+  }
+
+  return leftText.localeCompare(rightText);
+};
+
+// Cursor pagination advances raw shard offsets, so merged row ordering must mirror
+// the shard query ordering as closely as possible. Reordering by display fields like
+// full name can cause rows from page 1 to reappear on page 2.
 const compareProspects = (left, right) =>
   String(left.companyName || "").localeCompare(String(right.companyName || "")) ||
-  String(left.fullName || "").localeCompare(String(right.fullName || "")) ||
-  String(left.sourceRecordId || "").localeCompare(String(right.sourceRecordId || ""));
+  compareSortIdentifier(left.sourceRecordId, right.sourceRecordId);
 
 const compareCompanies = (left, right) =>
   String(left.companyName || "").localeCompare(String(right.companyName || "")) ||
   String(left.country || "").localeCompare(String(right.country || "")) ||
-  String(left.sourceRecordId || "").localeCompare(String(right.sourceRecordId || ""));
+  String(left.domain || "").localeCompare(String(right.domain || "")) ||
+  compareSortIdentifier(left.sourceRecordId, right.sourceRecordId);
 
 const normalizeRowUsageByShard = (row) => {
   if (row?.rowUsageByShard && typeof row.rowUsageByShard === "object") {
@@ -609,6 +625,14 @@ const mergeAndDedupeRows = (mode, rows) => {
   return merged;
 };
 
+const getRowDedupeKey = (mode, row) =>
+  mode === "prospects" ? buildProspectDedupeKey(row) : buildCompanyDedupeKey(row);
+
+const filterOutSeenRows = (mode, rows, seenKeys) => {
+  if (!(seenKeys instanceof Set) || seenKeys.size === 0) return rows;
+  return rows.filter((row) => !seenKeys.has(getRowDedupeKey(mode, row)));
+};
+
 const encodeCursor = (value) => Buffer.from(JSON.stringify(value), "utf8").toString("base64url");
 
 const decodeCursor = (value) => {
@@ -638,6 +662,8 @@ const sanitizeSearchPayload = (mode, payload = {}) => {
       filters: {
         jobTitle: String(filters.jobTitle || "").trim(),
         companyName: String(filters.companyName || "").trim(),
+        exactCompanyName: String(filters.exactCompanyName || "").trim(),
+        companyDomain: String(filters.companyDomain || "").trim(),
         naics: String(filters.naics || "").trim(),
         jobLevel: normalizeList(filters.jobLevel),
         jobFunction: normalizeList(filters.jobFunction),
@@ -681,6 +707,8 @@ export {
   decodeCursor,
   decodeJwtPayload,
   encodeCursor,
+  filterOutSeenRows,
+  getRowDedupeKey,
   mergeAndDedupeRows,
   normalizeCompanyRow,
   normalizeProspectRow,

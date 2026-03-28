@@ -419,6 +419,24 @@ const buildSelectColumns = (fieldGroups: Record<string, string[]>) => {
   return [...unique].join(",");
 };
 
+const buildColumnSelection = (...groups: Array<unknown>) => {
+  const unique = new Set<string>();
+  const append = (value: unknown) => {
+    if (Array.isArray(value)) {
+      value.forEach(append);
+      return;
+    }
+
+    const column = String(value || "").trim();
+    if (column) {
+      unique.add(column);
+    }
+  };
+
+  groups.forEach(append);
+  return [...unique].join(",");
+};
+
 const pickFirstValue = (record: Record<string, unknown>, candidates: string[]) => {
   for (const candidate of candidates) {
     const value = record?.[candidate];
@@ -1334,6 +1352,19 @@ const getModeConfig = (mode: "prospects" | "companies") => {
       source: schema.prospectSource,
       idColumn: schema.prospectIdColumn,
       selectColumns: buildSelectColumns(schema.prospectFields),
+      exactCountSelectColumns: buildColumnSelection(
+        schema.prospectIdColumn,
+        schema.prospectFields.fullName,
+        schema.prospectFields.firstName,
+        schema.prospectFields.lastName,
+        schema.prospectFields.email,
+        schema.prospectFields.linkedin,
+        schema.prospectFields.companyName,
+        schema.prospectFields.country,
+      ),
+      exactCountSort: [schema.prospectIdColumn],
+      extractExactCountKey: (record: Record<string, unknown>, shardIndex: number) =>
+        buildProspectDedupeKey(normalizeProspectRow(record, shardIndex, schema)),
       normalize: (record: Record<string, unknown>, shardIndex: number) => normalizeProspectRow(record, shardIndex, schema),
       defaultSort: [schema.prospectFilters.companyName, schema.prospectIdColumn],
       applyFilters: applyProspectFilters,
@@ -1354,6 +1385,15 @@ const getModeConfig = (mode: "prospects" | "companies") => {
       source: schema.prospectSource,
       idColumn: schema.prospectIdColumn,
       selectColumns: buildSelectColumns(schema.prospectFields),
+      exactCountSelectColumns: buildColumnSelection(
+        schema.prospectIdColumn,
+        schema.prospectFields.companyName,
+        schema.prospectFields.companyDomain,
+        schema.prospectFields.country,
+      ),
+      exactCountSort: [schema.prospectIdColumn],
+      extractExactCountKey: (record: Record<string, unknown>, shardIndex: number) =>
+        buildDerivedCompanyKey(normalizeProspectRow(record, shardIndex, schema)),
       normalize: null,
       defaultSort: [schema.prospectFilters.companyName, schema.prospectFilters.country, schema.prospectIdColumn],
       applyFilters: applyCompanyFilters,
@@ -1372,6 +1412,15 @@ const getModeConfig = (mode: "prospects" | "companies") => {
     source: schema.companySource,
     idColumn: schema.companyIdColumn,
     selectColumns: buildSelectColumns(schema.companyFields),
+    exactCountSelectColumns: buildColumnSelection(
+      schema.companyIdColumn,
+      schema.companyFields.name,
+      schema.companyFields.domain,
+      schema.companyFields.country,
+    ),
+    exactCountSort: [schema.companyIdColumn],
+    extractExactCountKey: (record: Record<string, unknown>, shardIndex: number) =>
+      buildCompanyDedupeKey(normalizeCompanyRow(record, shardIndex, schema)),
     normalize: (record: Record<string, unknown>, shardIndex: number) => normalizeCompanyRow(record, shardIndex, schema),
     defaultSort: [schema.companyFilters.companyName, schema.companyIdColumn],
     applyFilters: applyCompanyFilters,
@@ -1403,6 +1452,9 @@ const buildShardStatus = (runtimeResults: any[]) => {
     warnings,
   };
 };
+
+const shouldExposeShardStatus = (status: Record<string, unknown> | null | undefined) =>
+  Array.isArray(status?.warnings) && status.warnings.length > 0;
 
 const getQueryResultError = (result: any) =>
   result && typeof result === "object" && "error" in result ? result.error : null;
@@ -1533,8 +1585,35 @@ const getShardBatchLimit = (
   return hasBroadTextFilters(mode, filters) ? Math.min(pageSize + 5, 60) : Math.min(pageSize * 4, 200);
 };
 
-const shouldSkipCountEstimate = (mode: "prospects" | "companies", filters: Record<string, unknown> = {}) =>
-  hasBroadTextFilters(mode, filters);
+const getExhaustiveShardBatchLimit = (
+  mode: "prospects" | "companies",
+  modeConfig: any,
+  pageSize: number,
+  filters: Record<string, unknown> = {},
+) => {
+  const standardLimit = getShardBatchLimit(mode, modeConfig, pageSize, filters);
+  if (modeConfig.derivedFromProspects) {
+    return Math.max(standardLimit, Math.min(pageSize * 16, 400));
+  }
+  return Math.max(standardLimit, Math.min(pageSize * 8, 250));
+};
+
+const getExactCountShardBatchLimit = (
+  mode: "prospects" | "companies",
+  modeConfig: any,
+  pageSize: number,
+  filters: Record<string, unknown> = {},
+) =>
+  Math.max(
+    getExhaustiveShardBatchLimit(mode, modeConfig, pageSize, filters),
+    hasBroadTextFilters(mode, filters) ? Math.min(pageSize * 12, 300) : Math.min(pageSize * 16, 400),
+  );
+
+// Always attempt an estimate first. We use it not only for display, but also to
+// decide when it is safe to exhaustively scan and compute an exact deduped total.
+// Skipping the estimate for text filters can leave the UI with impossible totals
+// like page 4 existing while the header still says ~75 results.
+const shouldSkipCountEstimate = () => false;
 
 const runShardQuery = async ({
   client,
@@ -1544,6 +1623,7 @@ const runShardQuery = async ({
   limit,
   includeCount,
   sortColumns,
+  selectColumns,
 }: {
   client: any;
   modeConfig: any;
@@ -1552,8 +1632,11 @@ const runShardQuery = async ({
   limit: number;
   includeCount: boolean;
   sortColumns?: string[];
+  selectColumns?: string;
 }) => {
-  let query = client.from(modeConfig.source).select(modeConfig.selectColumns, includeCount ? { count: "planned" } : undefined);
+  let query = client
+    .from(modeConfig.source)
+    .select(selectColumns || modeConfig.selectColumns, includeCount ? { count: "planned" } : undefined);
   query = modeConfig.applyFilters(query, filters);
   for (const column of sortColumns || modeConfig.defaultSort) {
     query = query.order(column, { ascending: true, nullsFirst: false });
@@ -1568,6 +1651,7 @@ const runShardPageQuery = async ({
   offset,
   limit,
   sortColumns,
+  selectColumns,
   maxRetries = 2,
 }: {
   client: any;
@@ -1576,6 +1660,7 @@ const runShardPageQuery = async ({
   offset: number;
   limit: number;
   sortColumns?: string[];
+  selectColumns?: string;
   maxRetries?: number;
 }) => {
   const result = await executeShardOperation(
@@ -1588,6 +1673,7 @@ const runShardPageQuery = async ({
         limit,
         includeCount: false,
         sortColumns,
+        selectColumns,
       }),
     maxRetries,
   );
@@ -1602,12 +1688,18 @@ const runShardPageQueryWithFallback = async ({
   filters,
   offset,
   limit,
+  sortColumns,
+  selectColumns,
+  allowUnorderedFallback = true,
 }: {
   client: any;
   modeConfig: any;
   filters: any;
   offset: number;
   limit: number;
+  sortColumns?: string[];
+  selectColumns?: string;
+  allowUnorderedFallback?: boolean;
 }) => {
   try {
     return await runShardPageQuery({
@@ -1616,6 +1708,8 @@ const runShardPageQueryWithFallback = async ({
       filters,
       offset,
       limit,
+      sortColumns,
+      selectColumns,
     });
   } catch (error) {
     if (isStatementTimeoutMessage(getRawErrorMessage(error))) {
@@ -1637,7 +1731,8 @@ const runShardPageQueryWithFallback = async ({
             filters,
             offset,
             limit: fallbackLimit,
-            sortColumns: modeConfig.defaultSort,
+            sortColumns: sortColumns || modeConfig.defaultSort,
+            selectColumns,
             maxRetries: 0,
           });
         } catch (reducedError) {
@@ -1647,20 +1742,23 @@ const runShardPageQueryWithFallback = async ({
         }
       }
 
-      for (const fallbackLimit of fallbackLimits.length > 0 ? fallbackLimits : [minimumFallbackLimit]) {
-        try {
-          return await runShardPageQuery({
-            client,
-            modeConfig,
-            filters,
-            offset,
-            limit: fallbackLimit,
-            sortColumns: [],
-            maxRetries: 0,
-          });
-        } catch (unorderedFallbackError) {
-          if (!isStatementTimeoutMessage(getRawErrorMessage(unorderedFallbackError))) {
-            throw unorderedFallbackError;
+      if (allowUnorderedFallback) {
+        for (const fallbackLimit of fallbackLimits.length > 0 ? fallbackLimits : [minimumFallbackLimit]) {
+          try {
+            return await runShardPageQuery({
+              client,
+              modeConfig,
+              filters,
+              offset,
+              limit: fallbackLimit,
+              sortColumns: [],
+              selectColumns,
+              maxRetries: 0,
+            });
+          } catch (unorderedFallbackError) {
+            if (!isStatementTimeoutMessage(getRawErrorMessage(unorderedFallbackError))) {
+              throw unorderedFallbackError;
+            }
           }
         }
       }
@@ -1675,6 +1773,7 @@ const runShardPageQueryWithFallback = async ({
               offset,
               limit: Math.max(minimumFallbackLimit, Math.min(fallbackLimit, DEFAULT_SEARCH_PAGE_SIZE)),
               sortColumns: [modeConfig.idColumn],
+              selectColumns,
               maxRetries: 0,
             });
           } catch (idFallbackError) {
@@ -1785,16 +1884,24 @@ const fetchProspectPageWithAdaptiveFilters = async ({
   return null;
 };
 
+const getCountQueryMode = (mode: "prospects" | "companies", filters: Record<string, unknown> = {}) =>
+  hasBroadTextFilters(mode, filters) ? "estimated" : "exact";
+
 const runShardCountEstimateQuery = async ({
   client,
   modeConfig,
+  mode,
   filters,
 }: {
   client: any;
   modeConfig: any;
+  mode: "prospects" | "companies";
   filters: any;
 }) => {
-  let query = client.from(modeConfig.source).select(modeConfig.idColumn, { count: "estimated", head: true });
+  let query = client.from(modeConfig.source).select(modeConfig.idColumn, {
+    count: getCountQueryMode(mode, filters),
+    head: true,
+  });
   query = modeConfig.applyFilters(query, filters);
   return query;
 };
@@ -1810,6 +1917,7 @@ const fetchShardCountEstimate = async (mode: "prospects" | "companies", shard: a
       runShardCountEstimateQuery({
         client,
         modeConfig,
+        mode,
         filters,
       }),
     );
@@ -1845,7 +1953,7 @@ const fetchShardPage = async (
   }
 
   if (modeConfig.derivedFromProspects) {
-    const limit = getShardBatchLimit(mode, modeConfig, pageSize, payload.filters);
+    const limit = getExhaustiveShardBatchLimit(mode, modeConfig, pageSize, payload.filters);
     let count = 0;
     const shouldScanExhaustively =
       offset === 0 &&
@@ -1919,7 +2027,7 @@ const fetchShardPage = async (
     }
   }
 
-  const limit = getShardBatchLimit(mode, modeConfig, pageSize, payload.filters);
+  const limit = getExhaustiveShardBatchLimit(mode, modeConfig, pageSize, payload.filters);
 
   try {
     let count = 0;
@@ -2022,7 +2130,7 @@ const fetchShardAllRows = async (
   }
 
   if (modeConfig.derivedFromProspects) {
-    const limit = getShardBatchLimit(mode, modeConfig, pageSize, payload.filters);
+    const limit = getExhaustiveShardBatchLimit(mode, modeConfig, pageSize, payload.filters);
     let nextOffset = 0;
     let rawRows = [];
     let groupedRows = [];
@@ -2081,7 +2189,7 @@ const fetchShardAllRows = async (
     }
   }
 
-  const limit = getShardBatchLimit(mode, modeConfig, pageSize, payload.filters);
+  const limit = getExhaustiveShardBatchLimit(mode, modeConfig, pageSize, payload.filters);
   let nextOffset = 0;
   let rawRows = [];
   let exhausted = false;
@@ -2133,6 +2241,87 @@ const fetchShardAllRows = async (
   }
 };
 
+const fetchShardExactCountKeys = async (
+  mode: "prospects" | "companies",
+  shard: any,
+  payload: any,
+) => {
+  const modeConfig = getModeConfig(mode);
+  const client = shardClients.get(shard.index);
+  const pageSize = clampPageSize(payload.pageSize);
+  const limit = getExactCountShardBatchLimit(mode, modeConfig, pageSize, payload.filters);
+
+  if (!client) {
+    return {
+      status: "failed",
+      shard,
+      keys: [],
+      count: 0,
+      offset: 0,
+      exhausted: true,
+      reason: "Shard client is not available",
+    };
+  }
+
+  try {
+    let nextOffset = 0;
+    let exhausted = false;
+    const dedupeKeys = new Set<string>();
+
+    for (let batchIndex = 0; batchIndex < MAX_SEARCH_BATCHES_PER_SHARD; batchIndex += 1) {
+      const result = await runShardPageQueryWithFallback({
+        client,
+        modeConfig,
+        filters: payload.filters,
+        offset: nextOffset,
+        limit,
+        sortColumns: modeConfig.exactCountSort,
+        selectColumns: modeConfig.exactCountSelectColumns,
+        allowUnorderedFallback: false,
+      });
+
+      const { data, error } = result;
+      if (error) throw error;
+
+      const batchRecords = Array.isArray(data) ? data : [];
+      if (batchRecords.length === 0) {
+        exhausted = true;
+        break;
+      }
+
+      batchRecords.forEach((record: Record<string, unknown>) => {
+        const dedupeKey = String(modeConfig.extractExactCountKey(record, shard.index) || "").trim();
+        if (dedupeKey) {
+          dedupeKeys.add(dedupeKey);
+        }
+      });
+
+      nextOffset += batchRecords.length;
+      exhausted = batchRecords.length < limit;
+      if (exhausted) break;
+    }
+
+    return {
+      status: "healthy",
+      shard,
+      keys: [...dedupeKeys],
+      count: nextOffset,
+      offset: 0,
+      exhausted,
+    };
+  } catch (error) {
+    return {
+      status: "failed",
+      shard,
+      keys: [],
+      count: 0,
+      offset: 0,
+      exhausted: true,
+      reason: getErrorMessage(error) || "Search query failed",
+    };
+  }
+};
+
 const buildNextCursor = (
   mode: "prospects" | "companies",
   currentOffsets: Record<string, number>,
@@ -2141,6 +2330,7 @@ const buildNextCursor = (
   availableRowCount: number,
   priorSeenKeys: Set<string>,
   displayTotal?: number | null,
+  displayTotalIsExact = false,
 ) => {
   const nextOffsets = { ...(currentOffsets || {}) };
   const perShardConsumed = new Map();
@@ -2183,8 +2373,78 @@ const buildNextCursor = (
         offsets: nextOffsets,
         seenKeys: [...nextSeenKeys],
         ...(Number.isFinite(Number(displayTotal)) ? { displayTotal: Number(displayTotal) } : {}),
+        ...(displayTotalIsExact ? { displayTotalIsExact: true } : {}),
       })
     : null;
+};
+
+const runExhaustiveSearch = async (
+  mode: "prospects" | "companies",
+  searchPayload: ReturnType<typeof sanitizeSearchPayload>,
+  exhaustiveOffset: number,
+  displayTotalHint: number | null = null,
+) => {
+  const shardResults = await Promise.all(
+    activeShards.map((shard: any) => fetchShardAllRows(mode, shard, searchPayload)),
+  );
+  const shardStatus = buildShardStatus(shardResults);
+  const hasShardFailures = shardResults.some((entry) => entry.status !== "healthy");
+  const healthyResults = shardResults.filter((entry) => entry.status === "healthy");
+
+  if (healthyResults.length === 0) {
+    throw createHttpError("All configured search shards failed.", 503, { shardStatus });
+  }
+
+  const mergedRows = mergeAndDedupeRows(
+    mode,
+    healthyResults.flatMap((entry) => entry.rows),
+  );
+  const totalExact = healthyResults.every((entry) => entry.exhausted) ? mergedRows.length : null;
+  const items = mergedRows.slice(exhaustiveOffset, exhaustiveOffset + searchPayload.pageSize);
+  const nextOffset = exhaustiveOffset + items.length;
+  const totalFloor = mergedRows.length;
+  const totalDisplay = Math.max(totalFloor, Number(totalExact ?? displayTotalHint ?? 0));
+
+  return {
+    items: items.map((row) => stripSearchResultRow(row)),
+    nextCursor:
+      nextOffset < mergedRows.length
+        ? encodeCursor({
+            mode,
+            pagination: "exhaustive",
+            offset: nextOffset,
+            displayTotal: totalExact ?? totalDisplay,
+            ...(totalExact !== null && !hasShardFailures ? { displayTotalIsExact: true } : {}),
+          })
+        : null,
+    totalApprox: totalExact ?? totalDisplay,
+    totalIsExact: totalExact !== null && !hasShardFailures,
+    ...(shouldExposeShardStatus(shardStatus) ? { shardStatus } : {}),
+  };
+};
+
+const resolveExactTotal = async (
+  mode: "prospects" | "companies",
+  searchPayload: ReturnType<typeof sanitizeSearchPayload>,
+) => {
+  const shardResults = await Promise.all(
+    activeShards.map((shard: any) => fetchShardExactCountKeys(mode, shard, searchPayload)),
+  );
+  const hasShardFailures = shardResults.some((entry) => entry.status !== "healthy");
+  const healthyResults = shardResults.filter((entry) => entry.status === "healthy");
+
+  if (healthyResults.length === 0) {
+    return { totalExact: null, totalIsExact: false };
+  }
+
+  const dedupeKeys = new Set(
+    healthyResults.flatMap((entry) => (Array.isArray(entry.keys) ? entry.keys : [])),
+  );
+
+  return {
+    totalExact: healthyResults.every((entry) => entry.exhausted) ? dedupeKeys.size : null,
+    totalIsExact: !hasShardFailures,
+  };
 };
 
 const runSearch = async (mode: "prospects" | "companies", payload: Record<string, unknown>) => {
@@ -2194,61 +2454,37 @@ const runSearch = async (mode: "prospects" | "companies", payload: Record<string
 
   const searchPayload = sanitizeSearchPayload(mode, payload);
   const cursor = decodeCursor(searchPayload.cursor);
-  const exhaustiveOffset =
-    cursor?.mode === mode && cursor?.pagination === "exhaustive" && Number.isFinite(Number(cursor?.offset))
-      ? Math.max(0, Number(cursor.offset))
-      : 0;
-  if (cursor?.mode === mode && cursor?.pagination === "exhaustive") {
-    const shardResults = await Promise.all(
-      activeShards.map((shard: any) => fetchShardAllRows(mode, shard, searchPayload)),
-    );
-    const shardStatus = buildShardStatus(shardResults);
-    const hasShardFailures = shardResults.some((entry) => entry.status !== "healthy");
-    const healthyResults = shardResults.filter((entry) => entry.status === "healthy");
-
-    if (healthyResults.length === 0) {
-      throw createHttpError("All configured search shards failed.", 503, { shardStatus });
-    }
-
-    const mergedRows = mergeAndDedupeRows(
-      mode,
-      healthyResults.flatMap((entry) => entry.rows),
-    );
-    const totalExact = healthyResults.every((entry) => entry.exhausted) ? mergedRows.length : null;
-    const items = mergedRows.slice(exhaustiveOffset, exhaustiveOffset + searchPayload.pageSize);
-    const nextOffset = exhaustiveOffset + items.length;
-    const totalDisplay = totalExact ?? Number(cursor?.displayTotal || mergedRows.length);
-
-    return {
-      items: items.map((row) => stripSearchResultRow(row)),
-      nextCursor:
-        totalExact !== null && nextOffset < mergedRows.length
-          ? encodeCursor({
-              mode,
-              pagination: "exhaustive",
-              offset: nextOffset,
-              displayTotal: totalExact,
-            })
-          : null,
-      totalApprox: totalDisplay,
-      totalIsExact: totalExact !== null && !hasShardFailures,
-      shardStatus,
-    };
-  }
-  const offsets =
-    cursor?.mode === mode && cursor?.offsets && typeof cursor.offsets === "object" ? cursor.offsets : {};
   const priorSeenKeys =
     cursor?.mode === mode && Array.isArray(cursor?.seenKeys)
       ? new Set(cursor.seenKeys.map((value: unknown) => String(value || "")))
       : new Set<string>();
+  const exhaustiveOffset =
+    cursor?.mode === mode && cursor?.pagination === "exhaustive" && Number.isFinite(Number(cursor?.offset))
+      ? Math.max(0, Number(cursor.offset))
+      : priorSeenKeys.size;
   const displayTotalFromCursor =
     cursor?.mode === mode && hasFiniteNumericValue(cursor?.displayTotal ?? cursor?.totalExact)
       ? Number(cursor.displayTotal ?? cursor.totalExact)
       : null;
+  const displayTotalIsExactFromCursor =
+    cursor?.mode === mode && (cursor?.displayTotalIsExact === true || cursor?.totalIsExact === true);
   const estimatedCounts =
-    displayTotalFromCursor === null
-      ? await Promise.all(activeShards.map((shard: any) => fetchShardCountEstimate(mode, shard, searchPayload.filters)))
+    cursor?.mode === mode && cursor?.pagination === "exhaustive"
+      ? null
+      : displayTotalFromCursor === null
+        ? await Promise.all(activeShards.map((shard: any) => fetchShardCountEstimate(mode, shard, searchPayload.filters)))
+        : null;
+  const estimatedTotal =
+    Array.isArray(estimatedCounts) && estimatedCounts.some((value) => hasFiniteNumericValue(value))
+      ? estimatedCounts.reduce((sum, value) => sum + Number(value || 0), 0)
       : null;
+  const shouldUseExhaustivePagination = cursor?.mode === mode && cursor?.pagination === "exhaustive";
+
+  if (shouldUseExhaustivePagination) {
+    return runExhaustiveSearch(mode, searchPayload, exhaustiveOffset, displayTotalFromCursor ?? estimatedTotal);
+  }
+  const offsets =
+    cursor?.mode === mode && cursor?.offsets && typeof cursor.offsets === "object" ? cursor.offsets : {};
   const estimatedCountByShard = new Map(
     activeShards.map((shard: any, index: number) => [shard.index, Array.isArray(estimatedCounts) ? estimatedCounts[index] : null]),
   );
@@ -2272,23 +2508,49 @@ const runSearch = async (mode: "prospects" | "companies", payload: Record<string
   );
   const availableRows = filterOutSeenRows(mode, mergedRows, priorSeenKeys);
   const items = availableRows.slice(0, searchPayload.pageSize);
-  const totalExact = healthyResults.every((entry) => entry.exhausted) ? mergedRows.length : null;
-  const estimatedTotal =
-    Array.isArray(estimatedCounts) && estimatedCounts.some((value) => hasFiniteNumericValue(value))
-      ? estimatedCounts.reduce((sum, value) => sum + Number(value || 0), 0)
-      : null;
-  const totalApprox =
-    displayTotalFromCursor ??
-    totalExact ??
-    estimatedTotal ??
-    shardResults.reduce((sum, entry) => sum + Number(entry.count || 0), 0);
+  const totalFloor = priorSeenKeys.size + availableRows.length;
+  const totalExact = healthyResults.every((entry) => entry.exhausted) ? totalFloor : null;
+  const fallbackApprox = shardResults.reduce((sum, entry) => sum + Number(entry.count || 0), 0);
+  const totalApprox = Math.max(
+    totalFloor,
+    Number(totalExact ?? displayTotalFromCursor ?? estimatedTotal ?? fallbackApprox),
+  );
+  let resolvedTotalApprox = totalApprox;
+  let resolvedTotalIsExact = (totalExact !== null && !hasShardFailures) || (displayTotalIsExactFromCursor && !hasShardFailures);
+
+  const shouldResolveExactTotal =
+    hasActiveFilters(searchPayload.filters) &&
+    !hasShardFailures &&
+    (
+      (displayTotalFromCursor === null &&
+        hasFiniteNumericValue(estimatedTotal) &&
+        Number(estimatedTotal) <= EXHAUSTIVE_SCAN_ESTIMATE_THRESHOLD) ||
+      (displayTotalFromCursor !== null && displayTotalFromCursor < totalFloor)
+    );
+
+  if (shouldResolveExactTotal) {
+    const exactResolution = await resolveExactTotal(mode, searchPayload);
+    if (exactResolution.totalExact !== null && exactResolution.totalIsExact) {
+      resolvedTotalApprox = exactResolution.totalExact;
+      resolvedTotalIsExact = true;
+    }
+  }
 
   return {
     items: items.map((row) => stripSearchResultRow(row)),
-    nextCursor: buildNextCursor(mode, offsets, items, shardResults, availableRows.length, priorSeenKeys, totalApprox),
-    totalApprox,
-    totalIsExact: totalExact !== null && !hasShardFailures,
-    shardStatus,
+    nextCursor: buildNextCursor(
+      mode,
+      offsets,
+      items,
+      shardResults,
+      availableRows.length,
+      priorSeenKeys,
+      resolvedTotalApprox,
+      resolvedTotalIsExact,
+    ),
+    totalApprox: resolvedTotalApprox,
+    totalIsExact: resolvedTotalIsExact,
+    ...(shouldExposeShardStatus(shardStatus) ? { shardStatus } : {}),
   };
 };
 

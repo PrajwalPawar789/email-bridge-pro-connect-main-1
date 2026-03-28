@@ -893,16 +893,7 @@ const sendAutomationTestEmailViaProxy = async (
 export const sendAutomationTestEmail = async (
   payload: AutomationTestEmailRequest
 ) => {
-  if (import.meta.env.PROD) {
-    return sendAutomationTestEmailViaProxy(payload);
-  }
-
-  const { data, error } = await supabase.functions.invoke("automation-test-email", {
-    body: payload,
-  });
-
-  if (error) throw error;
-  return data;
+  return sendAutomationTestEmailViaProxy(payload);
 };
 
 export const loadAutomationDependencies = async (userId: string): Promise<AutomationDependencyData> => {

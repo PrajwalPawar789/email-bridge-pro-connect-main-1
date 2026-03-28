@@ -12,6 +12,8 @@ import {
   clampPageSize,
   decodeCursor,
   encodeCursor,
+  filterOutSeenRows,
+  getRowDedupeKey,
   mergeAndDedupeRows,
   normalizeCompanyRow,
   normalizeProspectRow,
@@ -100,6 +102,24 @@ const createHttpError = (message, statusCode = 500, extra = {}) => {
   error.statusCode = statusCode;
   Object.assign(error, extra);
   return error;
+};
+
+const buildColumnSelection = (...groups) => {
+  const unique = new Set();
+  const append = (value) => {
+    if (Array.isArray(value)) {
+      value.forEach(append);
+      return;
+    }
+
+    const column = String(value || "").trim();
+    if (column) {
+      unique.add(column);
+    }
+  };
+
+  groups.forEach(append);
+  return [...unique].join(",");
 };
 
 const getRawErrorMessage = (error) => {
@@ -248,6 +268,9 @@ const canManageContacts = (workspaceContext) => {
 const addTextFilter = (query, column, value) =>
   value ? query.ilike(column, `%${String(value).trim()}%`) : query;
 
+const addExactTextFilter = (query, column, value) =>
+  value && column ? query.eq(column, String(value).trim()) : query;
+
 const addInFilter = (query, column, values) =>
   Array.isArray(values) && values.length > 0
     ? values.length === 1
@@ -258,7 +281,15 @@ const addInFilter = (query, column, values) =>
 const applyProspectFilters = (query, filters) => {
   let next = query;
   next = addTextFilter(next, schema.prospectFilters.jobTitle, filters.jobTitle);
-  next = addTextFilter(next, schema.prospectFilters.companyName, filters.companyName);
+  if (filters.exactCompanyName) {
+    next = addExactTextFilter(next, schema.prospectFilters.companyName, filters.exactCompanyName);
+  } else {
+    next = addTextFilter(next, schema.prospectFilters.companyName, filters.companyName);
+  }
+  const companyDomainColumn = schema.prospectFields.companyDomain?.[0] || "";
+  if (companyDomainColumn) {
+    next = addExactTextFilter(next, companyDomainColumn, filters.companyDomain);
+  }
   next = addTextFilter(next, schema.prospectFilters.naics, filters.naics);
   next = addInFilter(next, schema.prospectFilters.jobLevel, filters.jobLevel);
   next = addInFilter(next, schema.prospectFilters.jobFunction, filters.jobFunction);
@@ -349,6 +380,19 @@ const getModeConfig = (mode) => {
       source: schema.prospectSource,
       idColumn: schema.prospectIdColumn,
       selectColumns: buildSelectColumns(schema.prospectFields),
+      exactCountSelectColumns: buildColumnSelection(
+        schema.prospectIdColumn,
+        schema.prospectFields.fullName,
+        schema.prospectFields.firstName,
+        schema.prospectFields.lastName,
+        schema.prospectFields.email,
+        schema.prospectFields.linkedin,
+        schema.prospectFields.companyName,
+        schema.prospectFields.country,
+      ),
+      exactCountSort: [schema.prospectIdColumn],
+      extractExactCountKey: (record, shardIndex) =>
+        getRowDedupeKey("prospects", normalizeProspectRow(record, shardIndex, schema)),
       normalize: (record, shardIndex) => normalizeProspectRow(record, shardIndex, schema),
       defaultSort: [schema.prospectFilters.companyName, schema.prospectIdColumn],
       applyFilters: applyProspectFilters,
@@ -369,6 +413,15 @@ const getModeConfig = (mode) => {
       source: schema.prospectSource,
       idColumn: schema.prospectIdColumn,
       selectColumns: buildSelectColumns(schema.prospectFields),
+      exactCountSelectColumns: buildColumnSelection(
+        schema.prospectIdColumn,
+        schema.prospectFields.companyName,
+        schema.prospectFields.companyDomain,
+        schema.prospectFields.country,
+      ),
+      exactCountSort: [schema.prospectIdColumn],
+      extractExactCountKey: (record, shardIndex) =>
+        buildDerivedCompanyKey(normalizeProspectRow(record, shardIndex, schema)),
       normalize: null,
       defaultSort: [schema.prospectFilters.companyName, schema.prospectFilters.country, schema.prospectIdColumn],
       applyFilters: applyCompanyFilters,
@@ -387,6 +440,15 @@ const getModeConfig = (mode) => {
     source: schema.companySource,
     idColumn: schema.companyIdColumn,
     selectColumns: buildSelectColumns(schema.companyFields),
+    exactCountSelectColumns: buildColumnSelection(
+      schema.companyIdColumn,
+      schema.companyFields.name,
+      schema.companyFields.domain,
+      schema.companyFields.country,
+    ),
+    exactCountSort: [schema.companyIdColumn],
+    extractExactCountKey: (record, shardIndex) =>
+      getRowDedupeKey("companies", normalizeCompanyRow(record, shardIndex, schema)),
     normalize: (record, shardIndex) => normalizeCompanyRow(record, shardIndex, schema),
     defaultSort: [schema.companyFilters.companyName, schema.companyIdColumn],
     applyFilters: applyCompanyFilters,
@@ -418,6 +480,8 @@ const buildShardStatus = (runtimeResults) => {
     warnings,
   };
 };
+
+const shouldExposeShardStatus = (status) => Array.isArray(status?.warnings) && status.warnings.length > 0;
 
 const normalizeRowUsageByShard = (row) => {
   if (row?.rowUsageByShard && typeof row.rowUsageByShard === "object") {
@@ -567,10 +631,30 @@ const getShardBatchLimit = (mode, modeConfig, pageSize, filters = {}) => {
   return hasBroadTextFilters(mode, filters) ? Math.min(pageSize + 5, 60) : Math.min(pageSize * 4, 200);
 };
 
-const shouldSkipCountEstimate = (mode, filters = {}) => hasBroadTextFilters(mode, filters);
+const getExhaustiveShardBatchLimit = (mode, modeConfig, pageSize, filters = {}) => {
+  const standardLimit = getShardBatchLimit(mode, modeConfig, pageSize, filters);
+  if (modeConfig.derivedFromProspects) {
+    return Math.max(standardLimit, Math.min(pageSize * 16, 400));
+  }
+  return Math.max(standardLimit, Math.min(pageSize * 8, 250));
+};
 
-const runShardQuery = async ({ client, modeConfig, filters, offset, limit, includeCount, sortColumns }) => {
-  let query = client.from(modeConfig.source).select(modeConfig.selectColumns, includeCount ? { count: "planned" } : undefined);
+const getExactCountShardBatchLimit = (mode, modeConfig, pageSize, filters = {}) =>
+  Math.max(
+    getExhaustiveShardBatchLimit(mode, modeConfig, pageSize, filters),
+    hasBroadTextFilters(mode, filters) ? Math.min(pageSize * 12, 300) : Math.min(pageSize * 16, 400),
+  );
+
+// Always attempt an estimate first. We use it not only for display, but also to
+// decide when it is safe to exhaustively scan and compute an exact deduped total.
+// Skipping the estimate for text filters can leave the UI with impossible totals
+// like page 4 existing while the header still says ~75 results.
+const shouldSkipCountEstimate = () => false;
+
+const runShardQuery = async ({ client, modeConfig, filters, offset, limit, includeCount, sortColumns, selectColumns }) => {
+  let query = client
+    .from(modeConfig.source)
+    .select(selectColumns || modeConfig.selectColumns, includeCount ? { count: "planned" } : undefined);
   query = modeConfig.applyFilters(query, filters);
   for (const column of sortColumns || modeConfig.defaultSort) {
     query = query.order(column, { ascending: true, nullsFirst: false });
@@ -578,7 +662,7 @@ const runShardQuery = async ({ client, modeConfig, filters, offset, limit, inclu
   return query.range(offset, offset + limit - 1);
 };
 
-const runShardPageQuery = async ({ client, modeConfig, filters, offset, limit, sortColumns, maxRetries = 2 }) => {
+const runShardPageQuery = async ({ client, modeConfig, filters, offset, limit, sortColumns, selectColumns, maxRetries = 2 }) => {
   const result = await executeShardOperation(
     () =>
       runShardQuery({
@@ -589,6 +673,7 @@ const runShardPageQuery = async ({ client, modeConfig, filters, offset, limit, s
         limit,
         includeCount: false,
         sortColumns,
+        selectColumns,
       }),
     maxRetries,
   );
@@ -597,7 +682,16 @@ const runShardPageQuery = async ({ client, modeConfig, filters, offset, limit, s
   return result;
 };
 
-const runShardPageQueryWithFallback = async ({ client, modeConfig, filters, offset, limit }) => {
+const runShardPageQueryWithFallback = async ({
+  client,
+  modeConfig,
+  filters,
+  offset,
+  limit,
+  sortColumns,
+  selectColumns,
+  allowUnorderedFallback = true,
+}) => {
   try {
     return await runShardPageQuery({
       client,
@@ -605,6 +699,8 @@ const runShardPageQueryWithFallback = async ({ client, modeConfig, filters, offs
       filters,
       offset,
       limit,
+      sortColumns,
+      selectColumns,
     });
   } catch (error) {
     if (String(getRawErrorMessage(error)).toLowerCase().includes("statement timeout")) {
@@ -626,7 +722,8 @@ const runShardPageQueryWithFallback = async ({ client, modeConfig, filters, offs
             filters,
             offset,
             limit: fallbackLimit,
-            sortColumns: modeConfig.defaultSort,
+            sortColumns: sortColumns || modeConfig.defaultSort,
+            selectColumns,
             maxRetries: 0,
           });
         } catch (reducedError) {
@@ -636,20 +733,23 @@ const runShardPageQueryWithFallback = async ({ client, modeConfig, filters, offs
         }
       }
 
-      for (const fallbackLimit of fallbackLimits.length > 0 ? fallbackLimits : [minimumFallbackLimit]) {
-        try {
-          return await runShardPageQuery({
-            client,
-            modeConfig,
-            filters,
-            offset,
-            limit: fallbackLimit,
-            sortColumns: [],
-            maxRetries: 0,
-          });
-        } catch (unorderedFallbackError) {
-          if (!String(getRawErrorMessage(unorderedFallbackError)).toLowerCase().includes("statement timeout")) {
-            throw unorderedFallbackError;
+      if (allowUnorderedFallback) {
+        for (const fallbackLimit of fallbackLimits.length > 0 ? fallbackLimits : [minimumFallbackLimit]) {
+          try {
+            return await runShardPageQuery({
+              client,
+              modeConfig,
+              filters,
+              offset,
+              limit: fallbackLimit,
+              sortColumns: [],
+              selectColumns,
+              maxRetries: 0,
+            });
+          } catch (unorderedFallbackError) {
+            if (!String(getRawErrorMessage(unorderedFallbackError)).toLowerCase().includes("statement timeout")) {
+              throw unorderedFallbackError;
+            }
           }
         }
       }
@@ -665,6 +765,7 @@ const runShardPageQueryWithFallback = async ({ client, modeConfig, filters, offs
               offset,
               limit: idLimit,
               sortColumns: [modeConfig.idColumn],
+              selectColumns,
               maxRetries: 0,
             });
           } catch (idFallbackError) {
@@ -767,8 +868,13 @@ const fetchProspectPageWithAdaptiveFilters = async ({
   return null;
 };
 
-const runShardCountEstimateQuery = async ({ client, modeConfig, filters }) => {
-  let query = client.from(modeConfig.source).select(modeConfig.idColumn, { count: "estimated", head: true });
+const getCountQueryMode = (mode, filters = {}) => (hasBroadTextFilters(mode, filters) ? "estimated" : "exact");
+
+const runShardCountEstimateQuery = async ({ client, modeConfig, mode, filters }) => {
+  let query = client.from(modeConfig.source).select(modeConfig.idColumn, {
+    count: getCountQueryMode(mode, filters),
+    head: true,
+  });
   query = modeConfig.applyFilters(query, filters);
   return query;
 };
@@ -784,6 +890,7 @@ const fetchShardCountEstimate = async (mode, shard, filters) => {
       runShardCountEstimateQuery({
         client,
         modeConfig,
+        mode,
         filters,
       }),
     );
@@ -794,14 +901,31 @@ const fetchShardCountEstimate = async (mode, shard, filters) => {
   }
 };
 
+const stripSearchResultRow = (row) => {
+  const { rowUsageByShard, raw, ...rest } = row || {};
+  return rest;
+};
+
 const fetchShardPage = async (mode, shard, payload, offsets, seenKeys, estimatedCount = null) => {
   const modeConfig = getModeConfig(mode);
   const client = shardClients.get(shard.index);
   const pageSize = clampPageSize(payload.pageSize);
   const offset = Number(offsets?.[String(shard.index)] || 0);
 
+  if (!client) {
+    return {
+      status: "failed",
+      shard,
+      rows: [],
+      count: 0,
+      offset,
+      exhausted: true,
+      reason: "Shard client is not available",
+    };
+  }
+
   if (modeConfig.derivedFromProspects) {
-    const limit = getShardBatchLimit(mode, modeConfig, pageSize, payload.filters);
+    const limit = getExhaustiveShardBatchLimit(mode, modeConfig, pageSize, payload.filters);
     let count = 0;
     const shouldScanExhaustively =
       offset === 0 &&
@@ -811,6 +935,7 @@ const fetchShardPage = async (mode, shard, payload, offsets, seenKeys, estimated
     let nextOffset = offset;
     let rawRows = [];
     let groupedRows = [];
+    let availableRows = [];
     let exhausted = false;
 
     try {
@@ -823,7 +948,7 @@ const fetchShardPage = async (mode, shard, payload, offsets, seenKeys, estimated
           limit,
         });
 
-        const { data, error } = await result;
+        const { data, error } = result;
         if (error) throw error;
 
         const batchRows = Array.isArray(data) ? data : [];
@@ -836,22 +961,25 @@ const fetchShardPage = async (mode, shard, payload, offsets, seenKeys, estimated
         nextOffset += batchRows.length;
         count = Math.max(count, nextOffset);
         groupedRows = buildDerivedCompanyRows(rawRows, shard.index);
+        availableRows = filterOutSeenRows(mode, groupedRows, seenKeys);
 
         exhausted = batchRows.length < limit;
         if (exhausted) break;
 
-        if (!shouldScanExhaustively && groupedRows.length >= pageSize + 1) break;
+        if (!shouldScanExhaustively && availableRows.length >= pageSize + 1) break;
       }
+
+      const rows = groupedRows.map(({ __companyKey, __rawCount, ...row }) => ({
+        ...row,
+        rowUsageByShard: {
+          [String(shard.index)]: Number(__rawCount || 1),
+        },
+      }));
 
       return {
         status: "healthy",
         shard,
-        rows: (exhausted ? groupedRows : groupedRows.slice(0, pageSize + 1)).map(({ __companyKey, __rawCount, ...row }) => ({
-          ...row,
-          rowUsageByShard: {
-            [String(shard.index)]: Number(__rawCount || 1),
-          },
-        })),
+        rows,
         count,
         offset,
         exhausted,
@@ -869,7 +997,7 @@ const fetchShardPage = async (mode, shard, payload, offsets, seenKeys, estimated
     }
   }
 
-  const limit = getShardBatchLimit(mode, modeConfig, pageSize, payload.filters);
+  const limit = getExhaustiveShardBatchLimit(mode, modeConfig, pageSize, payload.filters);
 
   try {
     let count = 0;
@@ -881,6 +1009,7 @@ const fetchShardPage = async (mode, shard, payload, offsets, seenKeys, estimated
     let nextOffset = offset;
     let rawRows = [];
     let mergedRows = [];
+    let availableRows = [];
     let exhausted = false;
 
     for (let batchIndex = 0; batchIndex < MAX_SEARCH_BATCHES_PER_SHARD; batchIndex += 1) {
@@ -892,7 +1021,7 @@ const fetchShardPage = async (mode, shard, payload, offsets, seenKeys, estimated
         limit,
       });
 
-      const { data, error } = await result;
+      const { data, error } = result;
       if (error) throw error;
 
       const batchRecords = Array.isArray(data) ? data : [];
@@ -905,17 +1034,18 @@ const fetchShardPage = async (mode, shard, payload, offsets, seenKeys, estimated
       nextOffset += batchRecords.length;
       count = Math.max(count, nextOffset);
       mergedRows = mergeAndDedupeRows(mode, rawRows);
+      availableRows = filterOutSeenRows(mode, mergedRows, seenKeys);
 
       exhausted = batchRecords.length < limit;
       if (exhausted) break;
 
-      if (!shouldScanExhaustively && mergedRows.length >= pageSize + 1) break;
+      if (!shouldScanExhaustively && availableRows.length >= pageSize + 1) break;
     }
 
     return {
       status: "healthy",
       shard,
-      rows: exhausted ? mergedRows : mergedRows.slice(0, pageSize + 1),
+      rows: mergedRows,
       count,
       offset,
       exhausted,
@@ -947,25 +1077,238 @@ const fetchShardPage = async (mode, shard, payload, offsets, seenKeys, estimated
   }
 };
 
-const buildNextCursor = (mode, pageSize, currentOffsets, selectedRows, shardResults, availableRowCount, displayTotal) => {
+const fetchShardAllRows = async (mode, shard, payload) => {
+  const modeConfig = getModeConfig(mode);
+  const client = shardClients.get(shard.index);
+  const pageSize = clampPageSize(payload.pageSize);
+
+  if (!client) {
+    return {
+      status: "failed",
+      shard,
+      rows: [],
+      count: 0,
+      offset: 0,
+      exhausted: true,
+      reason: "Shard client is not available",
+    };
+  }
+
+  if (modeConfig.derivedFromProspects) {
+    const limit = getExhaustiveShardBatchLimit(mode, modeConfig, pageSize, payload.filters);
+    let nextOffset = 0;
+    let rawRows = [];
+    let groupedRows = [];
+    let exhausted = false;
+
+    try {
+      for (let batchIndex = 0; batchIndex < MAX_SEARCH_BATCHES_PER_SHARD; batchIndex += 1) {
+        const result = await runShardPageQueryWithFallback({
+          client,
+          modeConfig,
+          filters: payload.filters,
+          offset: nextOffset,
+          limit,
+        });
+
+        const { data, error } = result;
+        if (error) throw error;
+
+        const batchRows = Array.isArray(data) ? data : [];
+        if (batchRows.length === 0) {
+          exhausted = true;
+          break;
+        }
+
+        rawRows = rawRows.concat(batchRows);
+        nextOffset += batchRows.length;
+        groupedRows = buildDerivedCompanyRows(rawRows, shard.index);
+
+        exhausted = batchRows.length < limit;
+        if (exhausted) break;
+      }
+
+      return {
+        status: "healthy",
+        shard,
+        rows: groupedRows.map(({ __companyKey, __rawCount, ...row }) => ({
+          ...row,
+          rowUsageByShard: {
+            [String(shard.index)]: Number(__rawCount || 1),
+          },
+        })),
+        count: nextOffset,
+        offset: 0,
+        exhausted,
+      };
+    } catch (error) {
+      return {
+        status: "failed",
+        shard,
+        rows: [],
+        count: 0,
+        offset: 0,
+        exhausted: true,
+        reason: sanitizeShardErrorMessage(error?.message || error) || "Search query failed",
+      };
+    }
+  }
+
+  const limit = getExhaustiveShardBatchLimit(mode, modeConfig, pageSize, payload.filters);
+  let nextOffset = 0;
+  let rawRows = [];
+  let exhausted = false;
+
+  try {
+    for (let batchIndex = 0; batchIndex < MAX_SEARCH_BATCHES_PER_SHARD; batchIndex += 1) {
+      const result = await runShardPageQueryWithFallback({
+        client,
+        modeConfig,
+        filters: payload.filters,
+        offset: nextOffset,
+        limit,
+      });
+
+      const { data, error } = result;
+      if (error) throw error;
+
+      const batchRecords = Array.isArray(data) ? data : [];
+      if (batchRecords.length === 0) {
+        exhausted = true;
+        break;
+      }
+
+      rawRows = rawRows.concat(batchRecords.map((record) => modeConfig.normalize(record, shard.index)));
+      nextOffset += batchRecords.length;
+
+      exhausted = batchRecords.length < limit;
+      if (exhausted) break;
+    }
+
+    return {
+      status: "healthy",
+      shard,
+      rows: mergeAndDedupeRows(mode, rawRows),
+      count: nextOffset,
+      offset: 0,
+      exhausted,
+    };
+  } catch (error) {
+    return {
+      status: "failed",
+      shard,
+      rows: [],
+      count: 0,
+      offset: 0,
+      exhausted: true,
+      reason: sanitizeShardErrorMessage(error?.message || error) || "Search query failed",
+    };
+  }
+};
+
+const fetchShardExactCountKeys = async (mode, shard, payload) => {
+  const modeConfig = getModeConfig(mode);
+  const client = shardClients.get(shard.index);
+  const pageSize = clampPageSize(payload.pageSize);
+  const limit = getExactCountShardBatchLimit(mode, modeConfig, pageSize, payload.filters);
+
+  if (!client) {
+    return {
+      status: "failed",
+      shard,
+      keys: [],
+      count: 0,
+      offset: 0,
+      exhausted: true,
+      reason: "Shard client is not available",
+    };
+  }
+
+  try {
+    let nextOffset = 0;
+    let exhausted = false;
+    const dedupeKeys = new Set();
+
+    for (let batchIndex = 0; batchIndex < MAX_SEARCH_BATCHES_PER_SHARD; batchIndex += 1) {
+      const result = await runShardPageQueryWithFallback({
+        client,
+        modeConfig,
+        filters: payload.filters,
+        offset: nextOffset,
+        limit,
+        sortColumns: modeConfig.exactCountSort,
+        selectColumns: modeConfig.exactCountSelectColumns,
+        allowUnorderedFallback: false,
+      });
+
+      const { data, error } = result;
+      if (error) throw error;
+
+      const batchRecords = Array.isArray(data) ? data : [];
+      if (batchRecords.length === 0) {
+        exhausted = true;
+        break;
+      }
+
+      batchRecords.forEach((record) => {
+        const dedupeKey = String(modeConfig.extractExactCountKey(record, shard.index) || "").trim();
+        if (dedupeKey) {
+          dedupeKeys.add(dedupeKey);
+        }
+      });
+
+      nextOffset += batchRecords.length;
+      exhausted = batchRecords.length < limit;
+      if (exhausted) break;
+    }
+
+    return {
+      status: "healthy",
+      shard,
+      keys: [...dedupeKeys],
+      count: nextOffset,
+      offset: 0,
+      exhausted,
+    };
+  } catch (error) {
+    return {
+      status: "failed",
+      shard,
+      keys: [],
+      count: 0,
+      offset: 0,
+      exhausted: true,
+      reason: sanitizeShardErrorMessage(error?.message || error) || "Search query failed",
+    };
+  }
+};
+
+const buildNextCursor = (mode, currentOffsets, selectedRows, shardResults, availableRowCount, priorSeenKeys, displayTotal, displayTotalIsExact = false) => {
   const nextOffsets = { ...(currentOffsets || {}) };
   const perShardConsumed = new Map();
+  const nextSeenKeys = new Set(priorSeenKeys instanceof Set ? [...priorSeenKeys] : []);
+  selectedRows.forEach((row) => nextSeenKeys.add(getRowDedupeKey(mode, row)));
 
-  selectedRows.forEach((row) => {
-    Object.entries(normalizeRowUsageByShard(row)).forEach(([shardIndex, usage]) => {
-      const shardKey = Number(shardIndex);
-      const current = perShardConsumed.get(shardKey) || 0;
-      perShardConsumed.set(shardKey, current + Number(usage || 0));
+  shardResults
+    .filter((entry) => entry.status === "healthy")
+    .forEach((entry) => {
+      entry.rows.forEach((row) => {
+        if (!nextSeenKeys.has(getRowDedupeKey(mode, row))) return;
+        const rowUsageByShard = normalizeRowUsageByShard(row);
+        Object.entries(rowUsageByShard).forEach(([shardIndex, usage]) => {
+          const shardKey = Number(shardIndex);
+          const current = perShardConsumed.get(shardKey) || 0;
+          perShardConsumed.set(shardKey, current + Number(usage || 0));
+        });
+      });
     });
-  });
 
   shardResults
     .filter((entry) => entry.status === "healthy")
     .forEach((entry) => {
       const current = Number(currentOffsets?.[String(entry.shard.index)] || 0);
       const consumed = perShardConsumed.get(entry.shard.index) || 0;
-      const fallbackConsumed =
-        consumed > 0 ? 0 : Math.max(0, Number(entry.emptyConsumed || 0));
+      const fallbackConsumed = consumed > 0 ? 0 : Math.max(0, Number(entry.emptyConsumed || 0));
       nextOffsets[String(entry.shard.index)] = current + consumed + fallbackConsumed;
     });
 
@@ -978,38 +1321,20 @@ const buildNextCursor = (mode, pageSize, currentOffsets, selectedRows, shardResu
   return hasMore
     ? encodeCursor({
         mode,
-        pageSize,
         offsets: nextOffsets,
+        seenKeys: [...nextSeenKeys],
         ...(Number.isFinite(Number(displayTotal)) ? { displayTotal: Number(displayTotal) } : {}),
+        ...(displayTotalIsExact ? { displayTotalIsExact: true } : {}),
       })
     : null;
 };
 
-const runSearch = async (mode, payload) => {
-  if (activeShards.length === 0) {
-    throw createHttpError("No active search shards are configured.", 503);
-  }
-
-  const searchPayload = sanitizeSearchPayload(mode, payload);
-  const cursor = decodeCursor(searchPayload.cursor);
-  const offsets = cursor?.mode === mode && cursor?.offsets && typeof cursor.offsets === "object" ? cursor.offsets : {};
-  const displayTotalFromCursor =
-    cursor?.mode === mode && hasFiniteNumericValue(cursor?.displayTotal ?? cursor?.totalExact)
-      ? Number(cursor.displayTotal ?? cursor.totalExact)
-      : null;
-  const estimatedCounts =
-    displayTotalFromCursor === null
-      ? await Promise.all(activeShards.map((shard) => fetchShardCountEstimate(mode, shard, searchPayload.filters)))
-      : null;
-  const estimatedCountByShard = new Map(
-    activeShards.map((shard, index) => [shard.index, Array.isArray(estimatedCounts) ? estimatedCounts[index] : null]),
-  );
+const runExhaustiveSearch = async (mode, searchPayload, exhaustiveOffset, displayTotalHint = null) => {
   const shardResults = await Promise.all(
-    activeShards.map((shard) =>
-      fetchShardPage(mode, shard, searchPayload, offsets, new Set(), estimatedCountByShard.get(shard.index) ?? null),
-    ),
+    activeShards.map((shard) => fetchShardAllRows(mode, shard, searchPayload)),
   );
   const shardStatus = buildShardStatus(shardResults);
+  const hasShardFailures = shardResults.some((entry) => entry.status !== "healthy");
   const healthyResults = shardResults.filter((entry) => entry.status === "healthy");
 
   if (healthyResults.length === 0) {
@@ -1020,24 +1345,153 @@ const runSearch = async (mode, payload) => {
     mode,
     healthyResults.flatMap((entry) => entry.rows),
   );
-  const items = mergedRows.slice(0, searchPayload.pageSize);
   const totalExact = healthyResults.every((entry) => entry.exhausted) ? mergedRows.length : null;
+  const items = mergedRows.slice(exhaustiveOffset, exhaustiveOffset + searchPayload.pageSize);
+  const nextOffset = exhaustiveOffset + items.length;
+  const totalFloor = mergedRows.length;
+  const totalDisplay = Math.max(totalFloor, Number(totalExact ?? displayTotalHint ?? 0));
+
+  return {
+    items: items.map((row) => stripSearchResultRow(row)),
+    nextCursor:
+      nextOffset < mergedRows.length
+        ? encodeCursor({
+            mode,
+            pagination: "exhaustive",
+            offset: nextOffset,
+            displayTotal: totalExact ?? totalDisplay,
+            ...(totalExact !== null && !hasShardFailures ? { displayTotalIsExact: true } : {}),
+          })
+        : null,
+    totalApprox: totalExact ?? totalDisplay,
+    totalIsExact: totalExact !== null && !hasShardFailures,
+    ...(shouldExposeShardStatus(shardStatus) ? { shardStatus } : {}),
+  };
+};
+
+const resolveExactTotal = async (mode, searchPayload) => {
+  const shardResults = await Promise.all(
+    activeShards.map((shard) => fetchShardExactCountKeys(mode, shard, searchPayload)),
+  );
   const hasShardFailures = shardResults.some((entry) => entry.status !== "healthy");
+  const healthyResults = shardResults.filter((entry) => entry.status === "healthy");
+
+  if (healthyResults.length === 0) {
+    return { totalExact: null, totalIsExact: false };
+  }
+
+  const dedupeKeys = new Set(healthyResults.flatMap((entry) => (Array.isArray(entry.keys) ? entry.keys : [])));
+
+  return {
+    totalExact: healthyResults.every((entry) => entry.exhausted) ? dedupeKeys.size : null,
+    totalIsExact: !hasShardFailures,
+  };
+};
+
+const runSearch = async (mode, payload) => {
+  if (activeShards.length === 0) {
+    throw createHttpError("No active search shards are configured.", 503);
+  }
+
+  const searchPayload = sanitizeSearchPayload(mode, payload);
+  const cursor = decodeCursor(searchPayload.cursor);
+  const priorSeenKeys =
+    cursor?.mode === mode && Array.isArray(cursor?.seenKeys)
+      ? new Set(cursor.seenKeys.map((value) => String(value || "")))
+      : new Set();
+  const exhaustiveOffset =
+    cursor?.mode === mode && cursor?.pagination === "exhaustive" && Number.isFinite(Number(cursor?.offset))
+      ? Math.max(0, Number(cursor.offset))
+      : priorSeenKeys.size;
+  const displayTotalFromCursor =
+    cursor?.mode === mode && hasFiniteNumericValue(cursor?.displayTotal ?? cursor?.totalExact)
+      ? Number(cursor.displayTotal ?? cursor.totalExact)
+      : null;
+  const displayTotalIsExactFromCursor =
+    cursor?.mode === mode && (cursor?.displayTotalIsExact === true || cursor?.totalIsExact === true);
+  const estimatedCounts =
+    cursor?.mode === mode && cursor?.pagination === "exhaustive"
+      ? null
+      : displayTotalFromCursor === null
+        ? await Promise.all(activeShards.map((shard) => fetchShardCountEstimate(mode, shard, searchPayload.filters)))
+        : null;
   const estimatedTotal =
     Array.isArray(estimatedCounts) && estimatedCounts.some((value) => hasFiniteNumericValue(value))
       ? estimatedCounts.reduce((sum, value) => sum + Number(value || 0), 0)
       : null;
-  const totalApprox =
-    displayTotalFromCursor ??
-    totalExact ??
-    estimatedTotal ??
-    shardResults.reduce((sum, entry) => sum + Number(entry.count || 0), 0);
+  const shouldUseExhaustivePagination = cursor?.mode === mode && cursor?.pagination === "exhaustive";
+
+  if (shouldUseExhaustivePagination) {
+    return runExhaustiveSearch(mode, searchPayload, exhaustiveOffset, displayTotalFromCursor ?? estimatedTotal);
+  }
+
+  const offsets =
+    cursor?.mode === mode && cursor?.offsets && typeof cursor.offsets === "object" ? cursor.offsets : {};
+  const estimatedCountByShard = new Map(
+    activeShards.map((shard, index) => [shard.index, Array.isArray(estimatedCounts) ? estimatedCounts[index] : null]),
+  );
+  const shardResults = await Promise.all(
+    activeShards.map((shard) =>
+      fetchShardPage(mode, shard, searchPayload, offsets, priorSeenKeys, estimatedCountByShard.get(shard.index) ?? null),
+    ),
+  );
+  const shardStatus = buildShardStatus(shardResults);
+  const hasShardFailures = shardResults.some((entry) => entry.status !== "healthy");
+  const healthyResults = shardResults.filter((entry) => entry.status === "healthy");
+
+  if (healthyResults.length === 0) {
+    throw createHttpError("All configured search shards failed.", 503, { shardStatus });
+  }
+
+  const mergedRows = mergeAndDedupeRows(
+    mode,
+    healthyResults.flatMap((entry) => entry.rows),
+  );
+  const availableRows = filterOutSeenRows(mode, mergedRows, priorSeenKeys);
+  const items = availableRows.slice(0, searchPayload.pageSize);
+  const totalFloor = priorSeenKeys.size + availableRows.length;
+  const totalExact = healthyResults.every((entry) => entry.exhausted) ? totalFloor : null;
+  const fallbackApprox = shardResults.reduce((sum, entry) => sum + Number(entry.count || 0), 0);
+  const totalApprox = Math.max(
+    totalFloor,
+    Number(totalExact ?? displayTotalFromCursor ?? estimatedTotal ?? fallbackApprox),
+  );
+  let resolvedTotalApprox = totalApprox;
+  let resolvedTotalIsExact = (totalExact !== null && !hasShardFailures) || (displayTotalIsExactFromCursor && !hasShardFailures);
+
+  const shouldResolveExactTotal =
+    hasActiveFilters(searchPayload.filters) &&
+    !hasShardFailures &&
+    (
+      (displayTotalFromCursor === null &&
+        hasFiniteNumericValue(estimatedTotal) &&
+        Number(estimatedTotal) <= EXHAUSTIVE_SCAN_ESTIMATE_THRESHOLD) ||
+      (displayTotalFromCursor !== null && displayTotalFromCursor < totalFloor)
+    );
+
+  if (shouldResolveExactTotal) {
+    const exactResolution = await resolveExactTotal(mode, searchPayload);
+    if (exactResolution.totalExact !== null && exactResolution.totalIsExact) {
+      resolvedTotalApprox = exactResolution.totalExact;
+      resolvedTotalIsExact = true;
+    }
+  }
+
   return {
-    items: items.map(({ rowUsageByShard, raw, ...row }) => row),
-    nextCursor: buildNextCursor(mode, searchPayload.pageSize, offsets, items, shardResults, mergedRows.length, totalApprox),
-    totalApprox,
-    totalIsExact: totalExact !== null && !hasShardFailures,
-    shardStatus,
+    items: items.map((row) => stripSearchResultRow(row)),
+    nextCursor: buildNextCursor(
+      mode,
+      offsets,
+      items,
+      shardResults,
+      availableRows.length,
+      priorSeenKeys,
+      resolvedTotalApprox,
+      resolvedTotalIsExact,
+    ),
+    totalApprox: resolvedTotalApprox,
+    totalIsExact: resolvedTotalIsExact,
+    ...(shouldExposeShardStatus(shardStatus) ? { shardStatus } : {}),
   };
 };
 
