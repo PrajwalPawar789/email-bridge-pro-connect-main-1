@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import {
   Home,
@@ -48,10 +48,35 @@ type SidebarNavItem = {
   submenuItems?: SidebarNavChild[];
 };
 
+const SIDEBAR_SCROLL_STORAGE_KEY = 'dashboard:sidebar-scroll-top';
+
+const readSidebarScrollTop = () => {
+  if (typeof window === 'undefined') return 0;
+  try {
+    const value = Number(window.sessionStorage.getItem(SIDEBAR_SCROLL_STORAGE_KEY));
+    return Number.isFinite(value) && value >= 0 ? value : 0;
+  } catch {
+    return 0;
+  }
+};
+
+const writeSidebarScrollTop = (scrollTop: number) => {
+  if (typeof window === 'undefined') return;
+  try {
+    window.sessionStorage.setItem(
+      SIDEBAR_SCROLL_STORAGE_KEY,
+      String(Math.max(0, Math.round(scrollTop)))
+    );
+  } catch {
+    // Ignore storage failures.
+  }
+};
+
 const Sidebar = ({ activeTab, onTabChange, isCollapsed, toggleSidebar, user }: SidebarProps) => {
   const navigate = useNavigate();
   const { workspace } = useWorkspace();
   const teamRolesEnabled = workspace ? workspace.planFeatures?.teamRoles !== false : true;
+  const navRef = useRef<HTMLElement | null>(null);
   const [openSubmenus, setOpenSubmenus] = useState<Record<string, boolean>>({
     settings: activeTab === 'settings' || activeTab === 'integrations',
   });
@@ -61,6 +86,37 @@ const Sidebar = ({ activeTab, onTabChange, isCollapsed, toggleSidebar, user }: S
       setOpenSubmenus((prev) => ({ ...prev, settings: true }));
     }
   }, [activeTab]);
+
+  useLayoutEffect(() => {
+    const navElement = navRef.current;
+    if (!navElement || typeof window === 'undefined') return;
+
+    const restoreScrollPosition = () => {
+      navElement.scrollTop = readSidebarScrollTop();
+    };
+
+    restoreScrollPosition();
+    const frameId = window.requestAnimationFrame(restoreScrollPosition);
+
+    return () => window.cancelAnimationFrame(frameId);
+  }, []);
+
+  useEffect(() => {
+    const navElement = navRef.current;
+    if (!navElement) return;
+
+    const persistScrollPosition = () => {
+      writeSidebarScrollTop(navElement.scrollTop);
+    };
+
+    persistScrollPosition();
+    navElement.addEventListener('scroll', persistScrollPosition, { passive: true });
+
+    return () => {
+      persistScrollPosition();
+      navElement.removeEventListener('scroll', persistScrollPosition);
+    };
+  }, []);
 
   const handleNavigation = (itemId: string) => {
     if (itemId === 'referrals') {
@@ -146,7 +202,7 @@ const Sidebar = ({ activeTab, onTabChange, isCollapsed, toggleSidebar, user }: S
         {isCollapsed ? <ChevronRight className="h-4 w-4 text-[var(--shell-muted)]" /> : <ChevronLeft className="h-4 w-4 text-[var(--shell-muted)]" />}
       </button>
 
-      <nav className="flex-1 overflow-y-auto px-3 pb-6">
+      <nav ref={navRef} className="flex-1 overflow-y-auto px-3 pb-6">
         {navSections.map((section) => (
           <div key={section.label} className="mb-4 last:mb-0">
             {!isCollapsed && (
