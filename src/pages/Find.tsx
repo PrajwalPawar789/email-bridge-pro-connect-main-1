@@ -73,6 +73,7 @@ import { useDebounce } from "@/hooks/useDebounce";
 import { toast } from "@/hooks/use-toast";
 import { supabase } from "@/integrations/supabase/client";
 import { handleDashboardTabNavigation } from "@/lib/dashboardNavigation";
+import { cn } from "@/lib/utils";
 import {
   type CompanySearchFilters,
   type CompanySearchRow,
@@ -661,6 +662,9 @@ const Find = () => {
     () => (mode === "companies" ? (searchData?.items as CompanySearchRow[] | undefined) || [] : []),
     [mode, searchData],
   );
+  const currentPageRowCount = mode === "prospects" ? prospectRows.length : companyRows.length;
+  const minimumResultCountFromPagination = Math.max(0, (pageNumber - 1) * PAGE_SIZE + currentPageRowCount);
+  const displayedResultCount = Math.max(resultCount, minimumResultCountFromPagination);
 
   useEffect(() => {
     if (mode !== "prospects" || prospectRows.length === 0) return;
@@ -709,6 +713,11 @@ const Find = () => {
       (companyFilters.companyName ? 1 : 0) +
       (companyFilters.naics ? 1 : 0);
   }, [mode, prospectFilters, companyFilters]);
+  const loadingOverlayEyebrow = `${activeFilterCount} filter${activeFilterCount === 1 ? "" : "s"} active / Page ${pageNumber}`;
+  const loadingOverlayTitle = mode === "prospects" ? "Refreshing lead table" : "Refreshing company table";
+  const loadingOverlayDescription = `Updating ${formatCount(displayedResultCount)} ${
+    mode === "prospects" ? "matched leads" : "matched companies"
+  } for the latest workspace view.`;
 
   /* ── Pagination ── */
 
@@ -889,7 +898,7 @@ const Find = () => {
     >
       <div className="flex h-[calc(100vh-64px)] flex-col overflow-hidden">
         {/* ─── TOP BAR ─── */}
-        <header className="flex shrink-0 items-center justify-between border-b border-slate-200 bg-white px-6 py-3">
+        {/* <header className="flex shrink-0 items-center justify-between border-b border-slate-200 bg-white px-6 py-3">
           <div className="flex items-center gap-4">
             <div className="flex items-center gap-2.5">
               <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-emerald-600">
@@ -917,7 +926,7 @@ const Find = () => {
               </p>
             </div>
           </div>
-        </header>
+        </header> */}
 
         {/* ─── MAIN CONTENT ─── */}
         <div className="flex flex-1 overflow-hidden">
@@ -1084,7 +1093,7 @@ const Find = () => {
                 </Tabs>
 
                 <span className="text-xs text-slate-500">
-                  {totalIsExact ? resultCount.toLocaleString() : `~${resultCount.toLocaleString()}`} results · {PAGE_SIZE}/page
+                  {totalIsExact ? displayedResultCount.toLocaleString() : `~${displayedResultCount.toLocaleString()}`} results · {PAGE_SIZE}/page
                 </span>
               </div>
 
@@ -1183,181 +1192,300 @@ const Find = () => {
             ) : null}
 
             {/* Table */}
-            <div className="relative flex-1 overflow-auto">
-              {searchQuery.isLoading && !searchData ? (
-                <div className="flex h-full flex-col items-center justify-center gap-3 text-slate-500">
-                  <Loader2 className="h-6 w-6 animate-spin text-emerald-600" />
-                  <p className="text-sm">Loading catalog results...</p>
-                </div>
-              ) : searchQuery.isError && !searchData ? (
-                <div className="flex h-full flex-col items-center justify-center gap-4 px-6 text-center">
-                  <div className="rounded-full bg-rose-50 p-4 text-rose-600">
-                    <ShieldAlert className="h-6 w-6" />
+            <div className="relative flex-1 overflow-hidden" aria-busy={showLoadingOverlay}>
+              <div
+                className={cn(
+                  "h-full overflow-auto transition-[filter,opacity] duration-200",
+                  showLoadingOverlay && "overflow-hidden blur-[1.5px] opacity-65 saturate-[0.82]",
+                )}
+              >
+                {searchQuery.isLoading && !searchData ? (
+                  <div className="flex h-full flex-col items-center justify-center gap-3 text-slate-500">
+                    <Loader2 className="h-6 w-6 animate-spin text-emerald-600" />
+                    <p className="text-sm">Loading catalog results...</p>
                   </div>
-                  <div className="space-y-2">
-                    <h3 className="text-lg font-semibold text-slate-900">Search is unavailable</h3>
-                    <p className="max-w-md text-sm text-slate-500">
-                      {(searchQuery.error as Error)?.message || "The search service could not return results."}
-                    </p>
+                ) : searchQuery.isError && !searchData ? (
+                  <div className="flex h-full flex-col items-center justify-center gap-4 px-6 text-center">
+                    <div className="rounded-full bg-rose-50 p-4 text-rose-600">
+                      <ShieldAlert className="h-6 w-6" />
+                    </div>
+                    <div className="space-y-2">
+                      <h3 className="text-lg font-semibold text-slate-900">Search is unavailable</h3>
+                      <p className="max-w-md text-sm text-slate-500">
+                        {(searchQuery.error as Error)?.message || "The search service could not return results."}
+                      </p>
+                    </div>
+                    <Button variant="outline" className="rounded-lg" onClick={() => searchQuery.refetch()}>
+                      Retry
+                    </Button>
                   </div>
-                  <Button variant="outline" className="rounded-lg" onClick={() => searchQuery.refetch()}>
-                    Retry
-                  </Button>
-                </div>
-              ) : (mode === "prospects" && prospectRows.length === 0) || (mode === "companies" && companyRows.length === 0) ? (
-                <div className="flex h-full flex-col items-center justify-center gap-4 px-6 text-center">
-                  <div className="rounded-full bg-slate-100 p-4 text-slate-500">
-                    {mode === "prospects" ? <Users className="h-6 w-6" /> : <Building2 className="h-6 w-6" />}
+                ) : (mode === "prospects" && prospectRows.length === 0) || (mode === "companies" && companyRows.length === 0) ? (
+                  <div className="flex h-full flex-col items-center justify-center gap-4 px-6 text-center">
+                    <div className="rounded-full bg-slate-100 p-4 text-slate-500">
+                      {mode === "prospects" ? <Users className="h-6 w-6" /> : <Building2 className="h-6 w-6" />}
+                    </div>
+                    <div className="space-y-2">
+                      <h3 className="text-lg font-semibold text-slate-900">
+                        No {mode === "prospects" ? "prospects" : "companies"} matched these filters
+                      </h3>
+                      <p className="max-w-md text-sm text-slate-500">
+                        Try widening your filters to pull in more results from the active shards.
+                      </p>
+                    </div>
                   </div>
-                  <div className="space-y-2">
-                    <h3 className="text-lg font-semibold text-slate-900">
-                      No {mode === "prospects" ? "prospects" : "companies"} matched these filters
-                    </h3>
-                    <p className="max-w-md text-sm text-slate-500">
-                      Try widening your filters to pull in more results from the active shards.
-                    </p>
-                  </div>
-                </div>
-              ) : (
-                <Table>
-                  <TableHeader className="sticky top-0 z-10">
-                    {mode === "prospects" ? (
-                      <TableRow className="border-slate-200 bg-slate-100/80 backdrop-blur">
-                        <TableHead className="w-12 pl-5">
-                          <Checkbox
-                            checked={allVisibleSelected ? true : someVisibleSelected ? "indeterminate" : false}
-                            onCheckedChange={(c) => toggleAllVisible(c === true)}
-                          />
-                        </TableHead>
-                        <TableHead className="text-[11px] font-semibold uppercase tracking-wider text-slate-500">Name</TableHead>
-                        <TableHead className="text-[11px] font-semibold uppercase tracking-wider text-slate-500">Title</TableHead>
-                        <TableHead className="text-[11px] font-semibold uppercase tracking-wider text-slate-500">Company</TableHead>
-                        <TableHead className="text-[11px] font-semibold uppercase tracking-wider text-slate-500">Level / Function</TableHead>
-                        <TableHead className="text-[11px] font-semibold uppercase tracking-wider text-slate-500">Location</TableHead>
-                        <TableHead className="text-[11px] font-semibold uppercase tracking-wider text-slate-500">Industry</TableHead>
-                      </TableRow>
-                    ) : (
-                      <TableRow className="border-slate-200 bg-slate-100/80 backdrop-blur">
-                        <TableHead className="pl-5 text-[11px] font-semibold uppercase tracking-wider text-slate-500">Company</TableHead>
-                        <TableHead className="text-[11px] font-semibold uppercase tracking-wider text-slate-500">Domain</TableHead>
-                        <TableHead className="text-[11px] font-semibold uppercase tracking-wider text-slate-500">Industry</TableHead>
-                        <TableHead className="text-[11px] font-semibold uppercase tracking-wider text-slate-500">Location</TableHead>
-                        <TableHead className="text-[11px] font-semibold uppercase tracking-wider text-slate-500">Size</TableHead>
-                        <TableHead className="text-[11px] font-semibold uppercase tracking-wider text-slate-500">Prospects</TableHead>
-                        <TableHead className="pr-5 text-right text-[11px] font-semibold uppercase tracking-wider text-slate-500">Action</TableHead>
-                      </TableRow>
-                    )}
-                  </TableHeader>
-                  <TableBody>
-                    {mode === "prospects"
-                      ? prospectRows.map((row) => {
-                          const checked = Boolean(selectedProspectsById[row.catalogRef]);
-                          const grad = getAvatarGradient(row.fullName);
-                          return (
+                ) : (
+                  <Table>
+                    <TableHeader className="sticky top-0 z-10">
+                      {mode === "prospects" ? (
+                        <TableRow className="border-slate-200 bg-slate-100/80 backdrop-blur">
+                          <TableHead className="w-12 pl-5">
+                            <Checkbox
+                              checked={allVisibleSelected ? true : someVisibleSelected ? "indeterminate" : false}
+                              onCheckedChange={(c) => toggleAllVisible(c === true)}
+                            />
+                          </TableHead>
+                          <TableHead className="text-[11px] font-semibold uppercase tracking-wider text-slate-500">Name</TableHead>
+                          <TableHead className="text-[11px] font-semibold uppercase tracking-wider text-slate-500">Title</TableHead>
+                          <TableHead className="text-[11px] font-semibold uppercase tracking-wider text-slate-500">Company</TableHead>
+                          <TableHead className="text-[11px] font-semibold uppercase tracking-wider text-slate-500">Level / Function</TableHead>
+                          <TableHead className="text-[11px] font-semibold uppercase tracking-wider text-slate-500">Location</TableHead>
+                          <TableHead className="text-[11px] font-semibold uppercase tracking-wider text-slate-500">Industry</TableHead>
+                        </TableRow>
+                      ) : (
+                        <TableRow className="border-slate-200 bg-slate-100/80 backdrop-blur">
+                          <TableHead className="pl-5 text-[11px] font-semibold uppercase tracking-wider text-slate-500">Company</TableHead>
+                          <TableHead className="text-[11px] font-semibold uppercase tracking-wider text-slate-500">Domain</TableHead>
+                          <TableHead className="text-[11px] font-semibold uppercase tracking-wider text-slate-500">Industry</TableHead>
+                          <TableHead className="text-[11px] font-semibold uppercase tracking-wider text-slate-500">Location</TableHead>
+                          <TableHead className="text-[11px] font-semibold uppercase tracking-wider text-slate-500">Size</TableHead>
+                          <TableHead className="text-[11px] font-semibold uppercase tracking-wider text-slate-500">Prospects</TableHead>
+                          <TableHead className="pr-5 text-right text-[11px] font-semibold uppercase tracking-wider text-slate-500">Action</TableHead>
+                        </TableRow>
+                      )}
+                    </TableHeader>
+                    <TableBody>
+                      {mode === "prospects"
+                        ? prospectRows.map((row) => {
+                            const checked = Boolean(selectedProspectsById[row.catalogRef]);
+                            const grad = getAvatarGradient(row.fullName);
+                            return (
+                              <TableRow
+                                key={row.catalogRef}
+                                className="group cursor-pointer border-slate-100 transition-colors hover:bg-emerald-50/40"
+                                onClick={() => setDetailState({ mode: "prospects", catalogRef: row.catalogRef, summary: row })}
+                              >
+                                <TableCell className="pl-5" onClick={(e) => e.stopPropagation()}>
+                                  <Checkbox checked={checked} onCheckedChange={(v) => toggleRowSelection(row, v === true)} />
+                                </TableCell>
+                                <TableCell>
+                                  <div className="flex items-center gap-3">
+                                    <div
+                                      className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-[11px] font-bold text-white"
+                                      style={{ background: `linear-gradient(135deg, ${grad.from}, ${grad.to})` }}
+                                    >
+                                      {getInitials(row.fullName)}
+                                    </div>
+                                    <div className="min-w-0">
+                                      <p className="truncate text-sm font-semibold text-slate-900">{formatValue(row.fullName)}</p>
+                                      <p className="truncate text-xs text-slate-500">{formatValue(row.email)}</p>
+                                    </div>
+                                  </div>
+                                </TableCell>
+                                <TableCell>
+                                  <p className="max-w-[200px] truncate text-sm font-medium text-slate-800">{formatValue(row.jobTitle)}</p>
+                                  <p className="max-w-[200px] truncate text-xs text-slate-500">{formatValue(row.headline)}</p>
+                                </TableCell>
+                                <TableCell>
+                                  <p className="text-sm font-medium text-slate-800">{formatValue(row.companyName)}</p>
+                                  <p className="text-xs text-slate-500">{formatValue(row.companyDomain)}</p>
+                                </TableCell>
+                                <TableCell>
+                                  <p className="text-sm text-slate-800">{formatValue(row.jobLevel)}</p>
+                                  <p className="text-xs text-slate-500">{formatValue(row.jobFunction)}</p>
+                                </TableCell>
+                                <TableCell>
+                                  <p className="text-sm text-slate-800">{formatValue(row.country)}</p>
+                                  <p className="text-xs text-slate-500">{formatValue(row.region)}</p>
+                                </TableCell>
+                                <TableCell>
+                                  <p className="text-sm text-slate-800">{formatValue(row.industry)}</p>
+                                  <p className="text-xs text-slate-500">{formatValue(row.employeeSize)}</p>
+                                </TableCell>
+                              </TableRow>
+                            );
+                          })
+                        : companyRows.map((row) => (
                             <TableRow
                               key={row.catalogRef}
                               className="group cursor-pointer border-slate-100 transition-colors hover:bg-emerald-50/40"
-                              onClick={() => setDetailState({ mode: "prospects", catalogRef: row.catalogRef, summary: row })}
+                              onClick={() => setDetailState({ mode: "companies", catalogRef: row.catalogRef, summary: row })}
                             >
-                              <TableCell className="pl-5" onClick={(e) => e.stopPropagation()}>
-                                <Checkbox checked={checked} onCheckedChange={(v) => toggleRowSelection(row, v === true)} />
-                              </TableCell>
-                              <TableCell>
+                              <TableCell className="pl-5">
                                 <div className="flex items-center gap-3">
-                                  <div
-                                    className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-[11px] font-bold text-white"
-                                    style={{ background: `linear-gradient(135deg, ${grad.from}, ${grad.to})` }}
-                                  >
-                                    {getInitials(row.fullName)}
+                                  <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-slate-100 text-sm font-bold text-slate-500">
+                                    {getLeadingCharacter(row.companyName)}
                                   </div>
-                                  <div className="min-w-0">
-                                    <p className="truncate text-sm font-semibold text-slate-900">{formatValue(row.fullName)}</p>
-                                    <p className="truncate text-xs text-slate-500">{formatValue(row.email)}</p>
+                                  <div>
+                                    <p className="text-sm font-semibold text-slate-900">{row.companyName}</p>
+                                    <p className="text-xs text-slate-500">Shard {row.sourceShard}</p>
                                   </div>
                                 </div>
                               </TableCell>
+                              <TableCell className="text-sm text-slate-700">{formatValue(row.domain)}</TableCell>
                               <TableCell>
-                                <p className="text-sm font-medium text-slate-800 truncate max-w-[200px]">{formatValue(row.jobTitle)}</p>
-                                <p className="text-xs text-slate-500 truncate max-w-[200px]">{formatValue(row.headline)}</p>
-                              </TableCell>
-                              <TableCell>
-                                <p className="text-sm font-medium text-slate-800">{formatValue(row.companyName)}</p>
-                                <p className="text-xs text-slate-500">{formatValue(row.companyDomain)}</p>
-                              </TableCell>
-                              <TableCell>
-                                <p className="text-sm text-slate-800">{formatValue(row.jobLevel)}</p>
-                                <p className="text-xs text-slate-500">{formatValue(row.jobFunction)}</p>
+                                <p className="text-sm text-slate-800">{formatValue(row.industry)}</p>
+                                <p className="text-xs text-slate-500">{formatValue(row.subIndustry)}</p>
                               </TableCell>
                               <TableCell>
                                 <p className="text-sm text-slate-800">{formatValue(row.country)}</p>
                                 <p className="text-xs text-slate-500">{formatValue(row.region)}</p>
                               </TableCell>
                               <TableCell>
-                                <p className="text-sm text-slate-800">{formatValue(row.industry)}</p>
-                                <p className="text-xs text-slate-500">{formatValue(row.employeeSize)}</p>
+                                <Badge variant="secondary" className="rounded-md bg-slate-100 text-[11px]">
+                                  {formatValue(row.employeeSize)}
+                                </Badge>
+                              </TableCell>
+                              <TableCell>
+                                <span className="text-sm font-semibold text-slate-900">{formatCount(row.prospectCount)}</span>
+                              </TableCell>
+                              <TableCell className="pr-5 text-right">
+                                <Button
+                                  variant="outline"
+                                  size="sm"
+                                  className="h-7 rounded-lg text-xs opacity-0 transition-opacity group-hover:opacity-100"
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    openProspectViewFromCompany(row);
+                                  }}
+                                >
+                                  View prospects
+                                  <ChevronRight className="ml-1 h-3.5 w-3.5" />
+                                </Button>
                               </TableCell>
                             </TableRow>
-                          );
-                        })
-                      : companyRows.map((row) => (
-                          <TableRow
-                            key={row.catalogRef}
-                            className="group cursor-pointer border-slate-100 transition-colors hover:bg-emerald-50/40"
-                            onClick={() => setDetailState({ mode: "companies", catalogRef: row.catalogRef, summary: row })}
-                          >
-                            <TableCell className="pl-5">
-                              <div className="flex items-center gap-3">
-                                <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-slate-100 text-sm font-bold text-slate-500">
-                                  {getLeadingCharacter(row.companyName)}
-                                </div>
-                                <div>
-                                  <p className="text-sm font-semibold text-slate-900">{row.companyName}</p>
-                                  <p className="text-xs text-slate-500">Shard {row.sourceShard}</p>
-                                </div>
-                              </div>
-                            </TableCell>
-                            <TableCell className="text-sm text-slate-700">{formatValue(row.domain)}</TableCell>
-                            <TableCell>
-                              <p className="text-sm text-slate-800">{formatValue(row.industry)}</p>
-                              <p className="text-xs text-slate-500">{formatValue(row.subIndustry)}</p>
-                            </TableCell>
-                            <TableCell>
-                              <p className="text-sm text-slate-800">{formatValue(row.country)}</p>
-                              <p className="text-xs text-slate-500">{formatValue(row.region)}</p>
-                            </TableCell>
-                            <TableCell>
-                              <Badge variant="secondary" className="rounded-md text-[11px] bg-slate-100">
-                                {formatValue(row.employeeSize)}
-                              </Badge>
-                            </TableCell>
-                            <TableCell>
-                              <span className="text-sm font-semibold text-slate-900">{formatCount(row.prospectCount)}</span>
-                            </TableCell>
-                            <TableCell className="pr-5 text-right">
-                              <Button
-                                variant="outline"
-                                size="sm"
-                                className="h-7 rounded-lg text-xs opacity-0 transition-opacity group-hover:opacity-100"
-                                onClick={(e) => {
-                                  e.stopPropagation();
-                                  openProspectViewFromCompany(row);
-                                }}
-                              >
-                                View prospects
-                                <ChevronRight className="ml-1 h-3.5 w-3.5" />
-                              </Button>
-                            </TableCell>
-                          </TableRow>
-                        ))}
-                  </TableBody>
-                </Table>
-              )}
+                          ))}
+                    </TableBody>
+                  </Table>
+                )}
+              </div>
 
               {showLoadingOverlay && (
-                <div className="absolute inset-0 flex items-start justify-center bg-white/60 pt-12 backdrop-blur-[1px]">
-                  <div className="inline-flex items-center gap-2 rounded-full border border-slate-200 bg-white px-4 py-2 text-sm font-medium text-slate-700 shadow-sm">
-                    <Loader2 className="h-4 w-4 animate-spin text-emerald-600" />
-                    Refreshing results
+                <div className="absolute inset-0 z-20 overflow-hidden bg-gradient-to-b from-slate-50/80 via-slate-50/60 to-slate-50/40 px-4 py-4 backdrop-blur-[2px] sm:px-6 sm:py-5">
+                  <div className="absolute inset-x-0 top-0 h-[3px] overflow-hidden bg-emerald-100/80">
+                    <motion.div
+                      className="h-full w-28 rounded-full bg-gradient-to-r from-emerald-500 via-teal-400 to-emerald-500 shadow-[0_0_18px_rgba(16,185,129,0.45)]"
+                      animate={{ x: ["-35%", "320%"] }}
+                      transition={{ duration: 1.35, ease: "easeInOut", repeat: Infinity }}
+                    />
+                  </div>
+                  <div className="absolute inset-0 bg-[radial-gradient(circle_at_top_right,rgba(16,185,129,0.12),transparent_30%)]" />
+
+                  <motion.div
+                    initial={{ opacity: 0, y: -8, scale: 0.985 }}
+                    animate={{ opacity: 1, y: 0, scale: 1 }}
+                    transition={{ duration: 0.18, ease: "easeOut" }}
+                    className="relative ml-auto w-full max-w-[360px] rounded-[24px] border border-slate-200/80 bg-white/92 p-4 shadow-[0_28px_60px_-30px_rgba(15,23,42,0.4)] backdrop-blur-xl"
+                  >
+                    <div className="flex items-start gap-3">
+                      <div className="relative flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl bg-emerald-50 text-emerald-600 shadow-[inset_0_1px_0_rgba(255,255,255,0.9)]">
+                        <div className="absolute inset-0 rounded-2xl border border-emerald-100/90" />
+                        <Loader2 className="relative h-5 w-5 animate-spin" />
+                      </div>
+                      <div className="min-w-0 flex-1">
+                        <div className="flex flex-wrap items-center gap-2">
+                          <span className="inline-flex items-center rounded-full border border-emerald-100 bg-emerald-50 px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.18em] text-emerald-700">
+                            Live refresh
+                          </span>
+                          <span className="inline-flex items-center gap-1 text-[11px] font-medium text-slate-500">
+                            <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-emerald-500" />
+                            {loadingOverlayEyebrow}
+                          </span>
+                        </div>
+                        <p className="mt-2 text-sm font-semibold text-slate-900">{loadingOverlayTitle}</p>
+                        <p className="mt-1 text-xs leading-5 text-slate-500">{loadingOverlayDescription}</p>
+                        <div className="mt-3 flex flex-wrap gap-2">
+                          <span className="inline-flex items-center rounded-full border border-slate-200 bg-slate-50 px-2.5 py-1 text-[11px] font-medium text-slate-600">
+                            {PAGE_SIZE}/page
+                          </span>
+                          <span className="inline-flex items-center rounded-full border border-slate-200 bg-slate-50 px-2.5 py-1 text-[11px] font-medium text-slate-600">
+                            {totalIsExact ? "Exact total" : "Live estimate"}
+                          </span>
+                        </div>
+                        <div className="mt-3 overflow-hidden rounded-full bg-slate-100">
+                          <motion.div
+                            className="h-1.5 w-24 rounded-full bg-gradient-to-r from-emerald-500 via-teal-400 to-emerald-500"
+                            animate={{ x: ["-35%", "260%"] }}
+                            transition={{ duration: 1.45, ease: "easeInOut", repeat: Infinity }}
+                          />
+                        </div>
+                      </div>
+                    </div>
+                  </motion.div>
+
+                  <div className="pointer-events-none absolute inset-x-4 top-24 hidden space-y-3 sm:inset-x-6 lg:block">
+                    {Array.from({ length: 4 }).map((_, index) => (
+                      <div
+                        key={`find-loading-row-${index}`}
+                        className={cn(
+                          "grid gap-3 rounded-[22px] border border-white/45 bg-white/20 p-3 shadow-[inset_0_1px_0_rgba(255,255,255,0.42)]",
+                          mode === "prospects"
+                            ? "grid-cols-[32px_1.45fr_1.2fr_1fr_0.9fr_1fr]"
+                            : "grid-cols-[1.4fr_1fr_1fr_0.9fr_0.8fr_0.7fr]",
+                        )}
+                      >
+                        {mode === "prospects" ? (
+                          <>
+                            <div className="h-6 w-6 animate-pulse rounded-md bg-white/75" />
+                            <div className="space-y-2">
+                              <div className="h-4 w-4/5 animate-pulse rounded-full bg-white/80" />
+                              <div className="h-3 w-2/3 animate-pulse rounded-full bg-white/55" />
+                            </div>
+                            <div className="space-y-2">
+                              <div className="h-4 w-3/4 animate-pulse rounded-full bg-white/70" />
+                              <div className="h-3 w-1/2 animate-pulse rounded-full bg-white/50" />
+                            </div>
+                            <div className="space-y-2">
+                              <div className="h-4 w-2/3 animate-pulse rounded-full bg-white/75" />
+                              <div className="h-3 w-1/2 animate-pulse rounded-full bg-white/50" />
+                            </div>
+                            <div className="space-y-2">
+                              <div className="h-4 w-3/5 animate-pulse rounded-full bg-white/70" />
+                              <div className="h-3 w-1/2 animate-pulse rounded-full bg-white/45" />
+                            </div>
+                            <div className="space-y-2">
+                              <div className="h-4 w-4/5 animate-pulse rounded-full bg-white/70" />
+                              <div className="h-3 w-3/5 animate-pulse rounded-full bg-white/45" />
+                            </div>
+                          </>
+                        ) : (
+                          <>
+                            <div className="space-y-2">
+                              <div className="h-4 w-3/5 animate-pulse rounded-full bg-white/80" />
+                              <div className="h-3 w-1/2 animate-pulse rounded-full bg-white/55" />
+                            </div>
+                            <div className="space-y-2">
+                              <div className="h-4 w-2/3 animate-pulse rounded-full bg-white/70" />
+                              <div className="h-3 w-1/2 animate-pulse rounded-full bg-white/50" />
+                            </div>
+                            <div className="space-y-2">
+                              <div className="h-4 w-4/5 animate-pulse rounded-full bg-white/75" />
+                              <div className="h-3 w-1/2 animate-pulse rounded-full bg-white/50" />
+                            </div>
+                            <div className="space-y-2">
+                              <div className="h-4 w-3/5 animate-pulse rounded-full bg-white/70" />
+                              <div className="h-3 w-1/2 animate-pulse rounded-full bg-white/45" />
+                            </div>
+                            <div className="space-y-2">
+                              <div className="h-4 w-2/3 animate-pulse rounded-full bg-white/70" />
+                              <div className="h-3 w-1/2 animate-pulse rounded-full bg-white/45" />
+                            </div>
+                            <div className="flex items-center justify-end">
+                              <div className="h-8 w-20 animate-pulse rounded-xl bg-white/70" />
+                            </div>
+                          </>
+                        )}
+                      </div>
+                    ))}
                   </div>
                 </div>
               )}
@@ -1633,12 +1761,12 @@ const Find = () => {
 
                 <Separator />
 
-                <div className="space-y-2">
+                {/* <div className="space-y-2">
                   <h3 className="text-[11px] font-semibold uppercase tracking-widest text-slate-500">Catalog source</h3>
                   <p className="text-xs text-slate-600">Catalog ref: {detailState.catalogRef}</p>
                   <p className="text-xs text-slate-600">Shard: {detailState.summary.sourceShard}</p>
                   <p className="text-xs text-slate-600">Source record: {detailState.summary.sourceRecordId}</p>
-                </div>
+                </div> */}
               </div>
             </>
           ) : (

@@ -248,6 +248,29 @@ await runCheck("Broad text timeout regression", async () => {
   const duplicateRefs = pageTwo.items.filter((row) => pageOneRefs.has(row.catalogRef)).map((row) => row.catalogRef);
   assert.equal(duplicateRefs.length, 0, `Broad text page 2 duplicated page 1 refs: ${duplicateRefs.join(", ")}`);
 
+  if (Number.isFinite(Number(firstTimeoutRegressionPage.totalApprox))) {
+    const pagedResults = [firstTimeoutRegressionPage, pageTwo];
+    let nextCursor = pageTwo.nextCursor;
+
+    while (nextCursor && pagedResults.length < 6) {
+      const nextPage = await searchPage("prospects", timeoutFilters, timeoutRegressionPageSize, nextCursor);
+      assert.ok(nextPage.items.length > 0, `Broad text page ${pagedResults.length + 1} returned no rows.`);
+      assert.equal(nextPage.shardFailures.length, 0, `Broad text page ${pagedResults.length + 1} reported shard failures: ${nextPage.shardFailures.join("; ")}`);
+      pagedResults.push(nextPage);
+      nextCursor = nextPage.nextCursor;
+    }
+
+    const seenRefs = new Set();
+    pagedResults.forEach((page, index) => {
+      page.items.forEach((row) => seenRefs.add(row.catalogRef));
+      const reportedTotal = Number(page.totalApprox || 0);
+      assert.ok(
+        reportedTotal >= seenRefs.size,
+        `Reported total ${reportedTotal} fell below ${seenRefs.size} unique rows by broad text page ${index + 1}.`,
+      );
+    });
+  }
+
   return `jobTitle=ceo passed 3x (${timings.join(", ")}ms) plus page 2 in ${pageTwo.durationMs}ms`;
 });
 

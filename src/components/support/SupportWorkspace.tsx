@@ -1,26 +1,47 @@
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useMemo, useState, useRef, useEffect, useCallback } from "react";
 import { format, formatDistanceToNow } from "date-fns";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
-  AlertCircle,
+  AlertTriangle,
   ArrowUpRight,
   BookOpen,
+  Bot,
   Bug,
-  CircleDot,
-  Clock3,
+  Check,
+  CheckCircle2,
+  ChevronRight,
+  Circle,
+  Clock,
   CreditCard,
+  ExternalLink,
+  FileText,
+  Headphones,
+  Inbox,
+  Info,
+  Layers,
   LifeBuoy,
   Loader2,
-  MessageSquareText,
+  MessageCircle,
+  MessageSquarePlus,
+  Mic,
+  Paperclip,
+  Phone,
+  Plus,
+  Search,
   Send,
+  Settings,
+  Shield,
   ShieldCheck,
   Sparkles,
-  UserRound,
+  Tag,
+  TrendingUp,
+  User,
+  Video,
   Workflow,
+  X,
+  Zap,
 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import {
   Dialog,
   DialogContent,
@@ -32,1061 +53,1181 @@ import {
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { ScrollArea } from "@/components/ui/scroll-area";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Separator } from "@/components/ui/separator";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { Textarea } from "@/components/ui/textarea";
-import { toast } from "@/hooks/use-toast";
-import { cn } from "@/lib/utils";
-import { useWorkspace } from "@/providers/WorkspaceProvider";
 import {
-  SUPPORT_BENCHMARK_NOTES,
-  SUPPORT_CATEGORY_OPTIONS,
-  SUPPORT_SEVERITY_OPTIONS,
-  SUPPORT_STATUS_META,
-  appendSupportMessage,
-  createSupportConversation,
-  filterSupportArticles,
-  formatSupportTicketId,
-  getSupportCategoryLabel,
-  getSupportDueDistance,
-  getSupportSeverityLabel,
-  getSupportSlaLabel,
-  listSupportConversations,
-  listSupportMessages,
-  resolveSupportConversation,
-  type SupportCategory,
-  type SupportConversation,
-  type SupportMessage,
-  type SupportSeverity,
-  type SupportStatus,
-} from "@/lib/support";
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import { Separator } from "@/components/ui/separator";
+import { Textarea } from "@/components/ui/textarea";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
+import { cn } from "@/lib/utils";
 
-type SupportWorkspaceProps = {
-  user: any;
+// ─────────────────────────────────────────────────────────────────
+// Types
+// ─────────────────────────────────────────────────────────────────
+
+type Category =
+  | "bug"
+  | "billing"
+  | "mailbox"
+  | "campaigns"
+  | "automations"
+  | "landing_pages"
+  | "team"
+  | "deliverability"
+  | "feature_request"
+  | "other";
+
+type Severity = "low" | "medium" | "high" | "critical";
+type Status = "new" | "in_progress" | "waiting_on_customer" | "resolved";
+
+type Agent = {
+  id: string;
+  name: string;
+  avatar: string;
+  role: string;
+  online: boolean;
 };
 
-type IntakeDraft = {
+type Ticket = {
+  id: string;
+  ticketNumber: string;
   subject: string;
-  category: SupportCategory;
-  severity: SupportSeverity;
-  sourcePage: string;
-  contactPreference: "in_app" | "email";
-  description: string;
+  category: Category;
+  severity: Severity;
+  status: Status;
+  area: string;
+  assignedAgent: Agent | null;
+  slaDeadline: string | null;
+  slaPercentUsed: number;
+  created_at: string;
+  updated_at: string;
+  lastMessagePreview: string;
+  unread: boolean;
+  messageCount: number;
 };
 
-const PRODUCT_AREA_OPTIONS = [
-  "Dashboard",
-  "Campaigns",
-  "Inbox",
-  "Automations",
-  "Pipeline",
-  "Find",
-  "Email Builder",
-  "Landing Pages",
-  "Site Connector",
-  "Billing",
-  "Subscription",
-  "Team",
-  "Profile",
-  "Other",
-];
+type Message = {
+  id: string;
+  role: "customer" | "agent" | "system" | "bot";
+  authorName: string;
+  authorAvatar?: string;
+  body: string;
+  created_at: string;
+  isInternal?: boolean;
+};
 
-const QUICK_ACTIONS: Array<{
-  category: SupportCategory;
-  title: string;
+type TimelineEvent = {
+  id: string;
+  type: "created" | "assigned" | "status_change" | "escalated" | "resolved";
   description: string;
-  icon: React.ComponentType<{ className?: string }>;
-}> = [
+  timestamp: string;
+};
+
+// ─────────────────────────────────────────────────────────────────
+// Constants & Dummy Data
+// ─────────────────────────────────────────────────────────────────
+
+const AGENTS: Record<string, Agent> = {
+  alex: {
+    id: "a1",
+    name: "Alex Rivera",
+    avatar: "AR",
+    role: "Senior Support Engineer",
+    online: true,
+  },
+  jamie: {
+    id: "a2",
+    name: "Jamie Park",
+    avatar: "JP",
+    role: "Technical Account Manager",
+    online: true,
+  },
+  morgan: {
+    id: "a3",
+    name: "Morgan Lee",
+    avatar: "ML",
+    role: "Billing Specialist",
+    online: false,
+  },
+};
+
+const SYSTEM_STATUS = {
+  operational: true,
+  message: "All systems operational",
+  lastIncident: "32 days ago",
+};
+
+const DUMMY_TICKETS: Ticket[] = [
   {
-    category: "bug",
-    title: "Report a bug",
-    description: "Broken or inconsistent product behavior.",
-    icon: Bug,
+    id: "t1",
+    ticketNumber: "SUP-4821",
+    subject: "Inbox stopped syncing after reconnecting Gmail",
+    category: "mailbox",
+    severity: "high",
+    status: "in_progress",
+    area: "Inbox",
+    assignedAgent: AGENTS.alex,
+    slaDeadline: new Date(Date.now() + 3.5 * 3600000).toISOString(),
+    slaPercentUsed: 56,
+    created_at: new Date(Date.now() - 4.5 * 3600000).toISOString(),
+    updated_at: new Date(Date.now() - 12 * 60000).toISOString(),
+    lastMessagePreview:
+      "I've identified the sync issue — your OAuth token wasn't refreshed properly during reconnection...",
+    unread: true,
+    messageCount: 5,
   },
   {
+    id: "t2",
+    ticketNumber: "SUP-4819",
+    subject: "Campaign sends stuck at 0% for 30+ minutes",
+    category: "campaigns",
+    severity: "critical",
+    status: "waiting_on_customer",
+    area: "Campaigns",
+    assignedAgent: AGENTS.jamie,
+    slaDeadline: new Date(Date.now() + 0.8 * 3600000).toISOString(),
+    slaPercentUsed: 82,
+    created_at: new Date(Date.now() - 5 * 3600000).toISOString(),
+    updated_at: new Date(Date.now() - 8 * 60000).toISOString(),
+    lastMessagePreview:
+      "I need your campaign ID to unblock the send queue. You can find it in the URL...",
+    unread: true,
+    messageCount: 3,
+  },
+  {
+    id: "t3",
+    ticketNumber: "SUP-4815",
+    subject: "Payment method declined during plan upgrade",
     category: "billing",
-    title: "Billing help",
-    description: "Invoices, plan changes, and payment issues.",
-    icon: CreditCard,
+    severity: "medium",
+    status: "in_progress",
+    area: "Billing",
+    assignedAgent: AGENTS.morgan,
+    slaDeadline: new Date(Date.now() + 18 * 3600000).toISOString(),
+    slaPercentUsed: 25,
+    created_at: new Date(Date.now() - 26 * 3600000).toISOString(),
+    updated_at: new Date(Date.now() - 3 * 3600000).toISOString(),
+    lastMessagePreview:
+      "We've flagged this with our payment processor. The 3DS verification flow may be timing out...",
+    unread: false,
+    messageCount: 4,
   },
   {
+    id: "t4",
+    ticketNumber: "SUP-4798",
+    subject: "Automation skipping contacts in branch conditions",
     category: "automations",
-    title: "Automation help",
-    description: "Workflow logic, triggers, and runner issues.",
-    icon: Workflow,
+    severity: "medium",
+    status: "resolved",
+    area: "Automations",
+    assignedAgent: AGENTS.alex,
+    slaDeadline: null,
+    slaPercentUsed: 100,
+    created_at: new Date(Date.now() - 72 * 3600000).toISOString(),
+    updated_at: new Date(Date.now() - 48 * 3600000).toISOString(),
+    lastMessagePreview:
+      "The branch condition fix worked perfectly. All contacts are flowing through correctly now.",
+    unread: false,
+    messageCount: 6,
   },
   {
-    category: "team",
-    title: "Permissions",
-    description: "Roles, approvals, workspace setup, and access.",
-    icon: ShieldCheck,
+    id: "t5",
+    ticketNumber: "SUP-4782",
+    subject: "Feature request: Drag-and-drop email builder blocks",
+    category: "feature_request",
+    severity: "low",
+    status: "in_progress",
+    area: "Email Builder",
+    assignedAgent: AGENTS.jamie,
+    slaDeadline: new Date(Date.now() + 48 * 3600000).toISOString(),
+    slaPercentUsed: 12,
+    created_at: new Date(Date.now() - 96 * 3600000).toISOString(),
+    updated_at: new Date(Date.now() - 72 * 3600000).toISOString(),
+    lastMessagePreview:
+      "Great suggestion — I've forwarded this to our product team with a priority flag...",
+    unread: false,
+    messageCount: 2,
   },
 ];
 
-const SEVERITY_TONES: Record<SupportSeverity, string> = {
-  low: "border-slate-200 bg-slate-50 text-slate-700",
-  medium: "border-sky-200 bg-sky-50 text-sky-700",
-  high: "border-amber-200 bg-amber-50 text-amber-700",
-  critical: "border-rose-200 bg-rose-50 text-rose-700",
+const DUMMY_MESSAGES: Record<string, Message[]> = {
+  t1: [
+    {
+      id: "m1",
+      role: "customer",
+      authorName: "You",
+      body: "After reconnecting my Gmail account, the inbox completely stopped syncing. I've been waiting for 2 hours and no new emails are appearing. This is blocking my entire team from responding to leads.\n\nWe have 3 active campaigns running that depend on inbox replies being tracked.",
+      created_at: new Date(Date.now() - 4.5 * 3600000).toISOString(),
+    },
+    {
+      id: "m2",
+      role: "system",
+      authorName: "System",
+      body: "Ticket created · High severity · 8h response SLA · Assigned to Alex Rivera",
+      created_at: new Date(Date.now() - 4.5 * 3600000 + 3000).toISOString(),
+    },
+    {
+      id: "m3",
+      role: "bot",
+      authorName: "Support Assistant",
+      body: "While you wait, here are some things you can check:\n\n• Go to Settings → Connected Accounts and verify your Gmail shows \"Connected\"\n• Check if there's a re-authorization banner at the top of your Inbox\n• Try sending a test email to yourself and see if it appears within 5 minutes\n\nYour assigned engineer Alex Rivera will follow up shortly.",
+      created_at: new Date(Date.now() - 4.5 * 3600000 + 60000).toISOString(),
+    },
+    {
+      id: "m4",
+      role: "agent",
+      authorName: "Alex Rivera",
+      authorAvatar: "AR",
+      body: "Hi Sarah — thanks for the detailed context, this helps a lot.\n\nI've already pulled up your account and I can see the issue: your OAuth token wasn't refreshed properly during the Gmail reconnection. This is a known edge case we're patching.\n\nHere's what I'm doing right now:\n1. Manually refreshing your token on our end\n2. Re-initiating the sync from the last successful checkpoint\n3. Verifying all 3 campaign reply tracking hooks are intact\n\nYou should see emails start flowing in within the next 15-20 minutes. I'll confirm once the sync catches up fully.",
+      created_at: new Date(Date.now() - 45 * 60000).toISOString(),
+    },
+    {
+      id: "m5",
+      role: "agent",
+      authorName: "Alex Rivera",
+      authorAvatar: "AR",
+      body: "Quick update — the token refresh is complete and I can see your inbox sync has resumed. 47 messages are being processed now. All 3 campaign tracking hooks are confirmed active.\n\nPlease check your inbox in the next few minutes and let me know if everything looks right.",
+      created_at: new Date(Date.now() - 12 * 60000).toISOString(),
+    },
+  ],
+  t2: [
+    {
+      id: "m6",
+      role: "customer",
+      authorName: "You",
+      body: "My campaign 'Q1 Outreach - West Coast' has been stuck at 0% sent for over 30 minutes. I scheduled it for 9am PST and nothing has gone out. This is a critical launch for our team — 2,400 contacts are waiting.",
+      created_at: new Date(Date.now() - 5 * 3600000).toISOString(),
+    },
+    {
+      id: "m7",
+      role: "system",
+      authorName: "System",
+      body: "Ticket created · Critical severity · 2h response SLA · Escalated to Jamie Park (TAM)",
+      created_at: new Date(Date.now() - 5 * 3600000 + 3000).toISOString(),
+    },
+    {
+      id: "m8",
+      role: "agent",
+      authorName: "Jamie Park",
+      authorAvatar: "JP",
+      body: "Sarah, I'm on this right now — critical sends get immediate attention.\n\nI need your campaign ID to unblock the send queue. You can find it in the URL when you open the campaign (it looks like `cmp_abc123`).\n\nWhile you grab that, I'm already checking the send infrastructure on our side to see if there's a queue-level issue affecting your workspace.",
+      created_at: new Date(Date.now() - 8 * 60000).toISOString(),
+    },
+  ],
+  t3: [
+    {
+      id: "m9",
+      role: "customer",
+      authorName: "You",
+      body: "I'm trying to upgrade from Starter to Growth but my payment keeps getting declined. I've tried two different Visa cards and a Mastercard. All work fine on other services. We need the upgrade for additional seats before our new hires start Monday.",
+      created_at: new Date(Date.now() - 26 * 3600000).toISOString(),
+    },
+    {
+      id: "m10",
+      role: "system",
+      authorName: "System",
+      body: "Ticket created · Medium severity · 24h response SLA · Assigned to Morgan Lee",
+      created_at: new Date(Date.now() - 26 * 3600000 + 3000).toISOString(),
+    },
+    {
+      id: "m11",
+      role: "agent",
+      authorName: "Morgan Lee",
+      authorAvatar: "ML",
+      body: "Hi Sarah — I understand the urgency with your new hires starting Monday.\n\nWe've flagged this with our payment processor. The 3DS verification flow may be timing out for your card issuer. I'm going to:\n\n1. Generate a direct invoice link that bypasses the checkout flow\n2. Check with our processor if there's a hold on your account\n\nI'll have the invoice link ready within the hour so you can complete the upgrade today.",
+      created_at: new Date(Date.now() - 22 * 3600000).toISOString(),
+    },
+    {
+      id: "m12",
+      role: "agent",
+      authorName: "Morgan Lee",
+      authorAvatar: "ML",
+      body: "Here's your direct upgrade invoice: https://billing.example.com/inv_xxxxx\n\nThis link uses an alternative payment flow that should work with your cards. It's valid for 48 hours. Let me know once you've completed it and I'll verify the seat addition immediately.",
+      created_at: new Date(Date.now() - 3 * 3600000).toISOString(),
+    },
+  ],
+  t4: [
+    {
+      id: "m13",
+      role: "customer",
+      authorName: "You",
+      body: "My automation workflow 'Lead Nurture v3' is skipping about 40% of contacts when they hit the branch condition. The filter is set to 'opened email in last 7 days' but contacts who definitely opened are being excluded.",
+      created_at: new Date(Date.now() - 72 * 3600000).toISOString(),
+    },
+    {
+      id: "m14",
+      role: "agent",
+      authorName: "Alex Rivera",
+      authorAvatar: "AR",
+      body: "Found the root cause — two things were happening:\n\n1. The branch was using 'unique opens' instead of 'total opens'\n2. Your tracking domain had a brief DNS issue last Tuesday that caused ~35% of opens to not register in our analytics pipeline\n\nI've corrected the branch logic and re-queued the 847 affected contacts. They'll flow through the correct branch within the next 2 hours.",
+      created_at: new Date(Date.now() - 50 * 3600000).toISOString(),
+    },
+    {
+      id: "m15",
+      role: "customer",
+      authorName: "You",
+      body: "Thanks! The branch condition fix worked perfectly. All contacts are flowing through correctly now. Appreciate the fast turnaround — the root cause analysis was really helpful too.",
+      created_at: new Date(Date.now() - 48 * 3600000).toISOString(),
+    },
+    {
+      id: "m16",
+      role: "system",
+      authorName: "System",
+      body: "Ticket resolved · Resolution time: 24h · CSAT: ⭐⭐⭐⭐⭐",
+      created_at: new Date(Date.now() - 48 * 3600000 + 60000).toISOString(),
+    },
+  ],
+  t5: [
+    {
+      id: "m17",
+      role: "customer",
+      authorName: "You",
+      body: "It would be great to be able to reorder blocks by dragging them in the email builder instead of having to delete and re-add them. Our marketing team builds complex emails with 10+ blocks and rearranging is painful right now.",
+      created_at: new Date(Date.now() - 96 * 3600000).toISOString(),
+    },
+    {
+      id: "m18",
+      role: "agent",
+      authorName: "Jamie Park",
+      authorAvatar: "JP",
+      body: "Great suggestion, Sarah — this is something we've heard from several teams.\n\nI've forwarded this to our product team with a priority flag given the workflow impact you described. I'll update this thread when we have a timeline. In the meantime, you can use the \"Duplicate block\" + delete workflow as a faster workaround.",
+      created_at: new Date(Date.now() - 72 * 3600000).toISOString(),
+    },
+  ],
 };
 
-const FILTER_LABELS: Array<{ value: "all" | SupportStatus; label: string }> = [
-  { value: "all", label: "All requests" },
-  { value: "waiting_on_support", label: "Waiting on support" },
-  { value: "waiting_on_customer", label: "Waiting on you" },
-  { value: "resolved", label: "Resolved" },
+const TIMELINE_EVENTS: Record<string, TimelineEvent[]> = {
+  t1: [
+    { id: "e1", type: "created", description: "Ticket created", timestamp: new Date(Date.now() - 4.5 * 3600000).toISOString() },
+    { id: "e2", type: "assigned", description: "Assigned to Alex Rivera", timestamp: new Date(Date.now() - 4.5 * 3600000 + 5000).toISOString() },
+    { id: "e3", type: "status_change", description: "Status → In Progress", timestamp: new Date(Date.now() - 45 * 60000).toISOString() },
+  ],
+  t2: [
+    { id: "e4", type: "created", description: "Ticket created", timestamp: new Date(Date.now() - 5 * 3600000).toISOString() },
+    { id: "e5", type: "escalated", description: "Auto-escalated: Critical severity", timestamp: new Date(Date.now() - 5 * 3600000 + 3000).toISOString() },
+    { id: "e6", type: "assigned", description: "Assigned to Jamie Park (TAM)", timestamp: new Date(Date.now() - 5 * 3600000 + 5000).toISOString() },
+    { id: "e7", type: "status_change", description: "Status → Waiting on customer", timestamp: new Date(Date.now() - 8 * 60000).toISOString() },
+  ],
+};
+
+const KB_ARTICLES = [
+  { id: "kb1", title: "Reconnecting your mailbox", summary: "Re-authenticate Gmail, Outlook, or custom IMAP", category: "mailbox" as Category, readTime: "3 min" },
+  { id: "kb2", title: "Campaign send troubleshooting", summary: "Why campaigns stall, under-send, or show 0%", category: "campaigns" as Category, readTime: "5 min" },
+  { id: "kb3", title: "Billing & invoice management", summary: "Update payment, download invoices, change plans", category: "billing" as Category, readTime: "2 min" },
+  { id: "kb4", title: "Automation branch logic", summary: "How conditions evaluate and common misconfigs", category: "automations" as Category, readTime: "4 min" },
+  { id: "kb5", title: "Email deliverability guide", summary: "Warm-up, SPF/DKIM, reputation monitoring", category: "deliverability" as Category, readTime: "8 min" },
+  { id: "kb6", title: "Team permissions & roles", summary: "Configure access, approvals, workspace settings", category: "team" as Category, readTime: "3 min" },
 ];
 
-function formatPlanLabel(planId?: string | null) {
-  if (!planId) return "Starter";
-  return planId
-    .split(/[_-]+/)
-    .filter(Boolean)
-    .map((token) => token.charAt(0).toUpperCase() + token.slice(1))
-    .join(" ");
-}
+const CATEGORY_OPTIONS = [
+  { value: "bug", label: "Bug Report", icon: Bug },
+  { value: "billing", label: "Billing", icon: CreditCard },
+  { value: "mailbox", label: "Mailbox", icon: Inbox },
+  { value: "campaigns", label: "Campaigns", icon: Send },
+  { value: "automations", label: "Automations", icon: Workflow },
+  { value: "feature_request", label: "Feature Request", icon: Sparkles },
+  { value: "other", label: "Other", icon: LifeBuoy },
+];
 
-function getDisplayName(user: any) {
-  const firstName = user?.user_metadata?.first_name || "";
-  const lastName = user?.user_metadata?.last_name || "";
-  const fullName = [firstName, lastName].filter(Boolean).join(" ").trim();
-  if (fullName) return fullName;
-  return user?.email?.split("@")[0] || "Customer";
-}
+const SEVERITY_CONFIG: Record<Severity, { label: string; sla: string; color: string; bg: string; border: string; ring: string }> = {
+  low: { label: "Low", sla: "72h", color: "text-slate-600", bg: "bg-slate-50", border: "border-slate-200", ring: "ring-slate-200" },
+  medium: { label: "Medium", sla: "24h", color: "text-blue-600", bg: "bg-blue-50", border: "border-blue-200", ring: "ring-blue-200" },
+  high: { label: "High", sla: "8h", color: "text-amber-600", bg: "bg-amber-50", border: "border-amber-200", ring: "ring-amber-200" },
+  critical: { label: "Critical", sla: "2h", color: "text-red-600", bg: "bg-red-50", border: "border-red-200", ring: "ring-red-200" },
+};
 
-function SummaryMetric({
-  label,
-  value,
-  tone,
-}: {
-  label: string;
-  value: string;
-  tone: string;
-}) {
+const STATUS_CONFIG: Record<Status, { label: string; color: string; bgDot: string; description: string }> = {
+  new: { label: "New", color: "text-slate-600", bgDot: "bg-slate-400", description: "Received — awaiting triage" },
+  in_progress: { label: "In Progress", color: "text-emerald-600", bgDot: "bg-emerald-500", description: "An engineer is actively working on this" },
+  waiting_on_customer: { label: "Needs Your Reply", color: "text-amber-600", bgDot: "bg-amber-500", description: "We've responded — waiting for your input" },
+  resolved: { label: "Resolved", color: "text-muted-foreground", bgDot: "bg-muted-foreground", description: "Closed — reply to reopen" },
+};
+
+// ─────────────────────────────────────────────────────────────────
+// Sub-components
+// ─────────────────────────────────────────────────────────────────
+
+function SLAProgressBar({ percent, severity }: { percent: number; severity: Severity }) {
+  const isUrgent = percent > 75;
+  const barColor = isUrgent
+    ? "bg-red-500"
+    : percent > 50
+    ? "bg-amber-500"
+    : "bg-emerald-500";
+
   return (
-    <div className="rounded-2xl border border-[var(--shell-border)] bg-white/80 p-4 shadow-[0_14px_32px_-28px_rgba(15,23,42,0.45)]">
-      <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-[var(--shell-muted)]">{label}</p>
-      <p className={cn("mt-2 text-2xl font-semibold", tone)} style={{ fontFamily: "var(--shell-font-display)" }}>
-        {value}
-      </p>
+    <div className="flex items-center gap-2">
+      <div className="h-1.5 flex-1 overflow-hidden rounded-full bg-muted">
+        <div
+          className={cn("h-full rounded-full transition-all duration-700 ease-out", barColor)}
+          style={{ width: `${Math.min(percent, 100)}%` }}
+        />
+      </div>
+      <span className={cn("text-[10px] font-semibold tabular-nums", isUrgent ? "text-red-600" : "text-muted-foreground")}>
+        {Math.round(percent)}%
+      </span>
     </div>
   );
 }
 
-function ConversationCard({
-  conversation,
-  selected,
-  onSelect,
-}: {
-  conversation: SupportConversation;
-  selected: boolean;
-  onSelect: () => void;
-}) {
+function AgentPresence({ agent }: { agent: Agent }) {
+  return (
+    <div className="flex items-center gap-2.5">
+      <div className="relative">
+        <div className="flex h-8 w-8 items-center justify-center rounded-full bg-foreground/10 text-xs font-bold text-foreground">
+          {agent.avatar}
+        </div>
+        <span
+          className={cn(
+            "absolute -bottom-0.5 -right-0.5 h-3 w-3 rounded-full border-2 border-card",
+            agent.online ? "bg-emerald-500" : "bg-muted-foreground/40"
+          )}
+        />
+      </div>
+      <div className="min-w-0">
+        <p className="truncate text-sm font-medium text-foreground">{agent.name}</p>
+        <p className="text-[11px] text-muted-foreground">
+          {agent.online ? (
+            <span className="flex items-center gap-1">
+              <span className="h-1 w-1 rounded-full bg-emerald-500" />
+              Online · {agent.role}
+            </span>
+          ) : (
+            <span>{agent.role} · Usually responds in 2h</span>
+          )}
+        </p>
+      </div>
+    </div>
+  );
+}
+
+function TicketListItem({ ticket, selected, onSelect }: { ticket: Ticket; selected: boolean; onSelect: () => void }) {
+  const severityConf = SEVERITY_CONFIG[ticket.severity];
+  const statusConf = STATUS_CONFIG[ticket.status];
+
   return (
     <button
       type="button"
       onClick={onSelect}
       className={cn(
-        "w-full rounded-2xl border p-4 text-left transition-all",
+        "group relative w-full border-b border-border px-5 py-4 text-left transition-all duration-150",
         selected
-          ? "border-emerald-300 bg-emerald-50/70 shadow-[0_18px_38px_-28px_rgba(16,185,129,0.55)]"
-          : "border-[var(--shell-border)] bg-white/85 hover:border-emerald-200 hover:bg-white",
+          ? "bg-accent/50"
+          : "hover:bg-accent/30",
+        ticket.unread && "bg-accent/20"
       )}
     >
-      <div className="flex items-start justify-between gap-3">
-        <div className="min-w-0">
-          <p className="truncate text-sm font-semibold text-[var(--shell-ink)]">{conversation.subject}</p>
-          <p className="mt-1 text-xs text-[var(--shell-muted)]">
-            {formatSupportTicketId(conversation.id)} · {getSupportCategoryLabel(conversation.category)}
-          </p>
+      {/* Selection indicator */}
+      {selected && (
+        <div className="absolute left-0 top-3 bottom-3 w-[3px] rounded-r-full bg-foreground" />
+      )}
+
+      <div className="flex items-start gap-3">
+        {/* Status dot */}
+        <div className="mt-1.5 flex flex-col items-center gap-1">
+          <span className="relative flex h-2 w-2">
+            {(ticket.status === "in_progress" || ticket.status === "waiting_on_customer") && (
+              <span className={cn("absolute inline-flex h-full w-full animate-ping rounded-full opacity-30", statusConf.bgDot)} />
+            )}
+            <span className={cn("relative inline-flex h-2 w-2 rounded-full", statusConf.bgDot)} />
+          </span>
         </div>
-        <Badge className={cn("border text-[10px] font-semibold uppercase", SUPPORT_STATUS_META[conversation.status].tone)}>
-          {SUPPORT_STATUS_META[conversation.status].label}
-        </Badge>
-      </div>
 
-      <div className="mt-3 flex flex-wrap items-center gap-2">
-        <Badge variant="outline" className={cn("border text-[10px] uppercase", SEVERITY_TONES[conversation.severity])}>
-          {getSupportSeverityLabel(conversation.severity)}
-        </Badge>
-        {conversation.source_page && (
-          <Badge variant="outline" className="border-slate-200 bg-white text-[10px] uppercase text-slate-600">
-            {conversation.source_page}
-          </Badge>
-        )}
-      </div>
+        <div className="min-w-0 flex-1">
+          {/* Top row: ticket # + severity */}
+          <div className="flex items-center gap-2 text-[11px]">
+            <span className="font-mono font-medium text-muted-foreground">{ticket.ticketNumber}</span>
+            <span className={cn("rounded px-1 py-0.5 text-[9px] font-bold uppercase tracking-wider", severityConf.bg, severityConf.color)}>
+              {severityConf.label}
+            </span>
+            {ticket.unread && (
+              <span className="ml-auto h-1.5 w-1.5 rounded-full bg-foreground" />
+            )}
+          </div>
 
-      <div className="mt-3 flex items-center justify-between text-[11px] text-[var(--shell-muted)]">
-        <span>Updated {formatDistanceToNow(new Date(conversation.updated_at), { addSuffix: true })}</span>
-        <span>{getSupportDueDistance(conversation.response_due_at)}</span>
+          {/* Subject */}
+          <p className={cn("mt-1 truncate text-[13px] leading-snug", ticket.unread ? "font-semibold text-foreground" : "font-medium text-foreground/80")}>
+            {ticket.subject}
+          </p>
+
+          {/* Preview */}
+          <p className="mt-1 truncate text-xs text-muted-foreground/70">
+            {ticket.lastMessagePreview}
+          </p>
+
+          {/* Bottom row: agent + time + SLA */}
+          <div className="mt-2.5 flex items-center gap-3">
+            {ticket.assignedAgent && (
+              <div className="flex items-center gap-1.5">
+                <div className="relative">
+                  <div className="flex h-4 w-4 items-center justify-center rounded-full bg-foreground/10 text-[8px] font-bold text-foreground/60">
+                    {ticket.assignedAgent.avatar}
+                  </div>
+                  {ticket.assignedAgent.online && (
+                    <span className="absolute -bottom-px -right-px h-1.5 w-1.5 rounded-full border border-card bg-emerald-500" />
+                  )}
+                </div>
+                <span className="text-[11px] text-muted-foreground">{ticket.assignedAgent.name.split(" ")[0]}</span>
+              </div>
+            )}
+            <span className="text-[10px] text-muted-foreground/60">
+              {formatDistanceToNow(new Date(ticket.updated_at), { addSuffix: true })}
+            </span>
+
+            {/* SLA mini-bar */}
+            {ticket.status !== "resolved" && ticket.slaDeadline && (
+              <div className="ml-auto w-16">
+                <SLAProgressBar percent={ticket.slaPercentUsed} severity={ticket.severity} />
+              </div>
+            )}
+            {ticket.status === "resolved" && (
+              <CheckCircle2 className="ml-auto h-3.5 w-3.5 text-emerald-500" />
+            )}
+          </div>
+        </div>
       </div>
     </button>
   );
 }
 
-function MessageBubble({ message, isCustomer }: { message: SupportMessage; isCustomer: boolean }) {
+function TimelineItem({ event }: { event: TimelineEvent }) {
+  const icons: Record<string, React.ReactNode> = {
+    created: <Plus className="h-3 w-3" />,
+    assigned: <User className="h-3 w-3" />,
+    status_change: <ArrowUpRight className="h-3 w-3" />,
+    escalated: <AlertTriangle className="h-3 w-3" />,
+    resolved: <CheckCircle2 className="h-3 w-3" />,
+  };
+
   return (
-    <div className={cn("flex", isCustomer ? "justify-end" : "justify-start")}>
-      <div
-        className={cn(
-          "max-w-[82%] rounded-2xl border px-4 py-3 shadow-[0_14px_30px_-24px_rgba(15,23,42,0.4)]",
-          isCustomer
-            ? "border-emerald-200 bg-emerald-50/90 text-emerald-950"
-            : "border-slate-200 bg-white text-slate-900",
-        )}
-      >
-        <div className="flex items-center gap-2 text-[11px] text-slate-500">
-          <span className="font-semibold text-slate-700">{message.author_name || "Support"}</span>
-          <span>{format(new Date(message.created_at), "MMM d, h:mm a")}</span>
-        </div>
-        <p className="mt-2 whitespace-pre-wrap text-sm leading-6">{message.body}</p>
+    <div className="flex items-center gap-2.5 text-[11px] text-muted-foreground">
+      <div className="flex h-5 w-5 items-center justify-center rounded-full bg-muted">
+        {icons[event.type]}
       </div>
+      <span>{event.description}</span>
+      <span className="ml-auto shrink-0 text-muted-foreground/60">
+        {format(new Date(event.timestamp), "MMM d, h:mm a")}
+      </span>
     </div>
   );
 }
 
-function KnowledgeCard({
-  title,
-  summary,
-  recommendedFor,
-  actions,
-  category,
-}: {
-  title: string;
-  summary: string;
-  recommendedFor: string;
-  actions: string[];
-  category: SupportCategory;
-}) {
-  return (
-    <div className="rounded-2xl border border-[var(--shell-border)] bg-white/85 p-4 shadow-[0_14px_30px_-28px_rgba(15,23,42,0.4)]">
-      <div className="flex items-start justify-between gap-3">
-        <div>
-          <p className="text-sm font-semibold text-[var(--shell-ink)]">{title}</p>
-          <p className="mt-1 text-xs text-[var(--shell-muted)]">{summary}</p>
+function MessageItem({ message }: { message: Message }) {
+  if (message.role === "system") {
+    return (
+      <div className="flex justify-center py-1">
+        <div className="flex items-center gap-1.5 rounded-full bg-muted/60 px-3 py-1 text-[11px] text-muted-foreground">
+          <Info className="h-3 w-3" />
+          {message.body}
         </div>
-        <Badge variant="outline" className="border-slate-200 bg-white text-[10px] uppercase text-slate-600">
-          {getSupportCategoryLabel(category)}
-        </Badge>
       </div>
-      <p className="mt-3 text-xs font-medium text-slate-700">Best for: {recommendedFor}</p>
-      <div className="mt-3 space-y-2">
-        {actions.map((action) => (
-          <div key={action} className="flex gap-2 text-xs text-[var(--shell-muted)]">
-            <CircleDot className="mt-0.5 h-3.5 w-3.5 shrink-0 text-emerald-500" />
-            <span>{action}</span>
+    );
+  }
+
+  if (message.role === "bot") {
+    return (
+      <div className="flex gap-3">
+        <div className="mt-1 flex h-7 w-7 shrink-0 items-center justify-center rounded-lg bg-muted">
+          <Bot className="h-4 w-4 text-muted-foreground" />
+        </div>
+        <div className="max-w-[80%]">
+          <div className="flex items-center gap-2 text-[11px] text-muted-foreground">
+            <span className="font-medium">{message.authorName}</span>
+            <span>{format(new Date(message.created_at), "h:mm a")}</span>
           </div>
-        ))}
+          <div className="mt-1 rounded-xl rounded-tl-sm border border-border bg-muted/40 px-4 py-3">
+            <p className="whitespace-pre-wrap text-[13px] leading-relaxed text-foreground/80">
+              {message.body}
+            </p>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  const isCustomer = message.role === "customer";
+
+  return (
+    <div className={cn("flex gap-3", isCustomer ? "flex-row-reverse" : "flex-row")}>
+      {/* Avatar */}
+      <div className={cn(
+        "mt-1 flex h-7 w-7 shrink-0 items-center justify-center rounded-full text-[10px] font-bold",
+        isCustomer ? "bg-foreground text-background" : "bg-emerald-600/10 text-emerald-700"
+      )}>
+        {isCustomer ? "SC" : message.authorAvatar || "S"}
+      </div>
+
+      <div className={cn("max-w-[80%]", isCustomer && "text-right")}>
+        <div className={cn("flex items-center gap-2 text-[11px] text-muted-foreground", isCustomer && "justify-end")}>
+          <span className="font-medium">{isCustomer ? "You" : message.authorName}</span>
+          <span>{format(new Date(message.created_at), "h:mm a")}</span>
+        </div>
+        <div className={cn(
+          "mt-1 rounded-2xl px-4 py-3",
+          isCustomer
+            ? "rounded-tr-sm bg-foreground text-background"
+            : "rounded-tl-sm border border-border bg-card"
+        )}>
+          <p className={cn("whitespace-pre-wrap text-[13px] leading-relaxed", !isCustomer && "text-foreground")}>
+            {message.body}
+          </p>
+        </div>
       </div>
     </div>
   );
 }
 
-const SupportWorkspace = ({ user }: SupportWorkspaceProps) => {
-  const queryClient = useQueryClient();
-  const { workspace, loading: workspaceLoading, error: workspaceError } = useWorkspace();
+// ─────────────────────────────────────────────────────────────────
+// Main Component
+// ─────────────────────────────────────────────────────────────────
+
+const SupportWorkspace = () => {
   const [search, setSearch] = useState("");
-  const [requestFilter, setRequestFilter] = useState<"all" | SupportStatus>("all");
-  const [selectedConversationId, setSelectedConversationId] = useState<string | null>(null);
-  const [knowledgeCategory, setKnowledgeCategory] = useState<SupportCategory | "all">("all");
+  const [statusFilter, setStatusFilter] = useState<"all" | Status>("all");
+  const [selectedId, setSelectedId] = useState<string>("t1");
   const [replyDraft, setReplyDraft] = useState("");
   const [dialogOpen, setDialogOpen] = useState(false);
-  const [draft, setDraft] = useState<IntakeDraft>({
+  const [showTimeline, setShowTimeline] = useState(false);
+  const [showKB, setShowKB] = useState(false);
+  const [draft, setDraft] = useState({
     subject: "",
-    category: "bug",
-    severity: "medium",
-    sourcePage: "Other",
-    contactPreference: "in_app",
+    category: "bug" as Category,
+    severity: "medium" as Severity,
     description: "",
   });
 
-  const displayName = useMemo(() => getDisplayName(user), [user]);
-  const planLabel = formatPlanLabel(workspace?.planId);
+  const messagesEndRef = useRef<HTMLDivElement>(null);
 
-  const conversationsQuery = useQuery({
-    queryKey: ["support-conversations", workspace?.workspaceId],
-    enabled: Boolean(workspace?.workspaceId),
-    queryFn: async () => listSupportConversations(workspace!.workspaceId),
-  });
-
-  const conversations = conversationsQuery.data || [];
-  const selectedConversation = useMemo(
-    () => conversations.find((conversation) => conversation.id === selectedConversationId) || null,
-    [conversations, selectedConversationId],
+  const selected = useMemo(
+    () => DUMMY_TICKETS.find((t) => t.id === selectedId) || null,
+    [selectedId]
   );
 
-  useEffect(() => {
-    if (!conversations.length) {
-      setSelectedConversationId(null);
-      return;
-    }
-
-    if (!selectedConversationId || !conversations.some((conversation) => conversation.id === selectedConversationId)) {
-      setSelectedConversationId(conversations[0].id);
-    }
-  }, [conversations, selectedConversationId]);
-
-  const messagesQuery = useQuery({
-    queryKey: ["support-messages", selectedConversationId],
-    enabled: Boolean(selectedConversationId),
-    queryFn: async () => listSupportMessages(selectedConversationId!),
-  });
-
-  const createConversationMutation = useMutation({
-    mutationFn: async () => {
-      if (!workspace?.workspaceId) {
-        throw new Error("Workspace not loaded");
-      }
-      if (!draft.subject.trim() || !draft.description.trim()) {
-        throw new Error("Subject and description are required");
-      }
-
-      const timezone = Intl.DateTimeFormat().resolvedOptions().timeZone;
-      return createSupportConversation({
-        workspaceId: workspace.workspaceId,
-        requesterUserId: user.id,
-        requesterEmail: user.email || null,
-        requesterName: displayName,
-        subject: draft.subject,
-        category: draft.category,
-        severity: draft.severity,
-        description: draft.description,
-        sourcePage: draft.sourcePage,
-        sourceUrl: typeof window !== "undefined" ? window.location.href : null,
-        contactPreference: draft.contactPreference,
-        sourceMetadata: {
-          workspaceName: workspace.workspaceName,
-          workspaceRole: workspace.role,
-          workspacePlan: workspace.planId || null,
-          timezone,
-          browser: typeof navigator !== "undefined" ? navigator.userAgent : null,
-        },
-      });
-    },
-    onSuccess: async (conversation) => {
-      await queryClient.invalidateQueries({ queryKey: ["support-conversations", workspace?.workspaceId] });
-      await queryClient.invalidateQueries({ queryKey: ["support-messages", conversation.id] });
-      setSelectedConversationId(conversation.id);
-      setDialogOpen(false);
-      setDraft({
-        subject: "",
-        category: "bug",
-        severity: "medium",
-        sourcePage: "Other",
-        contactPreference: "in_app",
-        description: "",
-      });
-      toast({
-        title: "Support request created",
-        description: `${formatSupportTicketId(conversation.id)} is open with a ${getSupportSlaLabel(conversation.severity)}.`,
-      });
-    },
-    onError: (error: any) => {
-      toast({
-        title: "Could not create support request",
-        description: error?.message || "Try again after refreshing the page.",
-        variant: "destructive",
-      });
-    },
-  });
-
-  const replyMutation = useMutation({
-    mutationFn: async () => {
-      if (!selectedConversation || !workspace?.workspaceId) {
-        throw new Error("Select a support thread first");
-      }
-      if (!replyDraft.trim()) {
-        throw new Error("Message cannot be empty");
-      }
-
-      return appendSupportMessage({
-        conversationId: selectedConversation.id,
-        workspaceId: workspace.workspaceId,
-        authorUserId: user.id,
-        authorName: displayName,
-        body: replyDraft,
-      });
-    },
-    onSuccess: async () => {
-      setReplyDraft("");
-      await queryClient.invalidateQueries({ queryKey: ["support-conversations", workspace?.workspaceId] });
-      await queryClient.invalidateQueries({ queryKey: ["support-messages", selectedConversationId] });
-    },
-    onError: (error: any) => {
-      toast({
-        title: "Could not send update",
-        description: error?.message || "Try again after refreshing the page.",
-        variant: "destructive",
-      });
-    },
-  });
-
-  const resolveMutation = useMutation({
-    mutationFn: async () => {
-      if (!selectedConversation) throw new Error("Select a support thread first");
-      return resolveSupportConversation(selectedConversation.id);
-    },
-    onSuccess: async (conversation) => {
-      await queryClient.invalidateQueries({ queryKey: ["support-conversations", workspace?.workspaceId] });
-      await queryClient.invalidateQueries({ queryKey: ["support-messages", conversation.id] });
-      toast({
-        title: "Support request resolved",
-        description: `${formatSupportTicketId(conversation.id)} has been marked resolved.`,
-      });
-    },
-    onError: (error: any) => {
-      toast({
-        title: "Could not resolve request",
-        description: error?.message || "Try again after refreshing the page.",
-        variant: "destructive",
-      });
-    },
-  });
-
-  const filteredConversations = useMemo(() => {
-    const normalized = search.trim().toLowerCase();
-
-    return conversations.filter((conversation) => {
-      if (requestFilter !== "all" && conversation.status !== requestFilter) return false;
-      if (!normalized) return true;
-
-      return [
-        conversation.subject,
-        getSupportCategoryLabel(conversation.category),
-        conversation.source_page || "",
-        formatSupportTicketId(conversation.id),
-      ]
-        .join(" ")
-        .toLowerCase()
-        .includes(normalized);
+  const filtered = useMemo(() => {
+    const q = search.trim().toLowerCase();
+    return DUMMY_TICKETS.filter((t) => {
+      if (statusFilter !== "all" && t.status !== statusFilter) return false;
+      if (!q) return true;
+      return (
+        t.subject.toLowerCase().includes(q) ||
+        t.ticketNumber.toLowerCase().includes(q) ||
+        t.category.includes(q) ||
+        (t.area || "").toLowerCase().includes(q)
+      );
     });
-  }, [conversations, requestFilter, search]);
+  }, [search, statusFilter]);
 
-  const recommendedArticles = useMemo(() => {
-    const inferredCategory =
-      knowledgeCategory === "all" ? selectedConversation?.category || "all" : knowledgeCategory;
-    return filterSupportArticles(search, inferredCategory).slice(0, 4);
-  }, [knowledgeCategory, search, selectedConversation?.category]);
+  const messages = selectedId ? DUMMY_MESSAGES[selectedId] || [] : [];
+  const timeline = selectedId ? TIMELINE_EVENTS[selectedId] || [] : [];
 
-  const queueStats = useMemo(() => {
-    const openCount = conversations.filter((conversation) => conversation.status !== "resolved").length;
-    const waitingOnSupport = conversations.filter(
-      (conversation) => conversation.status === "waiting_on_support" || conversation.status === "new",
-    ).length;
-    const resolvedCount = conversations.filter((conversation) => conversation.status === "resolved").length;
+  const stats = useMemo(() => {
+    const open = DUMMY_TICKETS.filter((t) => t.status !== "resolved").length;
+    const needsReply = DUMMY_TICKETS.filter((t) => t.status === "waiting_on_customer").length;
+    const avgSla = Math.round(DUMMY_TICKETS.filter((t) => t.status !== "resolved").reduce((sum, t) => sum + t.slaPercentUsed, 0) / Math.max(open, 1));
+    return { open, needsReply, avgSla };
+  }, []);
 
-    return { openCount, waitingOnSupport, resolvedCount };
-  }, [conversations]);
+  useEffect(() => {
+    messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
+  }, [selectedId]);
 
-  const openDialog = (category?: SupportCategory) => {
-    setDraft((current) => ({
-      ...current,
-      category: category || current.category,
-      sourcePage: selectedConversation?.source_page || current.sourcePage,
-    }));
-    setDialogOpen(true);
-  };
+  const filterOptions: Array<{ value: "all" | Status; label: string; count?: number }> = [
+    { value: "all", label: "All" },
+    { value: "in_progress", label: "In Progress" },
+    { value: "waiting_on_customer", label: "Needs Reply", count: stats.needsReply },
+    { value: "resolved", label: "Resolved" },
+  ];
 
-  if (workspaceLoading) {
-    return (
-      <div className="flex min-h-[60vh] items-center justify-center">
-        <div className="flex items-center gap-3 rounded-full border border-[var(--shell-border)] bg-white/80 px-5 py-3 text-sm text-[var(--shell-muted)]">
-          <Loader2 className="h-4 w-4 animate-spin" />
-          Loading support center
-        </div>
-      </div>
-    );
-  }
-
-  if (workspaceError || !workspace) {
-    return (
-      <Card className="border-rose-200 bg-rose-50/80">
-        <CardHeader>
-          <CardTitle className="text-rose-900">Support center is unavailable</CardTitle>
-          <CardDescription className="text-rose-700">
-            Workspace context did not load, so support requests cannot be attached to the correct account.
-          </CardDescription>
-        </CardHeader>
-        <CardContent className="text-sm text-rose-800">{workspaceError || "Workspace not found."}</CardContent>
-      </Card>
-    );
-  }
+  const contextualArticles = useMemo(() => {
+    if (!selected) return KB_ARTICLES.slice(0, 3);
+    return KB_ARTICLES.filter((a) => a.category === selected.category).slice(0, 3);
+  }, [selected]);
 
   return (
     <>
-      <div className="space-y-6">
-        <section className="overflow-hidden rounded-[32px] border border-[var(--shell-border)] bg-[radial-gradient(circle_at_top_left,rgba(16,185,129,0.16),transparent_34%),radial-gradient(circle_at_top_right,rgba(245,158,11,0.14),transparent_28%),linear-gradient(180deg,rgba(255,255,255,0.96),rgba(248,250,252,0.92))] p-6 shadow-[0_24px_70px_-42px_rgba(15,23,42,0.45)] lg:p-8">
-          <div className="grid gap-6 xl:grid-cols-[minmax(0,1.4fr)_minmax(320px,0.9fr)]">
-            <div>
-              <div className="inline-flex items-center gap-2 rounded-full border border-emerald-200 bg-emerald-50 px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.18em] text-emerald-700">
-                <LifeBuoy className="h-3.5 w-3.5" />
-                Support Center
-              </div>
-              <h1
-                className="mt-4 text-3xl font-semibold tracking-tight text-[var(--shell-ink)] lg:text-4xl"
-                style={{ fontFamily: "var(--shell-font-display)" }}
-              >
-                Self-serve first, human support without losing context.
-              </h1>
-              <p className="mt-3 max-w-2xl text-sm leading-7 text-[var(--shell-muted)]">
-                Strong support systems reduce dead-end chat loops, preserve conversation history, and attach account
-                context at intake. This workspace does the same: one thread, visible status, and structured escalation.
-              </p>
+      <div className="flex h-screen flex-col overflow-hidden bg-background">
+        {/* ── System status bar ── */}
+        <div className="flex h-8 items-center justify-between border-b border-border bg-card px-5">
+          <div className="flex items-center gap-2 text-[11px]">
+            <span className="flex h-4 w-4 items-center justify-center rounded-full bg-emerald-500/10">
+              <span className="h-1.5 w-1.5 rounded-full bg-emerald-500" />
+            </span>
+            <span className="font-medium text-emerald-600">{SYSTEM_STATUS.message}</span>
+            <span className="text-muted-foreground/50">·</span>
+            <span className="text-muted-foreground/60">Last incident {SYSTEM_STATUS.lastIncident}</span>
+          </div>
+          <div className="flex items-center gap-3 text-[11px] text-muted-foreground/60">
+            <span className="hidden sm:inline">Plan: <span className="font-medium text-muted-foreground">Growth</span></span>
+            <span className="hidden sm:inline">·</span>
+            <span className="hidden sm:inline">Acme Inc.</span>
+          </div>
+        </div>
 
-              <div className="mt-5 flex flex-wrap gap-2">
-                <Badge variant="outline" className="border-white/80 bg-white/70 px-3 py-1 text-[11px] font-semibold text-slate-700">
-                  Workspace context attached
-                </Badge>
-                <Badge variant="outline" className="border-white/80 bg-white/70 px-3 py-1 text-[11px] font-semibold text-slate-700">
-                  Status and SLA visible
-                </Badge>
-                <Badge variant="outline" className="border-white/80 bg-white/70 px-3 py-1 text-[11px] font-semibold text-slate-700">
-                  Knowledge base plus escalation
-                </Badge>
-              </div>
+        {/* ── Main header ── */}
+        <div className="flex items-center justify-between border-b border-border px-5 py-3">
+          <div className="flex items-center gap-4">
+            <div className="flex items-center gap-2">
+              <Headphones className="h-5 w-5 text-foreground" />
+              <h1 className="text-base font-semibold text-foreground">Support Center</h1>
+            </div>
+            <Separator orientation="vertical" className="h-5" />
+            <div className="flex items-center gap-3 text-[12px]">
+              <span className="text-muted-foreground">{stats.open} open</span>
+              {stats.needsReply > 0 && (
+                <span className="flex items-center gap-1 font-medium text-amber-600">
+                  <span className="h-1.5 w-1.5 rounded-full bg-amber-500" />
+                  {stats.needsReply} needs reply
+                </span>
+              )}
+            </div>
+          </div>
+          <div className="flex items-center gap-2">
+            <Button
+              variant="ghost"
+              size="sm"
+              className="hidden gap-1.5 text-xs sm:flex"
+              onClick={() => setShowKB(!showKB)}
+            >
+              <BookOpen className="h-3.5 w-3.5" />
+              Help guides
+            </Button>
+            <Button
+              onClick={() => setDialogOpen(true)}
+              size="sm"
+              className="gap-1.5 rounded-lg bg-foreground text-xs text-background hover:bg-foreground/90"
+            >
+              <Plus className="h-3.5 w-3.5" />
+              New request
+            </Button>
+          </div>
+        </div>
 
-              <div className="mt-6 flex flex-col gap-3 sm:flex-row">
-                <div className="relative flex-1">
-                  <BookOpen className="pointer-events-none absolute left-4 top-1/2 h-4 w-4 -translate-y-1/2 text-[var(--shell-muted)]" />
-                  <Input
-                    value={search}
-                    onChange={(event) => setSearch(event.target.value)}
-                    placeholder="Search tickets, categories, or support guides"
-                    className="h-12 rounded-full border-white/80 bg-white/80 pl-11 shadow-sm"
-                  />
-                </div>
-                <Button
-                  onClick={() => openDialog()}
-                  className="h-12 rounded-full bg-emerald-600 px-5 font-semibold text-white hover:bg-emerald-700"
+        {/* ── Content ── */}
+        <div className="flex min-h-0 flex-1">
+          {/* ── Ticket list panel ── */}
+          <div className="flex w-[360px] shrink-0 flex-col border-r border-border">
+            {/* Search */}
+            <div className="border-b border-border px-3 py-2.5">
+              <div className="relative">
+                <Search className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground/50" />
+                <Input
+                  value={search}
+                  onChange={(e) => setSearch(e.target.value)}
+                  placeholder="Search tickets..."
+                  className="h-8 border-0 bg-muted/40 pl-8 text-xs shadow-none focus-visible:ring-1"
+                />
+              </div>
+            </div>
+
+            {/* Filter tabs */}
+            <div className="flex gap-0.5 border-b border-border px-3 py-1.5">
+              {filterOptions.map((opt) => (
+                <button
+                  key={opt.value}
+                  onClick={() => setStatusFilter(opt.value)}
+                  className={cn(
+                    "rounded-md px-2.5 py-1 text-[11px] font-medium transition-all",
+                    statusFilter === opt.value
+                      ? "bg-foreground text-background shadow-sm"
+                      : "text-muted-foreground hover:text-foreground"
+                  )}
                 >
-                  <MessageSquareText className="mr-2 h-4 w-4" />
+                  {opt.label}
+                  {opt.count != null && opt.count > 0 && (
+                    <span className={cn(
+                      "ml-1 rounded-full px-1 text-[9px]",
+                      statusFilter === opt.value ? "bg-background/20 text-background" : "bg-amber-100 text-amber-700"
+                    )}>
+                      {opt.count}
+                    </span>
+                  )}
+                </button>
+              ))}
+            </div>
+
+            {/* Ticket list */}
+            <ScrollArea className="flex-1">
+              {filtered.length > 0 ? (
+                filtered.map((t) => (
+                  <TicketListItem
+                    key={t.id}
+                    ticket={t}
+                    selected={t.id === selectedId}
+                    onSelect={() => setSelectedId(t.id)}
+                  />
+                ))
+              ) : (
+                <div className="flex flex-col items-center py-16 text-center">
+                  <div className="rounded-xl bg-muted/50 p-4">
+                    <Inbox className="h-8 w-8 text-muted-foreground/30" />
+                  </div>
+                  <p className="mt-4 text-sm font-medium text-foreground/70">No tickets match</p>
+                  <p className="mt-1 text-xs text-muted-foreground">Try adjusting your search or filters</p>
+                </div>
+              )}
+            </ScrollArea>
+          </div>
+
+          {/* ── Conversation panel ── */}
+          <div className="flex min-w-0 flex-1 flex-col">
+            {selected ? (
+              <>
+                {/* Conversation header */}
+                <div className="shrink-0 border-b border-border px-6 py-4">
+                  <div className="flex items-start justify-between gap-4">
+                    <div className="min-w-0">
+                      {/* Status + severity */}
+                      <div className="flex items-center gap-2">
+                        <span className={cn(
+                          "flex items-center gap-1.5 rounded-md px-2 py-0.5 text-[11px] font-semibold",
+                          STATUS_CONFIG[selected.status].color
+                        )}>
+                          <span className={cn("h-1.5 w-1.5 rounded-full", STATUS_CONFIG[selected.status].bgDot)} />
+                          {STATUS_CONFIG[selected.status].label}
+                        </span>
+                        <span className={cn(
+                          "rounded px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wider",
+                          SEVERITY_CONFIG[selected.severity].bg,
+                          SEVERITY_CONFIG[selected.severity].color,
+                        )}>
+                          {SEVERITY_CONFIG[selected.severity].label}
+                        </span>
+                        <span className="text-[11px] text-muted-foreground/50">·</span>
+                        <span className="font-mono text-[11px] text-muted-foreground">{selected.ticketNumber}</span>
+                      </div>
+
+                      {/* Subject */}
+                      <h2 className="mt-2 text-lg font-semibold leading-tight text-foreground">
+                        {selected.subject}
+                      </h2>
+
+                      {/* Meta */}
+                      <div className="mt-1.5 flex items-center gap-3 text-[11px] text-muted-foreground">
+                        <span>{selected.area}</span>
+                        <span>·</span>
+                        <span>{formatDistanceToNow(new Date(selected.created_at), { addSuffix: true })}</span>
+                        <span>·</span>
+                        <span>{selected.messageCount} messages</span>
+                      </div>
+                    </div>
+
+                    <div className="flex shrink-0 items-center gap-2">
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        className="h-8 gap-1.5 text-[11px]"
+                        onClick={() => setShowTimeline(!showTimeline)}
+                      >
+                        <Layers className="h-3.5 w-3.5" />
+                        Activity
+                      </Button>
+                      {selected.status !== "resolved" && (
+                        <Button variant="outline" size="sm" className="h-8 gap-1.5 text-[11px]">
+                          <CheckCircle2 className="h-3.5 w-3.5" />
+                          Resolve
+                        </Button>
+                      )}
+                    </div>
+                  </div>
+
+                  {/* Detail strip */}
+                  <div className="mt-4 flex items-center gap-6 rounded-lg bg-muted/40 px-4 py-2.5">
+                    {/* Agent */}
+                    {selected.assignedAgent && (
+                      <AgentPresence agent={selected.assignedAgent} />
+                    )}
+
+                    <Separator orientation="vertical" className="h-8" />
+
+                    {/* SLA */}
+                    <div className="min-w-0">
+                      <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">SLA</p>
+                      <div className="mt-1 flex items-center gap-2">
+                        <span className="text-sm font-semibold text-foreground">
+                          {SEVERITY_CONFIG[selected.severity].sla} target
+                        </span>
+                        {selected.status !== "resolved" && selected.slaDeadline && (
+                          <div className="w-20">
+                            <SLAProgressBar percent={selected.slaPercentUsed} severity={selected.severity} />
+                          </div>
+                        )}
+                        {selected.status === "resolved" && (
+                          <span className="flex items-center gap-1 text-[11px] text-emerald-600">
+                            <Check className="h-3 w-3" />
+                            Met
+                          </span>
+                        )}
+                      </div>
+                    </div>
+
+                    <Separator orientation="vertical" className="h-8" />
+
+                    {/* Status description */}
+                    <div className="min-w-0">
+                      <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Status</p>
+                      <p className="mt-1 text-[12px] text-foreground/70">
+                        {STATUS_CONFIG[selected.status].description}
+                      </p>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Timeline sidebar overlay */}
+                {showTimeline && timeline.length > 0 && (
+                  <div className="shrink-0 border-b border-border bg-muted/20 px-6 py-3">
+                    <div className="flex items-center justify-between">
+                      <p className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">Activity Timeline</p>
+                      <button onClick={() => setShowTimeline(false)} className="text-muted-foreground hover:text-foreground">
+                        <X className="h-3.5 w-3.5" />
+                      </button>
+                    </div>
+                    <div className="mt-2 space-y-2">
+                      {timeline.map((e) => (
+                        <TimelineItem key={e.id} event={e} />
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {/* Messages */}
+                <ScrollArea className="flex-1 px-6 py-5">
+                  <div className="mx-auto max-w-3xl space-y-5">
+                    {messages.map((m) => (
+                      <MessageItem key={m.id} message={m} />
+                    ))}
+                    <div ref={messagesEndRef} />
+                  </div>
+                </ScrollArea>
+
+                {/* Reply composer */}
+                <div className="shrink-0 border-t border-border px-6 py-4">
+                  <div className="mx-auto max-w-3xl">
+                    <div className="rounded-xl border border-border bg-card transition-all focus-within:border-foreground/20 focus-within:shadow-[0_0_0_3px_hsl(var(--foreground)/0.05)]">
+                      <Textarea
+                        value={replyDraft}
+                        onChange={(e) => setReplyDraft(e.target.value)}
+                        placeholder={
+                          selected.status === "resolved"
+                            ? "Reply to reopen this ticket..."
+                            : "Type your reply..."
+                        }
+                        className="min-h-[72px] resize-none border-0 bg-transparent px-4 py-3 text-[13px] shadow-none focus-visible:ring-0"
+                      />
+                      <div className="flex items-center justify-between border-t border-border/50 px-3 py-2">
+                        <div className="flex items-center gap-0.5">
+                          <Tooltip>
+                            <TooltipTrigger asChild>
+                              <Button variant="ghost" size="sm" className="h-7 w-7 p-0 text-muted-foreground hover:text-foreground">
+                                <Paperclip className="h-3.5 w-3.5" />
+                              </Button>
+                            </TooltipTrigger>
+                            <TooltipContent side="top" className="text-xs">Attach file</TooltipContent>
+                          </Tooltip>
+                          <Tooltip>
+                            <TooltipTrigger asChild>
+                              <Button variant="ghost" size="sm" className="h-7 w-7 p-0 text-muted-foreground hover:text-foreground">
+                                <FileText className="h-3.5 w-3.5" />
+                              </Button>
+                            </TooltipTrigger>
+                            <TooltipContent side="top" className="text-xs">Insert template</TooltipContent>
+                          </Tooltip>
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <span className="hidden text-[10px] text-muted-foreground/50 sm:inline">⌘ Enter to send</span>
+                          <Button
+                            size="sm"
+                            disabled={!replyDraft.trim()}
+                            className="h-7 gap-1 rounded-md bg-foreground px-3 text-[11px] font-semibold text-background hover:bg-foreground/90"
+                          >
+                            <Send className="h-3 w-3" />
+                            {selected.status === "resolved" ? "Reply & Reopen" : "Send"}
+                          </Button>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </>
+            ) : (
+              <div className="flex flex-1 flex-col items-center justify-center text-center">
+                <div className="rounded-2xl bg-muted/30 p-6">
+                  <Headphones className="h-12 w-12 text-muted-foreground/20" />
+                </div>
+                <h2 className="mt-6 text-xl font-semibold text-foreground">Select a ticket</h2>
+                <p className="mt-2 max-w-md text-sm text-muted-foreground">
+                  Choose a ticket from the list to view the conversation, or create a new support request.
+                </p>
+                <Button
+                  onClick={() => setDialogOpen(true)}
+                  className="mt-6 gap-2 rounded-lg bg-foreground text-background hover:bg-foreground/90"
+                >
+                  <Plus className="h-4 w-4" />
                   New request
                 </Button>
               </div>
-            </div>
-
-            <div className="grid gap-3 sm:grid-cols-3 xl:grid-cols-1">
-              <SummaryMetric label="Open" value={String(queueStats.openCount)} tone="text-slate-900" />
-              <SummaryMetric label="Waiting on support" value={String(queueStats.waitingOnSupport)} tone="text-amber-700" />
-              <SummaryMetric label="Baseline SLA" value={getSupportSlaLabel("medium")} tone="text-emerald-700" />
-            </div>
+            )}
           </div>
 
-          <div className="mt-6 grid gap-3 lg:grid-cols-4">
-            {QUICK_ACTIONS.map((action) => (
-              <button
-                key={action.category}
-                type="button"
-                onClick={() => openDialog(action.category)}
-                className="rounded-2xl border border-white/80 bg-white/75 p-4 text-left shadow-sm transition-all hover:-translate-y-0.5 hover:bg-white"
-              >
-                <action.icon className="h-5 w-5 text-emerald-700" />
-                <p className="mt-3 text-sm font-semibold text-[var(--shell-ink)]">{action.title}</p>
-                <p className="mt-1 text-xs leading-6 text-[var(--shell-muted)]">{action.description}</p>
-              </button>
-            ))}
-          </div>
-        </section>
-
-        <div className="grid gap-6 xl:grid-cols-[320px_360px_minmax(0,1fr)]">
-          <div className="space-y-6">
-            <Card className="border-[var(--shell-border)] bg-white/90 shadow-[0_24px_60px_-38px_rgba(15,23,42,0.42)]">
-              <CardHeader className="pb-4">
-                <div className="flex items-center justify-between gap-3">
-                  <div>
-                    <CardTitle className="text-lg text-[var(--shell-ink)]">Recommended guides</CardTitle>
-                    <CardDescription>
-                      Searchable help content, but escalation stays one click away.
-                    </CardDescription>
-                  </div>
-                  <Select
-                    value={knowledgeCategory}
-                    onValueChange={(value) => setKnowledgeCategory(value as SupportCategory | "all")}
-                  >
-                    <SelectTrigger className="h-9 w-[150px] rounded-full bg-white text-xs">
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="all">All topics</SelectItem>
-                      {SUPPORT_CATEGORY_OPTIONS.map((option) => (
-                        <SelectItem key={option.value} value={option.value}>
-                          {option.label}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
+          {/* ── Knowledge base sidebar ── */}
+          {showKB && (
+            <div className="flex w-[280px] shrink-0 flex-col border-l border-border">
+              <div className="flex items-center justify-between border-b border-border px-4 py-3">
+                <div className="flex items-center gap-2">
+                  <BookOpen className="h-4 w-4 text-muted-foreground" />
+                  <span className="text-sm font-semibold text-foreground">Help Guides</span>
                 </div>
-              </CardHeader>
-              <CardContent className="space-y-3">
-                {recommendedArticles.length ? (
-                  recommendedArticles.map((article) => (
-                    <KnowledgeCard
+                <button onClick={() => setShowKB(false)} className="text-muted-foreground hover:text-foreground">
+                  <X className="h-4 w-4" />
+                </button>
+              </div>
+
+              {selected && (
+                <div className="border-b border-border bg-muted/30 px-4 py-2.5">
+                  <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+                    Related to this ticket
+                  </p>
+                </div>
+              )}
+
+              <ScrollArea className="flex-1">
+                <div className="space-y-0.5 p-2">
+                  {contextualArticles.map((article) => (
+                    <button
                       key={article.id}
-                      title={article.title}
-                      summary={article.summary}
-                      recommendedFor={article.recommendedFor}
-                      actions={article.actions}
-                      category={article.category}
-                    />
-                  ))
-                ) : (
-                  <div className="rounded-2xl border border-dashed border-[var(--shell-border)] bg-slate-50 p-4 text-sm text-[var(--shell-muted)]">
-                    No guide matches the current search. Open a request and the thread will keep the context.
-                  </div>
-                )}
-              </CardContent>
-            </Card>
-
-            <Card className="border-[var(--shell-border)] bg-white/90 shadow-[0_24px_60px_-38px_rgba(15,23,42,0.42)]">
-              <CardHeader className="pb-4">
-                <CardTitle className="text-lg text-[var(--shell-ink)]">Why this flow exists</CardTitle>
-                <CardDescription>Patterns taken from strong SaaS support systems and common user complaints.</CardDescription>
-              </CardHeader>
-              <CardContent className="space-y-3">
-                {SUPPORT_BENCHMARK_NOTES.map((item) => (
-                  <div key={item.id} className="rounded-2xl border border-[var(--shell-border)] bg-slate-50/90 p-4">
-                    <div className="flex items-start gap-3">
-                      <Sparkles className="mt-0.5 h-4 w-4 shrink-0 text-emerald-600" />
-                      <div>
-                        <p className="text-sm font-semibold text-[var(--shell-ink)]">{item.title}</p>
-                        <p className="mt-1 text-xs leading-6 text-[var(--shell-muted)]">{item.description}</p>
-                        <p className="mt-2 text-xs font-medium text-slate-700">{item.whyItMatters}</p>
+                      className="group w-full rounded-lg px-3 py-2.5 text-left transition-colors hover:bg-muted/60"
+                    >
+                      <p className="text-[13px] font-medium text-foreground group-hover:text-primary">{article.title}</p>
+                      <p className="mt-0.5 text-[11px] text-muted-foreground line-clamp-2">{article.summary}</p>
+                      <div className="mt-1.5 flex items-center gap-2 text-[10px] text-muted-foreground/60">
+                        <Clock className="h-3 w-3" />
+                        <span>{article.readTime} read</span>
+                        <ChevronRight className="ml-auto h-3 w-3 transition-transform group-hover:translate-x-0.5" />
                       </div>
-                    </div>
-                  </div>
-                ))}
-              </CardContent>
-            </Card>
+                    </button>
+                  ))}
+                </div>
+              </ScrollArea>
 
-            <Card className="border-[var(--shell-border)] bg-white/90 shadow-[0_24px_60px_-38px_rgba(15,23,42,0.42)]">
-              <CardHeader className="pb-4">
-                <CardTitle className="text-lg text-[var(--shell-ink)]">Context shared automatically</CardTitle>
-                <CardDescription>Reducing the back-and-forth needed just to start triage.</CardDescription>
-              </CardHeader>
-              <CardContent className="space-y-2 text-sm text-[var(--shell-muted)]">
-                <div className="flex items-center justify-between rounded-xl border border-[var(--shell-border)] bg-slate-50 px-3 py-2">
-                  <span>Workspace</span>
-                  <span className="font-medium text-slate-800">{workspace.workspaceName}</span>
-                </div>
-                <div className="flex items-center justify-between rounded-xl border border-[var(--shell-border)] bg-slate-50 px-3 py-2">
-                  <span>Plan</span>
-                  <span className="font-medium text-slate-800">{planLabel}</span>
-                </div>
-                <div className="flex items-center justify-between rounded-xl border border-[var(--shell-border)] bg-slate-50 px-3 py-2">
-                  <span>Role</span>
-                  <span className="font-medium capitalize text-slate-800">{workspace.role.replace("_", " ")}</span>
-                </div>
-                <div className="flex items-center justify-between rounded-xl border border-[var(--shell-border)] bg-slate-50 px-3 py-2">
-                  <span>Requester</span>
-                  <span className="font-medium text-slate-800">{displayName}</span>
-                </div>
-              </CardContent>
-            </Card>
-          </div>
-
-          <Card className="flex min-h-[720px] flex-col border-[var(--shell-border)] bg-white/90 shadow-[0_24px_60px_-38px_rgba(15,23,42,0.42)]">
-            <CardHeader className="pb-4">
-              <div className="flex items-center justify-between gap-3">
-                <div>
-                  <CardTitle className="text-lg text-[var(--shell-ink)]">Requests</CardTitle>
-                  <CardDescription>Every issue stays in one visible thread.</CardDescription>
-                </div>
-                <Button variant="outline" className="rounded-full" onClick={() => openDialog()}>
-                  <ArrowUpRight className="mr-2 h-4 w-4" />
-                  Open
+              <div className="border-t border-border p-3">
+                <Button variant="ghost" size="sm" className="w-full gap-1.5 text-xs text-muted-foreground">
+                  <ExternalLink className="h-3.5 w-3.5" />
+                  View all guides
                 </Button>
               </div>
-            </CardHeader>
-            <CardContent className="flex min-h-0 flex-1 flex-col pt-0">
-              <Tabs
-                value={requestFilter}
-                onValueChange={(value) => setRequestFilter(value as "all" | SupportStatus)}
-                className="flex min-h-0 flex-1 flex-col"
-              >
-                <TabsList className="grid grid-cols-2 rounded-2xl bg-slate-100 p-1 text-xs lg:grid-cols-4">
-                  {FILTER_LABELS.map((item) => (
-                    <TabsTrigger key={item.value} value={item.value} className="rounded-xl text-xs">
-                      {item.label}
-                    </TabsTrigger>
-                  ))}
-                </TabsList>
-
-                <TabsContent value={requestFilter} className="mt-4 min-h-0 flex-1">
-                  <ScrollArea className="h-[560px] pr-4">
-                    <div className="space-y-3">
-                      {conversationsQuery.isLoading ? (
-                        <div className="flex items-center gap-3 rounded-2xl border border-[var(--shell-border)] bg-slate-50 px-4 py-6 text-sm text-[var(--shell-muted)]">
-                          <Loader2 className="h-4 w-4 animate-spin" />
-                          Loading support requests
-                        </div>
-                      ) : filteredConversations.length ? (
-                        filteredConversations.map((conversation) => (
-                          <ConversationCard
-                            key={conversation.id}
-                            conversation={conversation}
-                            selected={conversation.id === selectedConversationId}
-                            onSelect={() => setSelectedConversationId(conversation.id)}
-                          />
-                        ))
-                      ) : (
-                        <div className="rounded-2xl border border-dashed border-[var(--shell-border)] bg-slate-50 px-4 py-8 text-center">
-                          <LifeBuoy className="mx-auto h-8 w-8 text-slate-300" />
-                          <p className="mt-3 text-sm font-medium text-slate-700">No support requests match this view.</p>
-                          <p className="mt-1 text-xs text-[var(--shell-muted)]">
-                            Search less narrowly or open a new request.
-                          </p>
-                        </div>
-                      )}
-                    </div>
-                  </ScrollArea>
-                </TabsContent>
-              </Tabs>
-            </CardContent>
-          </Card>
-
-          <Card className="flex min-h-[720px] flex-col border-[var(--shell-border)] bg-white/90 shadow-[0_24px_60px_-38px_rgba(15,23,42,0.42)]">
-            {selectedConversation ? (
-              <>
-                <CardHeader className="pb-4">
-                  <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
-                    <div className="min-w-0">
-                      <div className="flex flex-wrap items-center gap-2">
-                        <Badge className={cn("border text-[10px] font-semibold uppercase", SUPPORT_STATUS_META[selectedConversation.status].tone)}>
-                          {SUPPORT_STATUS_META[selectedConversation.status].label}
-                        </Badge>
-                        <Badge variant="outline" className={cn("border text-[10px] uppercase", SEVERITY_TONES[selectedConversation.severity])}>
-                          {getSupportSeverityLabel(selectedConversation.severity)}
-                        </Badge>
-                        <Badge variant="outline" className="border-slate-200 bg-white text-[10px] uppercase text-slate-600">
-                          {getSupportCategoryLabel(selectedConversation.category)}
-                        </Badge>
-                      </div>
-
-                      <CardTitle className="mt-3 text-2xl text-[var(--shell-ink)]">{selectedConversation.subject}</CardTitle>
-                      <CardDescription className="mt-2 flex flex-wrap items-center gap-3 text-xs">
-                        <span>{formatSupportTicketId(selectedConversation.id)}</span>
-                        <span>{selectedConversation.source_page || "General support"}</span>
-                        <span>Opened {formatDistanceToNow(new Date(selectedConversation.created_at), { addSuffix: true })}</span>
-                      </CardDescription>
-                    </div>
-
-                    <div className="flex flex-wrap gap-2">
-                      <Button
-                        variant="outline"
-                        className="rounded-full"
-                        onClick={() => resolveMutation.mutate()}
-                        disabled={resolveMutation.isPending || selectedConversation.status === "resolved"}
-                      >
-                        {resolveMutation.isPending && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
-                        Mark resolved
-                      </Button>
-                    </div>
-                  </div>
-
-                  <div className="mt-4 grid gap-3 md:grid-cols-3">
-                    <div className="rounded-2xl border border-[var(--shell-border)] bg-slate-50 px-4 py-3">
-                      <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-[var(--shell-muted)]">
-                        Response target
-                      </p>
-                      <p className="mt-2 text-sm font-semibold text-slate-900">
-                        {getSupportSlaLabel(selectedConversation.severity)}
-                      </p>
-                      <p className="mt-1 text-xs text-[var(--shell-muted)]">
-                        {getSupportDueDistance(selectedConversation.response_due_at)}
-                      </p>
-                    </div>
-                    <div className="rounded-2xl border border-[var(--shell-border)] bg-slate-50 px-4 py-3">
-                      <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-[var(--shell-muted)]">Requester</p>
-                      <p className="mt-2 text-sm font-semibold text-slate-900">{selectedConversation.requester_name || displayName}</p>
-                      <p className="mt-1 text-xs text-[var(--shell-muted)]">{selectedConversation.requester_email || user.email}</p>
-                    </div>
-                    <div className="rounded-2xl border border-[var(--shell-border)] bg-slate-50 px-4 py-3">
-                      <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-[var(--shell-muted)]">Support state</p>
-                      <p className="mt-2 text-sm font-semibold text-slate-900">
-                        {SUPPORT_STATUS_META[selectedConversation.status].description}
-                      </p>
-                    </div>
-                  </div>
-                </CardHeader>
-
-                <CardContent className="flex min-h-0 flex-1 flex-col pt-0">
-                  <ScrollArea className="h-[430px] rounded-3xl border border-[var(--shell-border)] bg-[linear-gradient(180deg,rgba(248,250,252,0.75),rgba(255,255,255,0.92))] p-5">
-                    <div className="space-y-4 pr-4">
-                      {messagesQuery.isLoading ? (
-                        <div className="flex items-center gap-3 rounded-2xl border border-[var(--shell-border)] bg-white px-4 py-6 text-sm text-[var(--shell-muted)]">
-                          <Loader2 className="h-4 w-4 animate-spin" />
-                          Loading conversation history
-                        </div>
-                      ) : (messagesQuery.data || []).length ? (
-                        (messagesQuery.data || []).map((message) => (
-                          <MessageBubble
-                            key={message.id}
-                            message={message}
-                            isCustomer={message.author_role === "customer"}
-                          />
-                        ))
-                      ) : (
-                        <div className="rounded-2xl border border-dashed border-[var(--shell-border)] bg-white px-4 py-8 text-center text-sm text-[var(--shell-muted)]">
-                          This request does not have any conversation updates yet.
-                        </div>
-                      )}
-                    </div>
-                  </ScrollArea>
-
-                  <div className="mt-5 rounded-[28px] border border-[var(--shell-border)] bg-white/95 p-4 shadow-[0_18px_40px_-34px_rgba(15,23,42,0.42)]">
-                    <div className="flex items-start justify-between gap-4">
-                      <div>
-                        <p className="text-sm font-semibold text-[var(--shell-ink)]">
-                          {selectedConversation.status === "resolved" ? "Reply to reopen this request" : "Add context or reply"}
-                        </p>
-                        <p className="mt-1 text-xs text-[var(--shell-muted)]">
-                          Keep all updates in one thread so support does not lose the history.
-                        </p>
-                      </div>
-                      <Badge variant="outline" className="border-slate-200 bg-slate-50 text-[10px] uppercase text-slate-600">
-                        {selectedConversation.contact_preference === "email" ? "Email follow-up preferred" : "In-app thread"}
-                      </Badge>
-                    </div>
-
-                    <Textarea
-                      value={replyDraft}
-                      onChange={(event) => setReplyDraft(event.target.value)}
-                      placeholder="Share steps to reproduce, what changed, and the impact on your team."
-                      className="mt-4 min-h-[132px] rounded-2xl border-slate-200 bg-slate-50"
-                    />
-
-                    <div className="mt-4 flex flex-wrap items-center justify-between gap-3">
-                      <div className="flex flex-wrap items-center gap-2 text-xs text-[var(--shell-muted)]">
-                        <Clock3 className="h-3.5 w-3.5" />
-                        <span>Last updated {formatDistanceToNow(new Date(selectedConversation.updated_at), { addSuffix: true })}</span>
-                      </div>
-                      <Button
-                        onClick={() => replyMutation.mutate()}
-                        disabled={replyMutation.isPending || !replyDraft.trim()}
-                        className="rounded-full bg-slate-900 px-5 text-white hover:bg-slate-800"
-                      >
-                        {replyMutation.isPending ? (
-                          <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                        ) : (
-                          <Send className="mr-2 h-4 w-4" />
-                        )}
-                        {selectedConversation.status === "resolved" ? "Reply and reopen" : "Send update"}
-                      </Button>
-                    </div>
-                  </div>
-                </CardContent>
-              </>
-            ) : (
-              <CardContent className="flex min-h-[720px] flex-col items-center justify-center text-center">
-                <LifeBuoy className="h-12 w-12 text-slate-300" />
-                <h2 className="mt-5 text-xl font-semibold text-[var(--shell-ink)]">No thread selected</h2>
-                <p className="mt-2 max-w-md text-sm leading-7 text-[var(--shell-muted)]">
-                  Open a support request to create a persistent thread with context, SLA, and conversation history.
-                </p>
-                <Button className="mt-6 rounded-full bg-emerald-600 text-white hover:bg-emerald-700" onClick={() => openDialog()}>
-                  <MessageSquareText className="mr-2 h-4 w-4" />
-                  Open support request
-                </Button>
-              </CardContent>
-            )}
-          </Card>
+            </div>
+          )}
         </div>
       </div>
 
+      {/* ── New Request Dialog ── */}
       <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
-        <DialogContent className="max-w-3xl rounded-[28px] border-slate-200 p-0 shadow-[0_34px_100px_-38px_rgba(15,23,42,0.5)]">
-          <DialogHeader className="border-b border-slate-200 bg-slate-50/80 px-6 py-5">
-            <DialogTitle className="text-2xl text-slate-900">Open a support request</DialogTitle>
-            <DialogDescription className="text-sm text-slate-600">
-              Structured intake reduces the back-and-forth that usually slows down support.
+        <DialogContent className="max-w-xl gap-0 overflow-hidden rounded-xl border-border p-0 shadow-2xl">
+          <DialogHeader className="border-b border-border px-6 py-5">
+            <DialogTitle className="text-lg font-semibold text-foreground">New support request</DialogTitle>
+            <DialogDescription className="text-[13px] text-muted-foreground">
+              Your account context is attached automatically — no need to repeat it.
             </DialogDescription>
           </DialogHeader>
 
-          <div className="grid gap-6 px-6 py-5 lg:grid-cols-[minmax(0,1.2fr)_280px]">
-            <div className="space-y-5">
-              <div className="grid gap-2">
-                <Label htmlFor="support-subject">Subject</Label>
-                <Input
-                  id="support-subject"
-                  value={draft.subject}
-                  onChange={(event) => setDraft((current) => ({ ...current, subject: event.target.value }))}
-                  placeholder="Example: Inbox stopped syncing replies after reconnecting Gmail"
-                  className="h-11 rounded-xl"
-                />
+          <div className="space-y-5 px-6 py-5">
+            <div>
+              <Label className="text-[13px] font-medium text-foreground">Subject</Label>
+              <Input
+                value={draft.subject}
+                onChange={(e) => setDraft((d) => ({ ...d, subject: e.target.value }))}
+                placeholder="Brief description of the issue"
+                className="mt-1.5 rounded-lg"
+              />
+            </div>
+
+            <div className="grid gap-4 sm:grid-cols-2">
+              <div>
+                <Label className="text-[13px] font-medium text-foreground">Category</Label>
+                <Select
+                  value={draft.category}
+                  onValueChange={(v) => setDraft((d) => ({ ...d, category: v as Category }))}
+                >
+                  <SelectTrigger className="mt-1.5 rounded-lg">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {CATEGORY_OPTIONS.map((opt) => (
+                      <SelectItem key={opt.value} value={opt.value}>
+                        <div className="flex items-center gap-2">
+                          <opt.icon className="h-3.5 w-3.5 text-muted-foreground" />
+                          <span>{opt.label}</span>
+                        </div>
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
               </div>
-
-              <div className="grid gap-4 md:grid-cols-2">
-                <div className="grid gap-2">
-                  <Label>Category</Label>
-                  <Select
-                    value={draft.category}
-                    onValueChange={(value) => setDraft((current) => ({ ...current, category: value as SupportCategory }))}
-                  >
-                    <SelectTrigger className="h-11 rounded-xl">
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {SUPPORT_CATEGORY_OPTIONS.map((option) => (
-                        <SelectItem key={option.value} value={option.value}>
-                          {option.label}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                  <p className="text-xs text-slate-500">
-                    {SUPPORT_CATEGORY_OPTIONS.find((option) => option.value === draft.category)?.description}
-                  </p>
-                </div>
-
-                <div className="grid gap-2">
-                  <Label>Severity</Label>
-                  <Select
-                    value={draft.severity}
-                    onValueChange={(value) => setDraft((current) => ({ ...current, severity: value as SupportSeverity }))}
-                  >
-                    <SelectTrigger className="h-11 rounded-xl">
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {SUPPORT_SEVERITY_OPTIONS.map((option) => (
-                        <SelectItem key={option.value} value={option.value}>
-                          {option.label}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                  <p className="text-xs text-slate-500">
-                    {SUPPORT_SEVERITY_OPTIONS.find((option) => option.value === draft.severity)?.description}
-                  </p>
-                </div>
-              </div>
-
-              <div className="grid gap-4 md:grid-cols-2">
-                <div className="grid gap-2">
-                  <Label>Product area</Label>
-                  <Select
-                    value={draft.sourcePage}
-                    onValueChange={(value) => setDraft((current) => ({ ...current, sourcePage: value }))}
-                  >
-                    <SelectTrigger className="h-11 rounded-xl">
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {PRODUCT_AREA_OPTIONS.map((option) => (
-                        <SelectItem key={option} value={option}>
-                          {option}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                </div>
-
-                <div className="grid gap-2">
-                  <Label>Preferred follow-up</Label>
-                  <Select
-                    value={draft.contactPreference}
-                    onValueChange={(value) =>
-                      setDraft((current) => ({ ...current, contactPreference: value as "in_app" | "email" }))
-                    }
-                  >
-                    <SelectTrigger className="h-11 rounded-xl">
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="in_app">Keep updates in app</SelectItem>
-                      <SelectItem value="email">Email follow-up preferred</SelectItem>
-                    </SelectContent>
-                  </Select>
-                </div>
-              </div>
-
-              <div className="grid gap-2">
-                <Label htmlFor="support-description">Describe the issue</Label>
-                <Textarea
-                  id="support-description"
-                  value={draft.description}
-                  onChange={(event) => setDraft((current) => ({ ...current, description: event.target.value }))}
-                  className="min-h-[220px] rounded-2xl"
-                  placeholder="What were you trying to do? What happened instead? How many people are affected? Include reproduction steps and what changed recently."
-                />
+              <div>
+                <Label className="text-[13px] font-medium text-foreground">Severity</Label>
+                <Select
+                  value={draft.severity}
+                  onValueChange={(v) => setDraft((d) => ({ ...d, severity: v as Severity }))}
+                >
+                  <SelectTrigger className="mt-1.5 rounded-lg">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {Object.entries(SEVERITY_CONFIG).map(([value, config]) => (
+                      <SelectItem key={value} value={value}>
+                        <div className="flex items-center gap-2">
+                          <span className={cn("h-2 w-2 rounded-full", "bg" in config ? config.bg : "bg-muted")} />
+                          <span>{config.label}</span>
+                          <span className="text-muted-foreground">· {config.sla} SLA</span>
+                        </div>
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
               </div>
             </div>
 
-            <div className="space-y-4">
-              <div className="rounded-3xl border border-slate-200 bg-slate-50 p-4">
-                <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">Auto-attached context</p>
-                <div className="mt-4 space-y-3 text-sm text-slate-600">
-                  <div className="flex items-start gap-3">
-                    <UserRound className="mt-0.5 h-4 w-4 text-slate-400" />
-                    <div>
-                      <p className="font-medium text-slate-900">{displayName}</p>
-                      <p>{user.email}</p>
-                    </div>
-                  </div>
-                  <div className="flex items-start gap-3">
-                    <ShieldCheck className="mt-0.5 h-4 w-4 text-slate-400" />
-                    <div>
-                      <p className="font-medium text-slate-900">{workspace.workspaceName}</p>
-                      <p>{planLabel} plan · {workspace.role.replace("_", " ")} role</p>
-                    </div>
-                  </div>
-                  <div className="flex items-start gap-3">
-                    <Clock3 className="mt-0.5 h-4 w-4 text-slate-400" />
-                    <div>
-                      <p className="font-medium text-slate-900">{getSupportSlaLabel(draft.severity)}</p>
-                      <p>Used to set the initial response target.</p>
-                    </div>
-                  </div>
-                </div>
-              </div>
+            <div>
+              <Label className="text-[13px] font-medium text-foreground">Describe the issue</Label>
+              <Textarea
+                value={draft.description}
+                onChange={(e) => setDraft((d) => ({ ...d, description: e.target.value }))}
+                className="mt-1.5 min-h-[140px] rounded-lg text-[13px]"
+                placeholder="What happened? What were you trying to do? How many people are affected?"
+              />
+            </div>
 
-              <div className="rounded-3xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900">
-                <div className="flex items-start gap-3">
-                  <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
-                  <div>
-                    <p className="font-semibold">Before you submit</p>
-                    <p className="mt-1 text-amber-800">
-                      Include the product area, the exact impact, and whether the issue is repeatable. That is the
-                      difference between one reply and four.
-                    </p>
-                  </div>
-                </div>
-              </div>
-
-              <div className="rounded-3xl border border-emerald-200 bg-emerald-50 p-4 text-sm text-emerald-900">
-                <div className="flex items-start gap-3">
-                  <BookOpen className="mt-0.5 h-4 w-4 shrink-0" />
-                  <div>
-                    <p className="font-semibold">Self-serve still matters</p>
-                    <p className="mt-1 text-emerald-800">
-                      Strong SaaS support starts with guidance, but keeps escalation simple. This form is never hidden
-                      behind article walls.
-                    </p>
-                  </div>
-                </div>
+            {/* Auto-context */}
+            <div className="rounded-lg border border-border bg-muted/30 px-4 py-3">
+              <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Auto-attached context</p>
+              <div className="mt-2 flex flex-wrap items-center gap-x-5 gap-y-1.5 text-[12px] text-muted-foreground">
+                <span className="flex items-center gap-1.5"><User className="h-3 w-3" /> Sarah Chen · sarah@acme.io</span>
+                <span className="flex items-center gap-1.5"><Shield className="h-3 w-3" /> Growth · Admin</span>
+                <span className="flex items-center gap-1.5"><Clock className="h-3 w-3" /> {SEVERITY_CONFIG[draft.severity].sla} SLA</span>
+                <span className="flex items-center gap-1.5"><Settings className="h-3 w-3" /> Browser + timezone</span>
               </div>
             </div>
           </div>
 
-          <Separator />
-          <DialogFooter className="px-6 py-4">
-            <Button variant="outline" className="rounded-full" onClick={() => setDialogOpen(false)}>
-              Cancel
-            </Button>
-            <Button
-              className="rounded-full bg-emerald-600 text-white hover:bg-emerald-700"
-              onClick={() => createConversationMutation.mutate()}
-              disabled={createConversationMutation.isPending}
-            >
-              {createConversationMutation.isPending ? (
-                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-              ) : (
-                <MessageSquareText className="mr-2 h-4 w-4" />
-              )}
-              Create request
-            </Button>
-          </DialogFooter>
+          <div className="flex items-center justify-between border-t border-border px-6 py-3.5">
+            <p className="text-[11px] text-muted-foreground">
+              A support engineer will be assigned automatically
+            </p>
+            <div className="flex gap-2">
+              <Button variant="ghost" size="sm" onClick={() => setDialogOpen(false)}>Cancel</Button>
+              <Button size="sm" className="gap-1.5 rounded-lg bg-foreground text-background hover:bg-foreground/90">
+                <Send className="h-3.5 w-3.5" />
+                Submit request
+              </Button>
+            </div>
+          </div>
         </DialogContent>
       </Dialog>
     </>

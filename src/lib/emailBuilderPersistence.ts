@@ -67,7 +67,7 @@ export interface EmailBuilderTemplate {
 const DEFAULT_AUDIENCE = 'All';
 const DEFAULT_VOICE = 'Professional';
 const DEFAULT_GOAL = 'Cold outreach';
-const EMAIL_BUILDER_STATE_REGEX = /<!--\s*VINTRO_EMAIL_BUILDER_STATE:([\s\S]*?)-->/;
+const EMAIL_BUILDER_STATE_REGEX = /<!--\s*IntentAtlas_EMAIL_BUILDER_STATE:([\s\S]*?)-->/;
 
 const escapeHtml = (value: string) =>
   value
@@ -449,7 +449,7 @@ const serializeBuilderState = (template: EmailBuilderTemplate) => {
       trackedLinkUrls: normalizeTrackedLinkUrls(template.trackedLinkUrls),
     },
   };
-  return `<!-- VINTRO_EMAIL_BUILDER_STATE:${toBase64(JSON.stringify(payload))} -->`;
+  return `<!-- IntentAtlas_EMAIL_BUILDER_STATE:${toBase64(JSON.stringify(payload))} -->`;
 };
 
 const normalizeTemplateName = (value: string) => value.trim() || 'Untitled template';

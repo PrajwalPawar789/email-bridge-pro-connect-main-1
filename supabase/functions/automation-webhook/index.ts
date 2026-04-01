@@ -5,7 +5,7 @@ import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
   "Access-Control-Allow-Headers":
-    "authorization, x-client-info, apikey, content-type, x-vintro-webhook-secret, x-webhook-secret",
+    "authorization, x-client-info, apikey, content-type, x-IntentAtlas-webhook-secret, x-webhook-secret",
   "Access-Control-Allow-Methods": "GET, POST, PUT, PATCH, OPTIONS",
 };
 
@@ -373,7 +373,7 @@ serve(async (req: Request) => {
       workflowWebhookSettings.secret
     );
     const providedSecret = pickString(
-      req.headers.get("x-vintro-webhook-secret"),
+      req.headers.get("x-IntentAtlas-webhook-secret"),
       req.headers.get("x-webhook-secret"),
       requestUrl.searchParams.get("secret"),
       payload.secret,

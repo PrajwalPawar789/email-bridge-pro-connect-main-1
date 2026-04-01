@@ -253,7 +253,7 @@ const buildHiddenPreheaderHtml = (value: string) => {
   )}</div>`;
 };
 
-const EMAIL_BUILDER_STATE_REGEX = /<!--\s*VINTRO_EMAIL_BUILDER_STATE:([\s\S]*?)-->/;
+const EMAIL_BUILDER_STATE_REGEX = /<!--\s*IntentAtlas_EMAIL_BUILDER_STATE:([\s\S]*?)-->/;
 
 const hasMarkdownFormatting = (value: string) =>
   /(\*\*|__|~~|(?<!\*)\*[^*\n]+?\*(?!\*)|^\s*(?:[-*]|\u2022)\s+|^\s*\d+[.)]\s+)/m.test(value);
