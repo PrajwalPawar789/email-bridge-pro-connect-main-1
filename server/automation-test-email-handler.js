@@ -2,7 +2,7 @@ import { createClient } from "@supabase/supabase-js";
 import nodemailer from "nodemailer";
 import { looksLikeHtml, normalizePlainTextEmailBody } from "../shared/email-content.js";
 
-const EMAIL_BUILDER_STATE_REGEX = /<!--\s*VINTRO_EMAIL_BUILDER_STATE:([\s\S]*?)-->/;
+const EMAIL_BUILDER_STATE_REGEX = /<!--\s*IntentAtlas_EMAIL_BUILDER_STATE:([\s\S]*?)-->/;
 
 let adminClient = null;
 let adminClientCacheKey = "";
@@ -340,7 +340,7 @@ export const sendAutomationTestEmailFromServer = async ({ headers, payload, env 
     text: plainTextBody,
     headers: {
       Date: new Date().toUTCString(),
-      "X-Mailer": "Vintro Automation Test",
+      "X-Mailer": "IntentAtlas Automation Test",
     },
   });
 

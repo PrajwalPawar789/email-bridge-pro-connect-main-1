@@ -158,7 +158,7 @@ const renderPlainTextPreviewHtml = (value: string) => {
 };
 
 const looksLikeHtml = (value: string) => /<\s*[a-z][\w-]*(\s[^>]*)?>/i.test(value);
-const EMAIL_BUILDER_STATE_REGEX = /<!--\s*VINTRO_EMAIL_BUILDER_STATE:[\s\S]*?-->/g;
+const EMAIL_BUILDER_STATE_REGEX = /<!--\s*IntentAtlas_EMAIL_BUILDER_STATE:[\s\S]*?-->/g;
 const TRACKABLE_LINK_REGEX = /(href\s*=\s*["'](?:https?:\/\/|www\.)|(?:https?:\/\/|www\.)[^\s<>"']+)/i;
 const DEFAULT_AUTO_SENDER_DAILY_LIMIT = 100;
 const FOLLOWUP_TEMPLATE_MANUAL_VALUE = '__manual_followup_template__';
@@ -166,7 +166,7 @@ const normalizeEmail = (value?: string | null) => (value || '').trim().toLowerCa
 
 const extractTemplateSelection = (template: any) => {
   const content = String(template?.content || '');
-  const builderStateMatch = content.match(/<!--\s*VINTRO_EMAIL_BUILDER_STATE:[\s\S]*?-->/);
+  const builderStateMatch = content.match(/<!--\s*IntentAtlas_EMAIL_BUILDER_STATE:[\s\S]*?-->/);
   return {
     subject: String(template?.subject || ''),
     content: content.replace(EMAIL_BUILDER_STATE_REGEX, '').replace(/\s+$/, ''),
@@ -1927,7 +1927,7 @@ const CampaignBuilder: React.FC<CampaignBuilderProps> = ({ emailConfigs }) => {
                 </p>
                 <p className="text-xs leading-relaxed">
                   {hasTrackableLinks
-                    ? 'This email contains a link Vintro can rewrite and track before sending. Opens still depend on recipients allowing remote images.'
+                    ? 'This email contains a link IntentAtlas can rewrite and track before sending. Opens still depend on recipients allowing remote images.'
                     : 'Open tracking works after recipients allow remote images. Click tracking stays at 0 until the body includes a clickable URL like https://example.com or www.example.com.'}
                 </p>
               </div>

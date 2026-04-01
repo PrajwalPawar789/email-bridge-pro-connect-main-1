@@ -72,9 +72,9 @@ const Logo: React.FC<LogoProps> = ({
       
       {showText && (
         <span className={`font-semibold trackiytng-wide ${textClassName}`}>
-          vintro
+          Intent
           <span className={` ${accentClassName}`}>
-            .io
+            Atlas
           </span>
         </span>
       )}

@@ -1790,7 +1790,7 @@ const WorkflowBuilder = ({
         method: "POST",
         headers: {
           "Content-Type": "application/json",
-          ...(webhookSecret ? { "x-vintro-webhook-secret": webhookSecret } : {}),
+          ...(webhookSecret ? { "x-IntentAtlas-webhook-secret": webhookSecret } : {}),
         },
         body: JSON.stringify({
           event: webhookEventName || "contact_created",

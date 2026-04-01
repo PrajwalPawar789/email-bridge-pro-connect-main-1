@@ -69,7 +69,7 @@ const buildHiddenPreheaderHtml = (value: string) => {
   )}</div>`;
 };
 
-const EMAIL_BUILDER_STATE_REGEX = /<!--\s*VINTRO_EMAIL_BUILDER_STATE:([\s\S]*?)-->/;
+const EMAIL_BUILDER_STATE_REGEX = /<!--\s*IntentAtlas_EMAIL_BUILDER_STATE:([\s\S]*?)-->/;
 
 const fromBase64 = (value: string) => {
   const binary = atob(value.replace(/\s+/g, ""));
@@ -1220,7 +1220,7 @@ const sendEmailForStep = async (
 
     const headers: Record<string, string> = {
       Date: new Date().toUTCString(),
-      "X-Mailer": "Vintro Automation Runner",
+      "X-Mailer": "IntentAtlas Automation Runner",
     };
 
     const shouldThread = Boolean(config.thread_with_previous ?? true);

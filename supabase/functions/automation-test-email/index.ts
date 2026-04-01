@@ -27,7 +27,7 @@ const getAdmin = () => {
   return adminClient;
 };
 
-const EMAIL_BUILDER_STATE_REGEX = /<!--\s*VINTRO_EMAIL_BUILDER_STATE:([\s\S]*?)-->/;
+const EMAIL_BUILDER_STATE_REGEX = /<!--\s*IntentAtlas_EMAIL_BUILDER_STATE:([\s\S]*?)-->/;
 
 const jsonResponse = (payload: Record<string, unknown>, status = 200) =>
   new Response(JSON.stringify(payload), {
@@ -324,7 +324,7 @@ serve(async (req: Request) => {
       text: plainTextBody,
       headers: {
         Date: new Date().toUTCString(),
-        "X-Mailer": "Vintro Automation Test",
+        "X-Mailer": "IntentAtlas Automation Test",
       },
     });
 
